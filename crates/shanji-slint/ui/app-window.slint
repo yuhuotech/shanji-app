@@ -1,0 +1,840 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+export component AppWindow inherits Window {
+    in-out property <string> app-name: "闪记";
+    in-out property <string> app-subtitle-text: "AI 语音输入工具";
+    in-out property <string> status-text: "准备就绪";
+    in-out property <string> hotkey-hint-title: "按下快捷键开始语音输入";
+    in-out property <string> hotkey-hint-body: "把光标放到目标输入框，按住说话，松开后自动转写并粘贴";
+    in-out property <string> hotkey-display-text: "Cmd+Shift+Space";
+
+    in-out property <string> model-title-text: "Paraformer 中文";
+    in-out property <string> model-desc-text: "中文普通话语音识别";
+    in-out property <string> model-version-text: "v1.0.0";
+    in-out property <string> model-size-text: "0 MB";
+    in-out property <string> model-language-text: "ZH";
+    in-out property <string> model-install-text: "模型已安装";
+    in-out property <bool> model-ready: true;
+
+    in-out property <string> mic-permission-title: "麦克风权限已获取";
+    in-out property <string> mic-permission-body: "已检测到可用输入设备";
+    in-out property <bool> mic-ready: true;
+    in-out property <string> paste-permission-title: "自动粘贴已启用";
+    in-out property <string> paste-permission-body: "如系统拦截，将自动回退为复制到剪贴板";
+    in-out property <bool> paste-ready: true;
+    in-out property <string> default-device-text: "默认设备";
+
+    in-out property <string> transcribe-card-title: "语音转写测试";
+    in-out property <string> transcribe-button-text: "点击测试录音";
+    in-out property <string> transcribe-body-text: "测试转写功能是否正常";
+    in-out property <string> audio-level-text: "0%";
+    in-out property <float> audio-level-value: 0.0;
+    in-out property <string> monitor-button-text: "监听麦克风输入";
+    in-out property <string> monitor-tip-text: "提示：日常使用无需打开此窗口，直接按快捷键即可";
+
+    in-out property <string> history-stats-text: "历史记录: 0 条";
+    in-out property <string> history-preview-text: "暂无历史记录";
+    in-out property <string> settings-summary-text: "主题: system";
+    in-out property <string> rewrite-text: "智能改写: disabled";
+    in-out property <string> tray-summary-text: "托盘: idle";
+    in-out property <string> live-asr-text: "Live ASR ready";
+
+    callback refresh-requested();
+    callback open-history-requested();
+    callback open-settings-requested();
+    callback toggle-live-asr-requested();
+    callback toggle-mic-monitor-requested();
+
+    title: app-name;
+    width: 1080px;
+    height: 780px;
+    default-font-family: "Hiragino Sans GB";
+    in property <bool> compact-layout: root.width < 1180px;
+    in property <bool> narrow-layout: root.width < 900px;
+
+    Rectangle {
+        background: #edf1f6;
+
+        ScrollView {
+            width: parent.width;
+            height: parent.height;
+
+            content := Rectangle {
+                width: root.width;
+                background: transparent;
+
+                layout := VerticalLayout {
+                    x: max((parent.width - self.width) / 2, 0px);
+                    width: min(max(root.width - 36px, 360px), 1160px);
+                    padding: 18px;
+                    spacing: 16px;
+
+                    Rectangle {
+                        border-radius: 20px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+
+                        HorizontalLayout {
+                            padding: 18px;
+                            spacing: 14px;
+
+                        Rectangle {
+                            width: 44px;
+                            height: 44px;
+                            border-radius: 12px;
+                            background: #2f80ed;
+
+                            Text {
+                                text: "◉";
+                                color: #ffffff;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                font-size: 18px;
+                                font-weight: 700;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 2px;
+
+                            Text {
+                                text: app-name;
+                                color: #1f2937;
+                                font-size: 24px;
+                                font-weight: 700;
+                            }
+
+                            Text {
+                                text: app-subtitle-text;
+                                color: #667085;
+                                font-size: 14px;
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: transparent;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 10px;
+
+                            Button { text: "刷新"; clicked => { root.refresh-requested(); } }
+                            Button { text: "历史"; clicked => { root.open-history-requested(); } }
+                            Button { text: "设置"; clicked => { root.open-settings-requested(); } }
+                        }
+                        }
+                    }
+
+                    Rectangle {
+                        border-radius: 20px;
+                        background: #e8f3ff;
+                        border-width: 1px;
+                        border-color: #b9d8ff;
+
+                        HorizontalLayout {
+                            padding: 18px;
+                            spacing: 14px;
+
+                        Rectangle {
+                            width: 44px;
+                            height: 44px;
+                            border-radius: 12px;
+                            background: #2962ff;
+
+                            Text {
+                                text: "⌨";
+                                color: #ffffff;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                font-size: 20px;
+                                font-weight: 700;
+                            }
+                        }
+
+                        VerticalLayout {
+                            spacing: 4px;
+
+                            Text {
+                                text: hotkey-hint-title;
+                                color: #2563eb;
+                                font-size: 18px;
+                                font-weight: 700;
+                            }
+
+                            Text {
+                                text: hotkey-hint-body;
+                                color: #475467;
+                                wrap: word-wrap;
+                                font-size: 14px;
+                            }
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            background: transparent;
+                        }
+
+                        Rectangle {
+                            border-radius: 12px;
+                            background: #ffffff;
+                            border-width: 1px;
+                            border-color: #d0d5dd;
+
+                            VerticalLayout {
+                                padding: 16px;
+
+                                Text {
+                                    text: hotkey-display-text;
+                                    color: #344054;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    font-size: 15px;
+                                    font-weight: 700;
+                                }
+                            }
+                        }
+                        }
+                    }
+
+                    if !root.compact-layout : HorizontalLayout {
+                        spacing: 16px;
+
+                        Rectangle {
+                        border-radius: 20px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+                        horizontal-stretch: 1;
+
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                Text {
+                                    text: "模型状态";
+                                    color: #1f2937;
+                                    font-size: 16px;
+                                    font-weight: 700;
+                                }
+
+                                Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: model-ready ? #22c55e : #ef4444;
+                                }
+                            }
+
+                            Rectangle { height: 1px; background: #e5e7eb; }
+
+                            Text {
+                                text: model-title-text;
+                                color: #1f2937;
+                                font-size: 18px;
+                                font-weight: 700;
+                            }
+
+                            Text {
+                                text: model-desc-text;
+                                color: #667085;
+                                wrap: word-wrap;
+                                font-size: 14px;
+                            }
+
+                            HorizontalLayout {
+                                spacing: 10px;
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    horizontal-stretch: 1;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "版本"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-version-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    horizontal-stretch: 1;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "大小"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-size-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    horizontal-stretch: 1;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "语言"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-language-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                border-radius: 12px;
+                                background: model-ready ? #dff6e8 : #fee2e2;
+
+                                VerticalLayout {
+                                    padding: 12px;
+
+                                    Text {
+                                        text: model-install-text;
+                                        color: model-ready ? #1a7f45 : #b42318;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 15px;
+                                        font-weight: 700;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                        Rectangle {
+                        border-radius: 20px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+                        horizontal-stretch: 1;
+
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: "麦克风授权"; color: #1f2937; font-size: 16px; font-weight: 700; }
+                                Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: mic-ready ? #22c55e : #ef4444;
+                                }
+                            }
+
+                            Rectangle { height: 1px; background: #e5e7eb; }
+
+                            Rectangle {
+                                border-radius: 14px;
+                                background: #f6f7f9;
+
+                                VerticalLayout {
+                                    padding: 16px;
+                                    spacing: 4px;
+                                    Text { text: mic-permission-title; color: #1f2937; font-size: 15px; font-weight: 700; }
+                                    Text { text: mic-permission-body; color: #667085; wrap: word-wrap; font-size: 14px; }
+                                }
+                            }
+
+                            Rectangle {
+                                border-radius: 14px;
+                                background: #f6f7f9;
+
+                                VerticalLayout {
+                                    padding: 16px;
+                                    spacing: 4px;
+                                    Text { text: paste-permission-title; color: #1f2937; font-size: 15px; font-weight: 700; }
+                                    Text { text: paste-permission-body; color: #667085; wrap: word-wrap; font-size: 14px; }
+                                }
+                            }
+
+                            Rectangle {
+                                border-radius: 14px;
+                                background: #f6f7f9;
+
+                                VerticalLayout {
+                                    padding: 16px;
+                                    spacing: 4px;
+                                    Text { text: "默认设备"; color: #667085; font-size: 13px; }
+                                    Text { text: default-device-text; color: #1f2937; wrap: word-wrap; font-size: 16px; font-weight: 700; }
+                                }
+                            }
+                        }
+                    }
+
+                        Rectangle {
+                        border-radius: 20px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+                        horizontal-stretch: 1;
+
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: transcribe-card-title; color: #1f2937; font-size: 16px; font-weight: 700; }
+                            }
+
+                            Rectangle { height: 1px; background: #e5e7eb; }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+
+                                Rectangle {
+                                    width: 56px;
+                                    height: 56px;
+                                    border-radius: 16px;
+                                    background: #2962ff;
+
+                                    Text {
+                                        text: "🎤";
+                                        color: #ffffff;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 24px;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    Text { text: transcribe-button-text; color: #1f2937; font-size: 18px; font-weight: 700; }
+                                    Text { text: transcribe-body-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                                }
+                            }
+
+                            Text { text: "输入音量"; color: #667085; font-size: 13px; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Rectangle {
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: #e5e7eb;
+                                    horizontal-stretch: 1;
+
+                                    Rectangle {
+                                        height: 10px;
+                                        border-radius: 5px;
+                                        background: #2962ff;
+                                        width: (parent.width * root.audio-level-value);
+                                    }
+                                }
+                                Text { text: audio-level-text; color: #667085; font-size: 13px; }
+                            }
+
+                            Button {
+                                text: monitor-button-text;
+                                clicked => { root.toggle-mic-monitor-requested(); }
+                            }
+
+                            Button {
+                                text: transcribe-button-text;
+                                primary: true;
+                                clicked => { root.toggle-live-asr-requested(); }
+                            }
+
+                            Rectangle {
+                                border-radius: 14px;
+                                background: #fff7e8;
+
+                                VerticalLayout {
+                                    padding: 14px;
+
+                                    Text {
+                                        text: monitor-tip-text;
+                                        color: #c26b16;
+                                        wrap: word-wrap;
+                                        font-size: 14px;
+                                        font-weight: 600;
+                                    }
+                                }
+                            }
+                        }
+                        }
+                    }
+
+                    if root.compact-layout : VerticalLayout {
+                        spacing: 16px;
+
+                        Rectangle {
+                        border-radius: 20px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+
+                                Text {
+                                    text: "模型状态";
+                                    color: #1f2937;
+                                    font-size: 16px;
+                                    font-weight: 700;
+                                }
+
+                                Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: model-ready ? #22c55e : #ef4444;
+                                }
+                            }
+
+                            Rectangle { height: 1px; background: #e5e7eb; }
+
+                            Text {
+                                text: model-title-text;
+                                color: #1f2937;
+                                font-size: 18px;
+                                font-weight: 700;
+                            }
+
+                            Text {
+                                text: model-desc-text;
+                                color: #667085;
+                                wrap: word-wrap;
+                                font-size: 14px;
+                            }
+
+                            if !root.narrow-layout : HorizontalLayout {
+                                spacing: 10px;
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    horizontal-stretch: 1;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "版本"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-version-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    horizontal-stretch: 1;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "大小"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-size-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    horizontal-stretch: 1;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "语言"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-language-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+                            }
+
+                            if root.narrow-layout : VerticalLayout {
+                                spacing: 10px;
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "版本"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-version-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "大小"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-size-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+
+                                Rectangle {
+                                    border-radius: 12px;
+                                    background: #f2f4f7;
+                                    VerticalLayout {
+                                        padding: 12px;
+                                        spacing: 4px;
+                                        Text { text: "语言"; color: #667085; font-size: 13px; horizontal-alignment: center; }
+                                        Text { text: model-language-text; color: #1f2937; font-size: 16px; font-weight: 700; horizontal-alignment: center; }
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                border-radius: 12px;
+                                background: model-ready ? #dff6e8 : #fee2e2;
+
+                                VerticalLayout {
+                                    padding: 12px;
+
+                                    Text {
+                                        text: model-install-text;
+                                        color: model-ready ? #1a7f45 : #b42318;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 15px;
+                                        font-weight: 700;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                        Rectangle {
+                        border-radius: 20px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: "麦克风授权"; color: #1f2937; font-size: 16px; font-weight: 700; }
+                                Rectangle {
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: mic-ready ? #22c55e : #ef4444;
+                                }
+                            }
+
+                            Rectangle { height: 1px; background: #e5e7eb; }
+
+                            Rectangle {
+                                border-radius: 14px;
+                                background: #f6f7f9;
+
+                                VerticalLayout {
+                                    padding: 16px;
+                                    spacing: 4px;
+                                    Text { text: mic-permission-title; color: #1f2937; font-size: 15px; font-weight: 700; }
+                                    Text { text: mic-permission-body; color: #667085; wrap: word-wrap; font-size: 14px; }
+                                }
+                            }
+
+                            Rectangle {
+                                border-radius: 14px;
+                                background: #f6f7f9;
+
+                                VerticalLayout {
+                                    padding: 16px;
+                                    spacing: 4px;
+                                    Text { text: paste-permission-title; color: #1f2937; font-size: 15px; font-weight: 700; }
+                                    Text { text: paste-permission-body; color: #667085; wrap: word-wrap; font-size: 14px; }
+                                }
+                            }
+
+                            Rectangle {
+                                border-radius: 14px;
+                                background: #f6f7f9;
+
+                                VerticalLayout {
+                                    padding: 16px;
+                                    spacing: 4px;
+                                    Text { text: "默认设备"; color: #667085; font-size: 13px; }
+                                    Text { text: default-device-text; color: #1f2937; wrap: word-wrap; font-size: 16px; font-weight: 700; }
+                                }
+                            }
+                        }
+                    }
+
+                        Rectangle {
+                        border-radius: 20px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+
+                        VerticalLayout {
+                            padding: 20px;
+                            spacing: 12px;
+
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Text { text: transcribe-card-title; color: #1f2937; font-size: 16px; font-weight: 700; }
+                            }
+
+                            Rectangle { height: 1px; background: #e5e7eb; }
+
+                            HorizontalLayout {
+                                spacing: 12px;
+
+                                Rectangle {
+                                    width: 56px;
+                                    height: 56px;
+                                    border-radius: 16px;
+                                    background: #2962ff;
+
+                                    Text {
+                                        text: "🎤";
+                                        color: #ffffff;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 24px;
+                                    }
+                                }
+
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    Text { text: transcribe-button-text; color: #1f2937; font-size: 18px; font-weight: 700; }
+                                    Text { text: transcribe-body-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                                }
+                            }
+
+                            Text { text: "输入音量"; color: #667085; font-size: 13px; }
+                            HorizontalLayout {
+                                spacing: 8px;
+                                Rectangle {
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: #e5e7eb;
+                                    horizontal-stretch: 1;
+
+                                    Rectangle {
+                                        height: 10px;
+                                        border-radius: 5px;
+                                        background: #2962ff;
+                                        width: (parent.width * root.audio-level-value);
+                                    }
+                                }
+                                Text { text: audio-level-text; color: #667085; font-size: 13px; }
+                            }
+
+                            Button {
+                                text: monitor-button-text;
+                                clicked => { root.toggle-mic-monitor-requested(); }
+                            }
+
+                            Button {
+                                text: transcribe-button-text;
+                                primary: true;
+                                clicked => { root.toggle-live-asr-requested(); }
+                            }
+
+                            Rectangle {
+                                border-radius: 14px;
+                                background: #fff7e8;
+
+                                VerticalLayout {
+                                    padding: 14px;
+
+                                    Text {
+                                        text: monitor-tip-text;
+                                        color: #c26b16;
+                                        wrap: word-wrap;
+                                        font-size: 14px;
+                                        font-weight: 600;
+                                    }
+                                }
+                            }
+                        }
+                        }
+                    }
+
+                    if !root.narrow-layout : HorizontalLayout {
+                        spacing: 16px;
+
+                        Rectangle {
+                        border-radius: 18px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+                        horizontal-stretch: 1;
+
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 10px;
+                            Text { text: "最近结果"; color: #1f2937; font-size: 15px; font-weight: 700; }
+                            Text { text: status-text; color: #344054; wrap: word-wrap; font-size: 14px; }
+                            Text { text: live-asr-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                            Text { text: history-preview-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                        }
+                    }
+
+                        Rectangle {
+                        border-radius: 18px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+                        horizontal-stretch: 1;
+
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 10px;
+                            Text { text: "运行状态"; color: #1f2937; font-size: 15px; font-weight: 700; }
+                            Text { text: history-stats-text; color: #344054; wrap: word-wrap; font-size: 14px; }
+                            Text { text: settings-summary-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                            Text { text: rewrite-text; color: #667085; font-size: 14px; }
+                            Text { text: tray-summary-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                        }
+                        }
+                    }
+
+                    if root.narrow-layout : VerticalLayout {
+                        spacing: 16px;
+
+                        Rectangle {
+                        border-radius: 18px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 10px;
+                            Text { text: "最近结果"; color: #1f2937; font-size: 15px; font-weight: 700; }
+                            Text { text: status-text; color: #344054; wrap: word-wrap; font-size: 14px; }
+                            Text { text: live-asr-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                            Text { text: history-preview-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                        }
+                    }
+
+                        Rectangle {
+                        border-radius: 18px;
+                        background: #ffffff;
+                        border-width: 1px;
+                        border-color: #d7dee8;
+
+                        VerticalLayout {
+                            padding: 18px;
+                            spacing: 10px;
+                            Text { text: "运行状态"; color: #1f2937; font-size: 15px; font-weight: 700; }
+                            Text { text: history-stats-text; color: #344054; wrap: word-wrap; font-size: 14px; }
+                            Text { text: settings-summary-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                            Text { text: rewrite-text; color: #667085; font-size: 14px; }
+                            Text { text: tray-summary-text; color: #667085; wrap: word-wrap; font-size: 14px; }
+                        }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

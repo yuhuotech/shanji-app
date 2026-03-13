@@ -1,0 +1,122 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+export component SettingsWindow inherits Window {
+    in-out property <string> settings-status-text: "设置已同步";
+    in-out property <string> theme-text: "主题: system";
+    in-out property <string> model-text: "模型: paraformer-zh";
+    in-out property <string> audio-device-text: "音频输入: system default";
+    in-out property <string> recording-mode-text: "录音模式: toggle";
+    in-out property <string> rewrite-text: "智能改写: disabled";
+    in-out property <string> punct-style-text: "标点风格: zh";
+    in-out property <string> append-content-text: "附加内容: space";
+    in-out property <string> hotword-summary-text: "热词库: no libraries";
+    in-out property <string> hotkey-summary-text: "快捷键: unavailable";
+    in-out property <string> overlay-visibility-text: "悬浮窗: hidden";
+    in-out property <string> config-path-text: "配置路径: unknown";
+
+    callback refresh-requested();
+    callback cycle-theme-requested();
+    callback cycle-model-requested();
+    callback cycle-audio-device-requested();
+    callback cycle-recording-mode-requested();
+    callback toggle-rewrite-requested();
+    callback cycle-punct-style-requested();
+    callback cycle-append-content-requested();
+    callback toggle-hotword-requested();
+    callback toggle-overlay-requested();
+    callback clear-session-requested();
+
+    title: "闪记设置";
+    width: 760px;
+    height: 720px;
+    default-font-family: "Hiragino Sans GB";
+
+    Rectangle {
+        background: #f4efe6;
+
+        ScrollView {
+            width: parent.width;
+            height: parent.height;
+
+            content := VerticalLayout {
+                width: max(root.width - 48px, 360px);
+                padding: 24px;
+                spacing: 16px;
+
+                Rectangle {
+                    border-radius: 20px;
+                    background: #24303c;
+
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 8px;
+
+                        Text {
+                            text: "设置";
+                            color: #f8f1e2;
+                            font-size: 28px;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: settings-status-text;
+                            color: #ddd1bf;
+                            wrap: word-wrap;
+                            font-size: 14px;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    Button { text: "刷新"; primary: true; clicked => { root.refresh-requested(); } }
+                    Button { text: "切换主题"; clicked => { root.cycle-theme-requested(); } }
+                    Button { text: "切换模型"; clicked => { root.cycle-model-requested(); } }
+                    Button { text: "切换设备"; clicked => { root.cycle-audio-device-requested(); } }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    Button { text: "录音模式"; clicked => { root.cycle-recording-mode-requested(); } }
+                    Button { text: "智能改写"; clicked => { root.toggle-rewrite-requested(); } }
+                    Button { text: "标点风格"; clicked => { root.cycle-punct-style-requested(); } }
+                    Button { text: "追加内容"; clicked => { root.cycle-append-content-requested(); } }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    Button { text: "热词开关"; clicked => { root.toggle-hotword-requested(); } }
+                    Button { text: "悬浮窗"; clicked => { root.toggle-overlay-requested(); } }
+                    Button { text: "清理会话"; clicked => { root.clear-session-requested(); } }
+                }
+
+                Rectangle {
+                    border-radius: 18px;
+                    background: #fffaf0;
+                    border-width: 1px;
+                    border-color: #d4c7b1;
+
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+
+                        Text { text: theme-text; color: #2e261f; font-size: 15px; }
+                        Text { text: model-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
+                        Text { text: audio-device-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
+                        Text { text: recording-mode-text; color: #2e261f; font-size: 15px; }
+                        Text { text: rewrite-text; color: #2e261f; font-size: 15px; }
+                        Text { text: punct-style-text; color: #2e261f; font-size: 15px; }
+                        Text { text: append-content-text; color: #2e261f; font-size: 15px; }
+                        Text { text: hotword-summary-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
+                        Text { text: hotkey-summary-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
+                        Text { text: overlay-visibility-text; color: #2e261f; font-size: 15px; }
+                        Text { text: config-path-text; color: #75695e; wrap: word-wrap; font-size: 13px; }
+                    }
+                }
+            }
+        }
+    }
+}

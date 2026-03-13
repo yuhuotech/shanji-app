@@ -1,0 +1,109 @@
+import { Button, ScrollView } from "std-widgets.slint";
+
+export component HistoryWindow inherits Window {
+    in-out property <string> history-status-text: "History ready";
+    in-out property <string> history-stats-text: "History: 0 total";
+    in-out property <string> history-list-text: "No history records yet";
+
+    callback refresh-requested();
+    callback paste-latest-requested();
+    callback copy-latest-requested();
+    callback delete-latest-requested();
+    callback clear-history-requested();
+
+    title: "Shanji History";
+    width: 760px;
+    height: 680px;
+    default-font-family: "Hiragino Sans GB";
+
+    Rectangle {
+        background: #f4efe6;
+
+        ScrollView {
+            width: parent.width;
+            height: parent.height;
+
+            content := VerticalLayout {
+                width: max(root.width - 48px, 360px);
+                padding: 24px;
+                spacing: 14px;
+
+                Rectangle {
+                    border-radius: 20px;
+                    background: #24303c;
+
+                    VerticalLayout {
+                        padding: 20px;
+                        spacing: 6px;
+
+                        Text {
+                            text: "History";
+                            color: #f8f1e2;
+                            font-size: 28px;
+                            font-weight: 700;
+                        }
+
+                        Text {
+                            text: history-status-text;
+                            color: #ddd1bf;
+                            wrap: word-wrap;
+                            font-size: 14px;
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    Button { text: "Refresh"; primary: true; clicked => { root.refresh-requested(); } }
+                    Button { text: "Paste Latest"; clicked => { root.paste-latest-requested(); } }
+                    Button { text: "Copy Latest"; clicked => { root.copy-latest-requested(); } }
+                    Button { text: "Delete Latest"; clicked => { root.delete-latest-requested(); } }
+                    Button { text: "Clear All"; clicked => { root.clear-history-requested(); } }
+                }
+
+                Rectangle {
+                    border-radius: 18px;
+                    background: #e6ddd0;
+
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 8px;
+
+                        Text {
+                            text: history-stats-text;
+                            color: #3d3127;
+                            font-size: 16px;
+                            font-weight: 600;
+                        }
+
+                        Text {
+                            text: "Latest 20 records";
+                            color: #65594d;
+                            font-size: 13px;
+                        }
+                    }
+                }
+
+                Rectangle {
+                    border-radius: 18px;
+                    background: #fffaf0;
+                    border-width: 1px;
+                    border-color: #d4c7b1;
+
+                    VerticalLayout {
+                        padding: 18px;
+                        spacing: 10px;
+
+                        Text {
+                            text: history-list-text;
+                            color: #2e261f;
+                            wrap: word-wrap;
+                            font-size: 15px;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

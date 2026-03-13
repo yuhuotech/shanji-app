@@ -1,0 +1,38 @@
+export component OverlayWindow inherits Window {
+    in-out property <string> overlay-state-text: "Overlay idle";
+    in-out property <string> overlay-body-text: "Waiting";
+
+    title: "Shanji Overlay";
+    width: 380px;
+    height: 140px;
+    no-frame: true;
+    always-on-top: true;
+    default-font-family: "Hiragino Sans GB";
+
+    Rectangle {
+        border-radius: 22px;
+        background: #18232f;
+        border-width: 1px;
+        border-color: #ddc9a3;
+
+        VerticalLayout {
+            padding: 18px;
+            spacing: 8px;
+
+            Text {
+                text: overlay-state-text;
+                color: #f6e8c8;
+                font-size: 14px;
+                font-weight: 700;
+            }
+
+            Text {
+                text: overlay-body-text;
+                color: #fffaf0;
+                wrap: word-wrap;
+                font-size: 20px;
+                font-weight: 600;
+            }
+        }
+    }
+}

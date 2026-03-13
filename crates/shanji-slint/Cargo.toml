@@ -1,0 +1,16 @@
+[package]
+name = "shanji-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "shanji"
+path = "src/main.rs"
+
+[dependencies]
+shanji-core = { path = "../shanji-core" }
+shanji-platform = { path = "../shanji-platform" }
+slint = "1"
+
+[build-dependencies]
+slint-build = "1"
