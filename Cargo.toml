@@ -1,5 +1,4 @@
 [workspace]
 members = ["crates/shanji-core", "crates/shanji-platform", "crates/shanji-slint"]
 default-members = ["crates/shanji-slint"]
-exclude = ["src-tauri"]
 resolver = "2"

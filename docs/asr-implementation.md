@@ -20,7 +20,7 @@ Tokenizer (BPE/Char)
 
 ## 核心模块
 
-### 1. ASR 引擎 (`src/asr/mod.rs`)
+### 1. ASR 引擎 (`crates/shanji-core/src/asr.rs`)
 
 ```rust
 pub struct AsrEngine {
@@ -39,7 +39,7 @@ pub struct AsrEngine {
 - `finalize()`: 结束识别并返回结果
 - `recognize()`: 非流式完整识别
 
-### 2. Paraformer 推理 (`src/asr/paraformer.rs`)
+### 2. Paraformer 推理 (`crates/shanji-core/src/asr/paraformer.rs`)
 
 包含三个核心结构：
 
@@ -59,7 +59,7 @@ pub struct AsrEngine {
 - 控制 chunk 大小（默认 67 帧 ≈ 1 秒）
 - 协调 encoder/decoder
 
-### 3. 特征提取 (`src/asr/feature.rs`)
+### 3. 特征提取 (`crates/shanji-core/src/asr/feature.rs`)
 
 FBank (Filter Bank) 特征：
 - 采样率: 16kHz
@@ -67,7 +67,7 @@ FBank (Filter Bank) 特征：
 - 帧移: 10ms
 - 维度: 80
 
-### 4. Tokenizer (`src/asr/tokenizer.rs`)
+### 4. Tokenizer (`crates/shanji-core/src/asr/tokenizer.rs`)
 
 支持：
 - `vocab.txt` 格式（每行一个 token）
