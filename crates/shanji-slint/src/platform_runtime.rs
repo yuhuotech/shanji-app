@@ -29,8 +29,11 @@ impl PlatformRuntime {
         let config = config::get_config(&paths).map_err(|err| err.to_string())?;
         let hotkey_signature = hotkey_signature(&config.hotkeys);
         let runtime = state::get_runtime_snapshot();
-        let tray_model =
-            tray::build_tray_menu("Shanji", runtime.current_state.clone(), config.general.minimize_to_tray);
+        let tray_model = tray::build_tray_menu(
+            "Shanji",
+            runtime.current_state.clone(),
+            config.general.minimize_to_tray,
+        );
         let tray_signature = format!(
             "{}|{}|{}",
             tray_model.tooltip,

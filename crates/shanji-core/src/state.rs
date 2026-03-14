@@ -26,7 +26,7 @@ impl Default for RuntimeSnapshot {
         Self {
             current_state: AppState::Idle,
             active_model_id: None,
-            overlay_visible: false,
+            overlay_visible: true,
             status_message: "Native runtime is idle".to_string(),
             live_transcript: String::new(),
             rewrite_preview: String::new(),
@@ -64,7 +64,7 @@ impl Default for AppStateManager {
             mic_test_running: false,
             download_cancellations: HashMap::new(),
             download_cancel_flags: HashMap::new(),
-            overlay_visible: false,
+            overlay_visible: true,
             status_message: "Native runtime is idle".to_string(),
             live_transcript: String::new(),
             rewrite_preview: String::new(),

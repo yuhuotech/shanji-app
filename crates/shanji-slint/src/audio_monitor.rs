@@ -30,7 +30,7 @@ pub fn toggle(device_name: Option<String>) -> Result<bool, String> {
 
     let join_handle = std::thread::spawn(move || {
         let mut capture = AudioCapture::new();
-        if let Err(err) = capture.start(selected_device.as_deref(), sample_tx) {
+        if let Err(err) = capture.start(selected_device.as_deref(), sample_tx, false) {
             state::set_status_message(format!("Microphone monitor failed: {}", err));
             state::set_mic_test_running(false);
             return;
@@ -48,7 +48,10 @@ pub fn toggle(device_name: Option<String>) -> Result<bool, String> {
                 Ok(samples) => {
                     let level = audio::calculate_audio_level(&samples);
                     state::set_audio_level(level);
-                    if matches!(state::get_current_state(), shanji_core::config::AppState::Idle) {
+                    if matches!(
+                        state::get_current_state(),
+                        shanji_core::config::AppState::Idle
+                    ) {
                         state::set_status_message(format!(
                             "Monitoring microphone input from native app ({}%)",
                             (level * 100.0).round() as u32

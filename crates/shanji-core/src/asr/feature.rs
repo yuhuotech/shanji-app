@@ -103,6 +103,9 @@ impl FBankExtractor {
         let preemphasized = self.preemphasis(samples);
 
         // Extract frames
+        if preemphasized.len() < self.frame_length {
+            return Ok(vec![]);
+        }
         let num_frames = (preemphasized.len() - self.frame_length) / self.frame_shift + 1;
         let mut features = Vec::with_capacity(num_frames);
 
@@ -150,12 +153,22 @@ impl FBankExtractor {
             log::info!("Applying LFR: stacking {} frames, skipping {} frames", m, n);
             let original_frames = features.len();
             features = Self::apply_lfr(&features, m, n);
-            log::info!("LFR applied: {} frames -> {} frames, dim {} -> {}",
-                original_frames, features.len(),
+            log::info!(
+                "LFR applied: {} frames -> {} frames, dim {} -> {}",
+                original_frames,
+                features.len(),
                 self.config.num_mel_bins,
-                if features.is_empty() { 0 } else { features[0].len() });
+                if features.is_empty() {
+                    0
+                } else {
+                    features[0].len()
+                }
+            );
         } else {
-            log::info!("LFR not configured, outputting raw {} dim features", self.config.num_mel_bins);
+            log::info!(
+                "LFR not configured, outputting raw {} dim features",
+                self.config.num_mel_bins
+            );
         }
 
         Ok(features)

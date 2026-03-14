@@ -22,6 +22,10 @@ pub struct UiSnapshot {
     pub model_language_text: String,
     pub model_install_text: String,
     pub model_ready: bool,
+    pub model_downloading: bool,
+    pub model_download_progress: f32,
+    pub model_download_status_text: String,
+    pub model_download_error_text: String,
     pub mic_permission_title: String,
     pub mic_permission_body: String,
     pub mic_ready: bool,
@@ -105,6 +109,10 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
             model_language_text: "N/A".to_string(),
             model_install_text: "模型未就绪".to_string(),
             model_ready: false,
+            model_downloading: false,
+            model_download_progress: 0.0,
+            model_download_status_text: String::new(),
+            model_download_error_text: String::new(),
             mic_permission_title: "麦克风状态不可用".to_string(),
             mic_permission_body: "当前无法读取音频输入设备".to_string(),
             mic_ready: false,
@@ -182,7 +190,7 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
             .unwrap_or_else(|| "当前模型描述不可用".to_string()),
         model_version_text: active_model
             .as_ref()
-            .map(|model| format!("v{}", model.version))
+            .map(|model| model.version.clone())
             .unwrap_or_else(|| "N/A".to_string()),
         model_size_text: active_model
             .as_ref()
@@ -192,23 +200,58 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
             .as_ref()
             .map(|model| model.language.to_uppercase())
             .unwrap_or_else(|| "N/A".to_string()),
-        model_install_text: if active_model.as_ref().map(|m| m.is_downloaded).unwrap_or(false) {
+        model_install_text: if active_model
+            .as_ref()
+            .map(|m| m.is_downloaded)
+            .unwrap_or(false)
+        {
             "模型已安装".to_string()
         } else {
             "模型未安装".to_string()
         },
-        model_ready: active_model.as_ref().map(|m| m.is_downloaded).unwrap_or(false),
-        mic_permission_title: if audio_devices.is_empty() {
-            "未检测到麦克风输入设备".to_string()
-        } else {
-            "麦克风权限已获取".to_string()
+        model_ready: active_model
+            .as_ref()
+            .map(|m| m.is_downloaded)
+            .unwrap_or(false),
+        model_downloading: crate::model_downloader::is_downloading(),
+        model_download_progress: crate::model_downloader::get_progress(),
+        model_download_status_text: crate::model_downloader::get_status_text(),
+        model_download_error_text: crate::model_downloader::get_last_error().unwrap_or_default(),
+        mic_permission_title: {
+            use shanji_core::audio::{get_mic_permission_status, MicPermissionStatus};
+            match get_mic_permission_status() {
+                MicPermissionStatus::Authorized => {
+                    if audio_devices.is_empty() {
+                        "未检测到麦克风输入设备".to_string()
+                    } else {
+                        "麦克风权限已获取".to_string()
+                    }
+                }
+                MicPermissionStatus::Denied => "麦克风权限已拒绝".to_string(),
+                MicPermissionStatus::NotDetermined => "麦克风尚未授权".to_string(),
+                MicPermissionStatus::Restricted => "麦克风权限受限".to_string(),
+            }
         },
-        mic_permission_body: if audio_devices.is_empty() {
-            "请检查系统麦克风权限与音频设备连接状态".to_string()
-        } else {
-            format!("已检测到 {} 个可用输入设备", audio_devices.len())
+        mic_permission_body: {
+            use shanji_core::audio::{get_mic_permission_status, MicPermissionStatus};
+            match get_mic_permission_status() {
+                MicPermissionStatus::Authorized => {
+                    if audio_devices.is_empty() {
+                        "请检查系统麦克风权限与音频设备连接状态".to_string()
+                    } else {
+                        format!("已检测到 {} 个可用输入设备", audio_devices.len())
+                    }
+                }
+                MicPermissionStatus::Denied => "已在系统设置中拒绝，请前往授权".to_string(),
+                MicPermissionStatus::NotDetermined => "首次使用需要授权麦克风访问".to_string(),
+                MicPermissionStatus::Restricted => "设备管理策略限制了麦克风访问".to_string(),
+            }
         },
-        mic_ready: !audio_devices.is_empty(),
+        mic_ready: {
+            use shanji_core::audio::{get_mic_permission_status, MicPermissionStatus};
+            get_mic_permission_status() == MicPermissionStatus::Authorized
+                && !audio_devices.is_empty()
+        },
         paste_permission_title: if shanji_core::output::is_auto_paste_supported() {
             "自动粘贴已启用".to_string()
         } else {
@@ -245,7 +288,11 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         recording_mode_text: format!("Recording mode: {}", cfg.audio.recording_mode),
         rewrite_text: format!(
             "Rewrite: {}",
-            if cfg.rewrite.enabled { "enabled" } else { "disabled" }
+            if cfg.rewrite.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
         ),
         punct_style_text: format!("Punct style: {}", cfg.output.punct_style),
         append_content_text: format!("Append content: {}", cfg.output.append_content),
@@ -256,7 +303,11 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         tray_summary_text: load_tray_summary(&cfg, &runtime),
         tray_inventory_text: load_tray_inventory(&cfg, &runtime),
         live_asr_text: load_live_asr_summary(&cfg, &runtime),
-        overlay_visible: runtime.overlay_visible,
+        overlay_visible: runtime.overlay_visible
+            && matches!(
+                runtime.current_state,
+                AppState::Recording | AppState::Transcribing | AppState::Rewriting
+            ),
         overlay_visibility_text: if runtime.overlay_visible {
             "Overlay: visible".to_string()
         } else {
@@ -295,7 +346,11 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
         recording_mode_text: format!("录音模式: {}", cfg.audio.recording_mode),
         rewrite_text: format!(
             "智能改写: {}",
-            if cfg.rewrite.enabled { "enabled" } else { "disabled" }
+            if cfg.rewrite.enabled {
+                "enabled"
+            } else {
+                "disabled"
+            }
         ),
         punct_style_text: format!("标点风格: {}", cfg.output.punct_style),
         append_content_text: format!("附加内容: {}", cfg.output.append_content),
@@ -443,7 +498,11 @@ pub fn toggle_latest_hotword_library() -> Result<UiSnapshot, String> {
     snapshot.status_text = format!(
         "Hotword library {} is now {}",
         library.name,
-        if library.enabled { "disabled" } else { "enabled" }
+        if library.enabled {
+            "disabled"
+        } else {
+            "enabled"
+        }
     );
     Ok(snapshot)
 }
@@ -469,7 +528,10 @@ pub fn paste_latest_history() -> Result<HistoryWindowSnapshot, String> {
         shanji_core::output::deliver_output(&text, &cfg.output).map_err(|e| e.to_string())?;
     let mut snapshot = refresh_history_window()?;
     snapshot.status_text = if let Some(err) = delivery.auto_paste_error {
-        format!("Latest history copied to clipboard because auto-paste failed: {}", err)
+        format!(
+            "Latest history copied to clipboard because auto-paste failed: {}",
+            err
+        )
     } else {
         "Latest history pasted to active cursor target".to_string()
     };
@@ -501,6 +563,20 @@ pub fn delete_latest_history() -> Result<HistoryWindowSnapshot, String> {
     let mut snapshot = refresh_history_window()?;
     snapshot.status_text = "Deleted latest history record".to_string();
     Ok(snapshot)
+}
+
+pub fn start_model_download() -> Result<UiSnapshot, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    crate::model_downloader::start(paths, cfg.asr.model_id.clone())?;
+    let mut snapshot = refresh_snapshot()?;
+    snapshot.status_text = format!("开始下载模型 {}", cfg.asr.model_id);
+    Ok(snapshot)
+}
+
+pub fn request_mic_permission() {
+    shanji_core::audio::open_mic_permission_settings();
 }
 
 pub fn toggle_mic_monitor() -> Result<UiSnapshot, String> {
@@ -570,8 +646,7 @@ pub fn toggle_overlay_visibility() -> Result<UiSnapshot, String> {
 }
 
 fn resolve_app_paths() -> AppPaths {
-    shanji_core::paths::standard_app_paths("shanji")
-        .expect("failed to resolve standard app paths")
+    shanji_core::paths::standard_app_paths("shanji").expect("failed to resolve standard app paths")
 }
 
 fn format_state(state: AppState) -> String {
@@ -603,21 +678,9 @@ fn format_overlay_body(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
                 format!("Ready with {}", cfg.asr.model_id)
             }
         }
-        AppState::Recording => "Listening to microphone input".to_string(),
-        AppState::Transcribing => {
-            if runtime.live_transcript.is_empty() {
-                "Streaming ASR result preview".to_string()
-            } else {
-                truncate(&runtime.live_transcript, 42)
-            }
-        }
-        AppState::Rewriting => {
-            if runtime.rewrite_preview.is_empty() {
-                "Applying rewrite pipeline".to_string()
-            } else {
-                truncate(&runtime.rewrite_preview, 42)
-            }
-        }
+        AppState::Recording => String::new(),
+        AppState::Transcribing => truncate(&runtime.live_transcript, 40),
+        AppState::Rewriting => truncate(&runtime.rewrite_preview, 40),
     }
 }
 
@@ -672,7 +735,10 @@ fn load_live_asr_summary(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
     };
 
     if crate::audio_transcriber::is_running()
-        || matches!(runtime.current_state, AppState::Recording | AppState::Transcribing)
+        || matches!(
+            runtime.current_state,
+            AppState::Recording | AppState::Transcribing
+        )
     {
         return format!("Live ASR: running with {}", cfg.asr.model_id);
     }
@@ -693,8 +759,12 @@ fn load_hotkey_summary(cfg: &AppConfig) -> String {
 }
 
 fn load_tray_summary(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
-    tray::build_tray_menu("Shanji", runtime.current_state.clone(), cfg.general.minimize_to_tray)
-        .status_line()
+    tray::build_tray_menu(
+        "Shanji",
+        runtime.current_state.clone(),
+        cfg.general.minimize_to_tray,
+    )
+    .status_line()
 }
 
 fn load_hotkey_inventory(cfg: &AppConfig) -> String {
@@ -702,17 +772,28 @@ fn load_hotkey_inventory(cfg: &AppConfig) -> String {
 }
 
 fn load_tray_inventory(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
-    tray::build_tray_menu("Shanji", runtime.current_state.clone(), cfg.general.minimize_to_tray)
-        .inventory_text()
+    tray::build_tray_menu(
+        "Shanji",
+        runtime.current_state.clone(),
+        cfg.general.minimize_to_tray,
+    )
+    .inventory_text()
 }
 
 fn active_model_info(paths: &AppPaths, cfg: &AppConfig) -> Option<shanji_core::model::ModelInfo> {
     model::list_models_with_paths(paths)
         .ok()
-        .and_then(|models| models.into_iter().find(|entry| entry.id == cfg.asr.model_id))
+        .and_then(|models| {
+            models
+                .into_iter()
+                .find(|entry| entry.id == cfg.asr.model_id)
+        })
 }
 
-fn selected_audio_device_name(cfg: &AppConfig, devices: &[shanji_core::audio::AudioInputDevice]) -> String {
+fn selected_audio_device_name(
+    cfg: &AppConfig,
+    devices: &[shanji_core::audio::AudioInputDevice],
+) -> String {
     cfg.audio
         .device_name
         .clone()

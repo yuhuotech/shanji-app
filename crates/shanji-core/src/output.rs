@@ -53,8 +53,8 @@ pub fn format_output(text: &str, config: &OutputConfig) -> String {
 }
 
 pub fn copy_to_clipboard(text: &str) -> Result<()> {
-    let mut clipboard =
-        arboard::Clipboard::new().map_err(|e| AppError::Output(format!("Clipboard init failed: {}", e)))?;
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| AppError::Output(format!("Clipboard init failed: {}", e)))?;
     clipboard
         .set_text(text.to_string())
         .map_err(|e| AppError::Output(format!("Clipboard write failed: {}", e)))?;
@@ -109,15 +109,15 @@ fn paste_via_clipboard(text: &str, restore_clipboard: bool) -> Result<()> {
     Ok(())
 }
 
-fn read_clipboard_text() -> Result<String> {
-    let mut clipboard =
-        arboard::Clipboard::new().map_err(|e| AppError::Output(format!("Clipboard init failed: {}", e)))?;
+pub fn read_clipboard_text() -> Result<String> {
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| AppError::Output(format!("Clipboard init failed: {}", e)))?;
     clipboard
         .get_text()
         .map_err(|e| AppError::Output(format!("Clipboard read failed: {}", e)))
 }
 
-fn simulate_paste() -> Result<()> {
+pub fn simulate_paste() -> Result<()> {
     let mut enigo = Enigo::new(&Settings::default())
         .map_err(|e| AppError::Output(format!("Input init failed: {:?}", e)))?;
 

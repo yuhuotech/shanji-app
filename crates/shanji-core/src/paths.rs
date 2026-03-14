@@ -43,7 +43,9 @@ impl AppPaths {
 
 pub fn standard_app_paths(app_name: &str) -> Result<AppPaths> {
     let config_dir = dirs::config_dir()
-        .ok_or_else(|| crate::error::AppError::Io("Failed to resolve config directory".to_string()))?
+        .ok_or_else(|| {
+            crate::error::AppError::Io("Failed to resolve config directory".to_string())
+        })?
         .join(app_name);
     let data_dir = dirs::data_dir()
         .ok_or_else(|| crate::error::AppError::Io("Failed to resolve data directory".to_string()))?

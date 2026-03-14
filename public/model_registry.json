@@ -1,41 +1,32 @@
 {
-  "version": 1,
-  "updated_at": "2026-03-13",
-  "models": [
-    {
-      "id": "paraformer-zh",
-      "name": "Paraformer 中文",
-      "language": "zh",
-      "description": "中文普通话语音识别（量化版）",
-      "sizeBytes": 220000000,
-      "downloadUrl": "https://github.com/yuhuotech/shanji/releases/download/models/paraformer-zh-v1.0.0.tar.gz",
-      "modelscopeUrl": "",
-      "huggingfaceUrl": "https://hf-mirror.com/manyeyes/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx/resolve/main/",
-      "sha256": "",
-      "version": "v1.0.0",
-      "files": [
-        "model_quant.onnx",
-        "asr.yaml",
-        "tokens.txt",
-        "am.mvn"
-      ]
-    },
-    {
-      "id": "paraformer-zh-streaming",
-      "name": "Paraformer 流式中文",
-      "language": "zh",
-      "description": "中文流式识别模型（量化版）",
-      "sizeBytes": 220000000,
-      "downloadUrl": "https://github.com/yuhuotech/shanji/releases/download/models/paraformer-zh-streaming-v1.0.0.tar.gz",
-      "modelscopeUrl": "",
-      "huggingfaceUrl": "",
-      "sha256": "",
-      "version": "v1.0.0",
-      "files": [
-        "model_quant.onnx",
-        "config.yaml",
-        "vocab.txt"
-      ]
-    }
-  ]
+    "version": 1,
+    "updated_at": "2026-03-13",
+    "models": [
+        {
+            "id": "paraformer-zh",
+            "name": "Paraformer 中文",
+            "language": "zh",
+            "description": "中文普通话语音识别",
+            "sizeBytes": 880000000,
+            "downloadUrl": "https://github.com/yuhuotech/shanji/releases/download/models/paraformer-zh-v1.0.0.tar.gz",
+            "modelscopeUrl": "",
+            "huggingfaceUrl": "https://hf-mirror.com/manyeyes/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-onnx/resolve/main/",
+            "sha256": "",
+            "version": "v1.0.0",
+            "files": ["model.onnx", "asr.yaml", "tokens.txt", "am.mvn"]
+        },
+        {
+            "id": "paraformer-zh-streaming",
+            "name": "Paraformer 流式中文",
+            "language": "zh",
+            "description": "中文流式识别模型",
+            "sizeBytes": 890000000,
+            "downloadUrl": "https://github.com/yuhuotech/shanji/releases/download/models/paraformer-zh-streaming-v1.0.0.tar.gz",
+            "modelscopeUrl": "",
+            "huggingfaceUrl": "",
+            "sha256": "",
+            "version": "v1.0.0",
+            "files": ["model.onnx", "config.yaml", "vocab.txt"]
+        }
+    ]
 }

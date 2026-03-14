@@ -305,7 +305,11 @@ pub fn parse_txt(content: &str) -> Vec<Hotword> {
                 return None;
             }
             let word = parts[0].to_string();
-            let weight = parts.get(1).and_then(|w| w.parse().ok()).unwrap_or(10).clamp(1, 100);
+            let weight = parts
+                .get(1)
+                .and_then(|w| w.parse().ok())
+                .unwrap_or(10)
+                .clamp(1, 100);
             Some(Hotword { word, weight })
         })
         .collect()

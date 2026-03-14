@@ -43,6 +43,7 @@ pub struct AudioConfig {
     pub silence_timeout_ms: u32,
     pub min_speech_frames: u32,
     pub sound_feedback: bool,
+    pub noise_reduction: bool,
 }
 
 impl Default for AudioConfig {
@@ -51,10 +52,11 @@ impl Default for AudioConfig {
             device_name: None,
             gain: 1.0,
             recording_mode: "toggle".to_string(),
-            vad_threshold: 0.05,
+            vad_threshold: 0.5,
             silence_timeout_ms: 1500,
             min_speech_frames: 1,
             sound_feedback: true,
+            noise_reduction: true,
         }
     }
 }
@@ -274,6 +276,15 @@ impl AppConfig {
 
             self.version = 2;
             modified = modified || hotkeys_updated || self.version == 2;
+        }
+
+        if self.version < 3 {
+            // vad_threshold 旧含义为振幅阈值（约 0.05），新含义为 Silero 概率（0.0-1.0）
+            if self.audio.vad_threshold < 0.1 {
+                self.audio.vad_threshold = 0.5;
+            }
+            self.version = 3;
+            modified = true;
         }
 
         modified

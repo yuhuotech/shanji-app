@@ -1,5 +1,7 @@
-pub mod audio;
 pub mod asr;
+pub mod audio;
+pub mod denoiser;
+pub mod vad;
 pub mod config;
 pub mod error;
 pub mod history;

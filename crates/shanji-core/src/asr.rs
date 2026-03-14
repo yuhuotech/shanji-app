@@ -262,7 +262,12 @@ pub fn post_process_text(text: &str) -> String {
         result = result.replace(filler, "");
     }
 
-    let corrections = [("测是", "测试"), ("那试", "测试"), ("侧是", "测试"), ("册是", "测试")];
+    let corrections = [
+        ("测是", "测试"),
+        ("那试", "测试"),
+        ("侧是", "测试"),
+        ("册是", "测试"),
+    ];
     for (wrong, correct) in corrections {
         result = result.replace(wrong, correct);
     }

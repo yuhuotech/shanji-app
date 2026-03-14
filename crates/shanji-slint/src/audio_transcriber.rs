@@ -3,9 +3,11 @@ use shanji_core::audio::{self, AudioCapture};
 use shanji_core::config::{self, AppConfig, AppState};
 use shanji_core::history::{HistoryDb, HistoryRecord};
 use shanji_core::llm;
+use shanji_core::model;
 use shanji_core::output;
 use shanji_core::paths::AppPaths;
 use shanji_core::state;
+use shanji_core::vad::{self, VadDetector, VadEvent};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -13,6 +15,19 @@ use std::time::Duration;
 struct LiveAsrSession {
     stop_tx: mpsc::Sender<()>,
     join_handle: JoinHandle<()>,
+}
+
+/// Holds optional clipboard backup, set by background thread,
+/// consumed by main thread after join() completes.
+/// This avoids calling enigo (macOS main-thread-only) from a background thread.
+struct PendingPaste {
+    clipboard_backup: Option<String>,
+}
+
+static PENDING_PASTE: OnceLock<Mutex<Option<PendingPaste>>> = OnceLock::new();
+
+fn pending_paste_slot() -> &'static Mutex<Option<PendingPaste>> {
+    PENDING_PASTE.get_or_init(|| Mutex::new(None))
 }
 
 static LIVE_ASR: OnceLock<Mutex<Option<LiveAsrSession>>> = OnceLock::new();
@@ -50,7 +65,15 @@ pub fn start(paths: AppPaths) -> Result<(), String> {
     let selected_device = config.audio.device_name.clone();
 
     let join_handle = std::thread::spawn(move || {
-        if let Err(err) = run_live_asr(paths, config, model_dir, selected_device, sample_tx, sample_rx, stop_rx) {
+        if let Err(err) = run_live_asr(
+            paths,
+            config,
+            model_dir,
+            selected_device,
+            sample_tx,
+            sample_rx,
+            stop_rx,
+        ) {
             state::set_status_message(format!("Live ASR failed: {}", err));
             state::set_state(AppState::Idle);
             state::set_overlay_visible(false);
@@ -58,7 +81,10 @@ pub fn start(paths: AppPaths) -> Result<(), String> {
         }
     });
 
-    *slot = Some(LiveAsrSession { stop_tx, join_handle });
+    *slot = Some(LiveAsrSession {
+        stop_tx,
+        join_handle,
+    });
     Ok(())
 }
 
@@ -73,6 +99,25 @@ pub fn stop() -> Result<bool, String> {
 
     let _ = session.stop_tx.send(());
     let _ = session.join_handle.join();
+
+    // Background thread has finished. Now on main thread — safe to call enigo
+    // (macOS HIToolbox APIs require the main thread).
+    if let Ok(mut pending) = pending_paste_slot().lock() {
+        if let Some(paste) = pending.take() {
+            std::thread::sleep(Duration::from_millis(50));
+            if let Err(err) = output::simulate_paste() {
+                state::set_status_message(format!(
+                    "Auto-paste unavailable, text is in clipboard: {}",
+                    err
+                ));
+            }
+            if let Some(backup) = paste.clipboard_backup {
+                std::thread::sleep(Duration::from_millis(440));
+                let _ = output::copy_to_clipboard(&backup);
+            }
+        }
+    }
+
     Ok(true)
 }
 
@@ -94,8 +139,39 @@ fn run_live_asr(
 ) -> Result<(), String> {
     let mut capture = AudioCapture::new();
     capture
-        .start(selected_device.as_deref(), sample_tx)
+        .start(
+            selected_device.as_deref(),
+            sample_tx,
+            config.audio.noise_reduction,
+        )
         .map_err(|e| e.to_string())?;
+
+    // 初始化 VAD（失败时降级为无 VAD，不阻断录音）
+    let mut vad_detector: Option<VadDetector> = if config.audio.noise_reduction {
+        let vad_model_dir = model::get_model_dir_with_paths(&paths, "silero-vad");
+        let vad_model_path = vad_model_dir.join("silero_vad.onnx");
+        match vad::ensure_vad_model(&vad_model_path) {
+            Ok(()) => match VadDetector::new(&vad_model_path, config.audio.vad_threshold) {
+                Ok(v) => {
+                    log::info!(
+                        "Silero VAD initialized (threshold={})",
+                        config.audio.vad_threshold
+                    );
+                    Some(v)
+                }
+                Err(e) => {
+                    log::warn!("VAD init failed, running without VAD: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                log::warn!("VAD model setup failed, running without VAD: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let mut engine = AsrEngine::new(AsrConfig {
         insert_punct: config.asr.insert_punct,
@@ -120,7 +196,31 @@ fn run_live_asr(
                 let level = audio::calculate_audio_level(&samples);
                 state::set_audio_level(level);
 
-                match engine.process_chunk(&samples) {
+                // VAD 过滤：仅将语音帧送入 ASR
+                let speech_samples: Vec<f32> = if let Some(ref mut detector) = vad_detector {
+                    match detector.process(&samples) {
+                        Ok(events) => events
+                            .into_iter()
+                            .filter_map(|e| match e {
+                                VadEvent::Speech(s) => Some(s),
+                                VadEvent::Silence => None,
+                            })
+                            .flatten()
+                            .collect(),
+                        Err(e) => {
+                            log::warn!("VAD process error, using raw samples: {}", e);
+                            samples
+                        }
+                    }
+                } else {
+                    samples
+                };
+
+                if speech_samples.is_empty() {
+                    continue;
+                }
+
+                match engine.process_chunk(&speech_samples) {
                     Ok(Some(text)) if !text.is_empty() => {
                         state::set_state(AppState::Transcribing);
                         state::set_status_message("Live ASR is producing partial text");
@@ -140,6 +240,10 @@ fn run_live_asr(
 
     capture.stop();
 
+    if let Some(ref mut detector) = vad_detector {
+        detector.reset();
+    }
+
     let transcribed_text = engine.finalize().map_err(|e| e.to_string())?;
     if !transcribed_text.is_empty() {
         state::set_last_transcript(transcribed_text.clone());
@@ -152,24 +256,36 @@ fn run_live_asr(
         let output_source = rewritten_text
             .clone()
             .unwrap_or_else(|| transcribed_text.clone());
-        match output::deliver_output(&output_source, &config.output) {
-            Ok(delivery) => {
-                state::set_final_output(delivery.formatted_text.clone());
-                if let Some(err) = delivery.auto_paste_error {
-                    state::set_status_message(format!(
-                        "Auto-paste unavailable, copied to clipboard instead: {}",
-                        err
-                    ));
+        let formatted_text = output::format_output(&output_source, &config.output);
+
+        // Backup clipboard on background thread (arboard is thread-safe).
+        // Do NOT call simulate_paste here — macOS HIToolbox requires main thread.
+        // The paste is deferred to stop() which runs on the main thread after join().
+        let clipboard_backup = if config.output.restore_clipboard {
+            output::read_clipboard_text().ok()
+        } else {
+            None
+        };
+
+        match output::copy_to_clipboard(&formatted_text) {
+            Ok(()) => {
+                state::set_final_output(formatted_text.clone());
+                if let Ok(mut pending) = pending_paste_slot().lock() {
+                    *pending = Some(PendingPaste { clipboard_backup });
                 }
             }
             Err(err) => {
-                let formatted_output = output::format_output(&output_source, &config.output);
-                state::set_final_output(formatted_output);
-                state::set_status_message(format!("Output delivery failed: {}", err));
+                state::set_final_output(formatted_text);
+                state::set_status_message(format!("Clipboard copy failed: {}", err));
             }
         }
 
-        save_final_history(&paths, &config, &transcribed_text, rewritten_text.as_deref())?;
+        save_final_history(
+            &paths,
+            &config,
+            &transcribed_text,
+            rewritten_text.as_deref(),
+        )?;
     }
 
     state::set_live_transcript("");
@@ -198,12 +314,18 @@ fn maybe_rewrite_text(config: &AppConfig, text: &str) -> Option<String> {
             Ok(rewritten) if !rewritten.is_empty() => Some(rewritten),
             Ok(_) => None,
             Err(err) => {
-                state::set_status_message(format!("Rewrite failed, keeping original text: {}", err));
+                state::set_status_message(format!(
+                    "Rewrite failed, keeping original text: {}",
+                    err
+                ));
                 None
             }
         },
         Err(err) => {
-            state::set_status_message(format!("Rewrite unavailable, keeping original text: {}", err));
+            state::set_status_message(format!(
+                "Rewrite unavailable, keeping original text: {}",
+                err
+            ));
             None
         }
     }

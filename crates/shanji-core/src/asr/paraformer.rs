@@ -257,7 +257,11 @@ impl WholeModelParaformer {
         let batch_size = 1usize;
         let num_frames = features.len();
         // Get actual feature dimension from first frame (could be 80 or 560 after LFR)
-        let num_mels = if features.is_empty() { 80 } else { features[0].len() };
+        let num_mels = if features.is_empty() {
+            80
+        } else {
+            features[0].len()
+        };
 
         if num_frames == 0 {
             return Ok(Vec::new());
@@ -279,11 +283,9 @@ impl WholeModelParaformer {
             speech_data.into_boxed_slice(),
         ))
         .map_err(|e| AppError::Asr(format!("Failed to create speech tensor: {}", e)))?;
-        let lengths_tensor = Tensor::from_array((
-            [batch_size],
-            vec![num_frames as i32].into_boxed_slice(),
-        ))
-        .map_err(|e| AppError::Asr(format!("Failed to create lengths tensor: {}", e)))?;
+        let lengths_tensor =
+            Tensor::from_array(([batch_size], vec![num_frames as i32].into_boxed_slice()))
+                .map_err(|e| AppError::Asr(format!("Failed to create lengths tensor: {}", e)))?;
 
         let outputs = self
             .session

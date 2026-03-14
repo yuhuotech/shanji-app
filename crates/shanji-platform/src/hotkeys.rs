@@ -65,8 +65,7 @@ impl HotkeySummary {
         } else {
             format!(
                 "Hotkeys: {} binding issue(s) / {} active shape(s)",
-                issues,
-                total
+                issues, total
             )
         }
     }
@@ -192,8 +191,8 @@ pub struct HotkeyRuntime {
 
 impl HotkeyRuntime {
     pub fn register(config: &HotkeyConfig) -> Result<Self, String> {
-        let manager =
-            GlobalHotKeyManager::new().map_err(|err| format!("Failed to create hotkey manager: {}", err))?;
+        let manager = GlobalHotKeyManager::new()
+            .map_err(|err| format!("Failed to create hotkey manager: {}", err))?;
         let mut bindings = HashMap::new();
 
         for binding in bindings_from_config(config) {
@@ -206,9 +205,9 @@ impl HotkeyRuntime {
             };
 
             let id = hotkey.id();
-            manager
-                .register(hotkey)
-                .map_err(|err| format!("Failed to register hotkey {}: {}", binding.accelerator, err))?;
+            manager.register(hotkey).map_err(|err| {
+                format!("Failed to register hotkey {}: {}", binding.accelerator, err)
+            })?;
             bindings.insert(
                 id,
                 RegisteredHotkey {
@@ -293,7 +292,13 @@ fn collect_unsupported(bindings: &[HotkeyBinding]) -> Vec<String> {
     bindings
         .iter()
         .filter(|binding| is_modifier_only(&binding.normalized))
-        .map(|binding| format!("{} uses modifier-only shortcut {}", binding.action.label(), binding.accelerator))
+        .map(|binding| {
+            format!(
+                "{} uses modifier-only shortcut {}",
+                binding.action.label(),
+                binding.accelerator
+            )
+        })
         .collect()
 }
 

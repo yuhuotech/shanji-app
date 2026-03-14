@@ -1,37 +1,117 @@
 export component OverlayWindow inherits Window {
-    in-out property <string> overlay-state-text: "Overlay idle";
-    in-out property <string> overlay-body-text: "Waiting";
+    in-out property <string> overlay-state-text: "Idle";
+    in-out property <float> overlay-audio-level: 0.0;
+    in-out property <string> overlay-live-text: "";
 
     title: "Shanji Overlay";
-    width: 380px;
-    height: 140px;
+    width: 208px;
+    height: 68px;
     no-frame: true;
     always-on-top: true;
+    background: transparent;
     default-font-family: "Hiragino Sans GB";
 
-    Rectangle {
-        border-radius: 22px;
-        background: #18232f;
-        border-width: 1px;
-        border-color: #ddc9a3;
+    property <length> bar1-h: max(2px, overlay-audio-level * 0.60 * 14px);
+    property <length> bar2-h: max(4px, overlay-audio-level * 1.00 * 14px);
+    property <length> bar3-h: max(3px, overlay-audio-level * 0.80 * 14px);
+    property <length> bar4-h: max(3px, overlay-audio-level * 0.50 * 14px);
+    animate bar1-h { duration: 120ms; easing: ease-out; }
+    animate bar2-h { duration: 120ms; easing: ease-out; }
+    animate bar3-h { duration: 120ms; easing: ease-out; }
+    animate bar4-h { duration: 120ms; easing: ease-out; }
 
-        VerticalLayout {
-            padding: 18px;
-            spacing: 8px;
+    VerticalLayout {
+        alignment: start;
+        spacing: 4px;
+        padding: 0px;
 
-            Text {
-                text: overlay-state-text;
-                color: #f6e8c8;
-                font-size: 14px;
-                font-weight: 700;
+        // ── Main capsule ──────────────────────────────────────────────────────
+        HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 162px;
+                height: 34px;
+                border-radius: 17px;
+                background: #111111;
+                clip: true;
+
+                HorizontalLayout {
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    spacing: 0px;
+                    alignment: center;
+
+                    Text {
+                        text: "语音输入";
+                        color: #ffffff;
+                        font-size: 11px;
+                        font-weight: 700;
+                        vertical-alignment: center;
+                    }
+
+                    Rectangle { width: 8px; }
+
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 1px;
+                            height: 12px;
+                            background: #ffffff50;
+                        }
+                    }
+
+                    Rectangle { width: 8px; }
+
+                    HorizontalLayout {
+                        spacing: 2px;
+                        alignment: center;
+
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle { width: 2px; height: bar1-h; border-radius: 1px; background: #ffffffcc; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle { width: 2px; height: bar2-h; border-radius: 1px; background: #ffffffcc; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle { width: 2px; height: bar3-h; border-radius: 1px; background: #ffffffcc; }
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle { width: 2px; height: bar4-h; border-radius: 1px; background: #ffffffcc; }
+                        }
+                    }
+                }
             }
+        }
 
-            Text {
-                text: overlay-body-text;
-                color: #fffaf0;
-                wrap: word-wrap;
-                font-size: 20px;
-                font-weight: 600;
+        // ── Live text pill — only shown when text is non-empty ────────────────
+        if overlay-live-text != "": HorizontalLayout {
+            alignment: center;
+
+            Rectangle {
+                width: 198px;
+                height: 22px;
+                border-radius: 11px;
+                background: #000000bb;
+                clip: true;
+
+                HorizontalLayout {
+                    padding-left: 9px;
+                    padding-right: 9px;
+
+                    Text {
+                        text: overlay-live-text;
+                        color: #ffffffdd;
+                        font-size: 9px;
+                        vertical-alignment: center;
+                        horizontal-alignment: center;
+                        overflow: elide;
+                    }
+                }
             }
         }
     }

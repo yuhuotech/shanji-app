@@ -1,16 +1,52 @@
 mod app;
 mod audio_monitor;
 mod audio_transcriber;
+mod model_downloader;
 mod platform_runtime;
 
 slint::include_modules!();
+
+const OVERLAY_BOTTOM_OFFSET_RATIO: f32 = 0.07;
+
+#[cfg(target_os = "macos")]
+fn overlay_target_position(window: &slint::Window) -> Option<slint::LogicalPosition> {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSScreen;
+
+    let mtm = MainThreadMarker::new()?;
+    let screen = NSScreen::mainScreen(mtm)?;
+    let visible_frame = screen.visibleFrame();
+    let main_screen_height = screen.frame().size.height;
+    let window_size = window.size().to_logical(window.scale_factor());
+
+    let x = visible_frame.origin.x
+        + ((visible_frame.size.width - window_size.width as f64) / 2.0).max(0.0);
+    let bottom_offset = visible_frame.size.height * OVERLAY_BOTTOM_OFFSET_RATIO as f64;
+    let y = main_screen_height - visible_frame.origin.y - bottom_offset - window_size.height as f64;
+
+    Some(slint::LogicalPosition::new(x as f32, y as f32))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn overlay_target_position(_window: &slint::Window) -> Option<slint::LogicalPosition> {
+    None
+}
+
+fn position_overlay_window(overlay: &OverlayWindow) {
+    let window = overlay.window();
+    if let Some(position) = overlay_target_position(&window) {
+        window.set_position(position);
+    }
+}
 
 fn main() -> Result<(), slint::PlatformError> {
     let app = AppWindow::new()?;
     let history = HistoryWindow::new()?;
     let settings = SettingsWindow::new()?;
     let overlay = OverlayWindow::new()?;
-    let platform_runtime = std::rc::Rc::new(std::cell::RefCell::new(platform_runtime::PlatformRuntime::new()));
+    let platform_runtime = std::rc::Rc::new(std::cell::RefCell::new(
+        platform_runtime::PlatformRuntime::new(),
+    ));
 
     apply_snapshot(&app, &overlay, app::bootstrap_snapshot());
     apply_history_snapshot(&history, app::refresh_history_window());
@@ -42,10 +78,22 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let weak = app.as_weak();
     let weak_overlay = overlay.as_weak();
+    app.on_download_model_requested(move || {
+        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
+            apply_result(&app, &overlay, app::start_model_download());
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
     app.on_toggle_mic_monitor_requested(move || {
         if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
             apply_result(&app, &overlay, app::toggle_mic_monitor());
         }
+    });
+
+    app.on_request_mic_permission(move || {
+        app::request_mic_permission();
     });
 
     let weak = app.as_weak();
@@ -103,9 +151,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_cycle_theme_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::cycle_theme());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -115,9 +165,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_cycle_model_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::cycle_active_model());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -127,9 +179,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_cycle_audio_device_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::cycle_audio_device());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -139,9 +193,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_cycle_recording_mode_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::cycle_recording_mode());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -151,9 +207,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_toggle_rewrite_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::toggle_rewrite_enabled());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -163,9 +221,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_cycle_punct_style_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::cycle_punct_style());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -175,9 +235,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_cycle_append_content_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::cycle_append_content());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -187,9 +249,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_toggle_hotword_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::toggle_latest_hotword_library());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -199,9 +263,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_toggle_overlay_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::toggle_overlay_visibility());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -211,9 +277,11 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
     settings.on_clear_session_requested(move || {
-        if let (Some(app), Some(overlay), Some(settings)) =
-            (weak.upgrade(), weak_overlay.upgrade(), weak_settings.upgrade())
-        {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
             apply_result(&app, &overlay, app::clear_session());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
@@ -240,14 +308,12 @@ fn main() -> Result<(), slint::PlatformError> {
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(32),
         move || {
-            if let (Some(app), Some(history), Some(settings), Some(overlay)) =
-                (
-                    weak.upgrade(),
-                    weak_history.upgrade(),
-                    weak_settings.upgrade(),
-                    weak_overlay.upgrade(),
-                )
-            {
+            if let (Some(app), Some(history), Some(settings), Some(overlay)) = (
+                weak.upgrade(),
+                weak_history.upgrade(),
+                weak_settings.upgrade(),
+                weak_overlay.upgrade(),
+            ) {
                 let hotkey_actions = {
                     let runtime = platform_runtime_ref.borrow();
                     runtime.poll_hotkey_events()
@@ -276,14 +342,12 @@ fn main() -> Result<(), slint::PlatformError> {
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(450),
         move || {
-            if let (Some(app), Some(history), Some(settings), Some(overlay)) =
-                (
-                    weak.upgrade(),
-                    weak_history.upgrade(),
-                    weak_settings.upgrade(),
-                    weak_overlay.upgrade(),
-                )
-            {
+            if let (Some(app), Some(history), Some(settings), Some(overlay)) = (
+                weak.upgrade(),
+                weak_history.upgrade(),
+                weak_settings.upgrade(),
+                weak_overlay.upgrade(),
+            ) {
                 {
                     let mut runtime = platform_runtime_ref.borrow_mut();
                     let _ = runtime.sync();
@@ -384,11 +448,7 @@ fn handle_platform_tray_event(
     }
 }
 
-fn apply_result(
-    app: &AppWindow,
-    overlay: &OverlayWindow,
-    result: Result<app::UiSnapshot, String>,
-) {
+fn apply_result(app: &AppWindow, overlay: &OverlayWindow, result: Result<app::UiSnapshot, String>) {
     match result {
         Ok(snapshot) => apply_snapshot(app, overlay, snapshot),
         Err(err) => app.set_status_text(format!("Action failed: {}", err).into()),
@@ -409,6 +469,10 @@ fn apply_snapshot(app: &AppWindow, overlay: &OverlayWindow, snapshot: app::UiSna
     app.set_model_language_text(snapshot.model_language_text.into());
     app.set_model_install_text(snapshot.model_install_text.into());
     app.set_model_ready(snapshot.model_ready);
+    app.set_model_downloading(snapshot.model_downloading);
+    app.set_model_download_progress(snapshot.model_download_progress);
+    app.set_model_download_status_text(snapshot.model_download_status_text.into());
+    app.set_model_download_error_text(snapshot.model_download_error_text.into());
     app.set_mic_permission_title(snapshot.mic_permission_title.into());
     app.set_mic_permission_body(snapshot.mic_permission_body.into());
     app.set_mic_ready(snapshot.mic_ready);
@@ -430,9 +494,11 @@ fn apply_snapshot(app: &AppWindow, overlay: &OverlayWindow, snapshot: app::UiSna
     app.set_history_preview_text(snapshot.history_preview_text.into());
     app.set_settings_summary_text(snapshot.settings_summary_text.into());
     overlay.set_overlay_state_text(snapshot.overlay_state_text.into());
-    overlay.set_overlay_body_text(snapshot.overlay_body_text.into());
+    overlay.set_overlay_audio_level(snapshot.audio_level_value);
+    overlay.set_overlay_live_text(snapshot.overlay_body_text.into());
 
     if snapshot.overlay_visible {
+        position_overlay_window(overlay);
         let _ = overlay.show();
     } else {
         let _ = overlay.hide();

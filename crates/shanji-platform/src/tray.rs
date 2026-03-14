@@ -183,7 +183,9 @@ impl TrayRuntime {
 
     pub fn update(&self, model: &TrayMenuModel) -> Result<(), String> {
         self.tray_icon
-            .set_icon(Some(icon_for_state(&model.icon_state).map_err(|err| err.to_string())?))
+            .set_icon(Some(
+                icon_for_state(&model.icon_state).map_err(|err| err.to_string())?,
+            ))
             .map_err(|err| format!("Failed to update tray icon: {}", err))?;
         self.tray_icon
             .set_tooltip(Some(&model.tooltip))

@@ -11,6 +11,11 @@ path = "src/main.rs"
 shanji-core = { path = "../shanji-core" }
 shanji-platform = { path = "../shanji-platform" }
 slint = "1"
+log = "0.4"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", features = ["NSScreen"] }
 
 [build-dependencies]
 slint-build = "1"

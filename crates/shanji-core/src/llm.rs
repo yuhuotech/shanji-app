@@ -117,7 +117,10 @@ impl LlmClient {
             let body = response
                 .text()
                 .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(AppError::Network(format!("API error ({}): {}", status, body)));
+            return Err(AppError::Network(format!(
+                "API error ({}): {}",
+                status, body
+            )));
         }
 
         let payload: ChatResponse = response
