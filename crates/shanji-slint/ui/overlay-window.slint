@@ -4,8 +4,7 @@ export component OverlayWindow inherits Window {
     in-out property <string> overlay-live-text: "";
 
     title: "Shanji Overlay";
-    width: 208px;
-    height: 68px;
+    width: 312px;
     no-frame: true;
     always-on-top: true;
     background: transparent;
@@ -30,7 +29,7 @@ export component OverlayWindow inherits Window {
             alignment: center;
 
             Rectangle {
-                width: 162px;
+                width: 243px;
                 height: 34px;
                 border-radius: 17px;
                 background: #111111;
@@ -93,23 +92,22 @@ export component OverlayWindow inherits Window {
             alignment: center;
 
             Rectangle {
-                width: 198px;
-                height: 22px;
-                border-radius: 11px;
+                width: 300px;
+                border-radius: 12px;
                 background: #000000bb;
-                clip: true;
 
                 HorizontalLayout {
-                    padding-left: 9px;
-                    padding-right: 9px;
+                    padding-left: 12px;
+                    padding-right: 12px;
+                    padding-top: 6px;
+                    padding-bottom: 6px;
 
                     Text {
                         text: overlay-live-text;
                         color: #ffffffdd;
-                        font-size: 9px;
-                        vertical-alignment: center;
+                        font-size: 10px;
                         horizontal-alignment: center;
-                        overflow: elide;
+                        wrap: word-wrap;
                     }
                 }
             }

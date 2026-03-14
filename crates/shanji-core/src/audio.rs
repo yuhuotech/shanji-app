@@ -13,6 +13,8 @@ use std::sync::Arc;
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const TARGET_48K: u32 = 48_000;
 const RESAMPLE_BUFFER_SIZE: usize = 1024;
+/// nnnoiseless 帧大小（10ms @ 48kHz），也用作 48k→16k 重采样器的块大小
+const DENOISE_FRAME_SIZE: usize = 480;
 
 // ── macOS microphone permission ───────────────────────────────────────────────
 
@@ -121,10 +123,12 @@ struct CaptureState {
     resampler_to_16k: Option<SincFixedIn<f32>>,
     /// noise_reduction=true 时：native→48kHz（若 mic 已是 48kHz 则 None）
     resampler_to_48k: Option<SincFixedIn<f32>>,
-    /// noise_reduction=true 时：48kHz→16kHz（始终创建）
+    /// noise_reduction=true 时：48kHz→16kHz（块大小 = DENOISE_FRAME_SIZE）
     resampler_48k_to_16k: Option<SincFixedIn<f32>>,
     /// DNN 降噪器（noise_reduction=true 时 Some）
     denoiser: Option<Denoiser>,
+    /// 降噪后等待 48k→16k 重采样的持久缓冲（跨回调保留不足一帧的样本）
+    denoised_48k_buffer: Vec<f32>,
     running: Arc<AtomicBool>,
 }
 
@@ -206,7 +210,7 @@ impl AudioCapture {
                 } else {
                     None // mic 已是 48kHz，直通
                 };
-                let to_16k = make_resampler(TARGET_48K, TARGET_SAMPLE_RATE, RESAMPLE_BUFFER_SIZE)?;
+                let to_16k = make_resampler(TARGET_48K, TARGET_SAMPLE_RATE, DENOISE_FRAME_SIZE)?;
                 (None, to_48k, Some(to_16k), Some(Denoiser::new()))
             } else {
                 // 原有路径：native → 16kHz
@@ -230,6 +234,7 @@ impl AudioCapture {
             resampler_to_48k,
             resampler_48k_to_16k,
             denoiser,
+            denoised_48k_buffer: Vec::new(),
             running: self.running.clone(),
         }));
 
@@ -320,41 +325,49 @@ impl AudioCapture {
         }
 
         if state.denoiser.is_some() {
-            // 新路径：native → 48kHz → denoise → 16kHz → send
-            // 使用 take/put-back 模式规避借用检查
+            // 新路径：native → 48kHz → denoise → denoised_48k_buffer → 16kHz → send
+            //
+            // 关键设计：denoised_48k_buffer 是持久缓冲，跨回调保留不足一帧的样本，
+            // 避免小批量回调（256/512 samples）导致样本丢失。
+
+            // Step 1: native → 48kHz（若 mic 已是 48kHz 则直接按 DENOISE_FRAME_SIZE 批量取）
             let samples_48k = if let Some(mut r) = state.resampler_to_48k.take() {
                 let out = resample_chunk(&mut state.input_buffer, &mut r);
                 state.resampler_to_48k = Some(r);
                 out
             } else {
-                // mic 已是 48kHz，直通
-                std::mem::take(&mut state.input_buffer)
+                // mic 已是 48kHz：按 DENOISE_FRAME_SIZE 批量取，剩余留在 input_buffer
+                let mut out = Vec::new();
+                while state.input_buffer.len() >= DENOISE_FRAME_SIZE {
+                    let chunk: Vec<f32> = state.input_buffer.drain(..DENOISE_FRAME_SIZE).collect();
+                    out.extend(chunk);
+                }
+                out
             };
 
+            // Step 2: DNN 降噪，追加到持久缓冲
             if !samples_48k.is_empty() {
-                let denoised = {
-                    let d = state.denoiser.as_mut().unwrap();
-                    d.process(&samples_48k)
-                };
-                let mut denoised_buf = denoised;
+                let denoised = state.denoiser.as_mut().unwrap().process(&samples_48k);
+                state.denoised_48k_buffer.extend(denoised);
+            }
 
-                if let Some(mut r) = state.resampler_48k_to_16k.take() {
-                    while denoised_buf.len() >= RESAMPLE_BUFFER_SIZE {
-                        let chunk: Vec<f32> =
-                            denoised_buf.drain(..RESAMPLE_BUFFER_SIZE).collect();
-                        match r.process(&[chunk], None) {
-                            Ok(out) => {
-                                if let Some(ch) = out.first() {
-                                    if !ch.is_empty() {
-                                        let _ = state.sample_tx.send(ch.clone());
-                                    }
+            // Step 3: 持久缓冲 → 48k→16k 重采样 → send（块大小 = DENOISE_FRAME_SIZE）
+            if let Some(mut r) = state.resampler_48k_to_16k.take() {
+                while state.denoised_48k_buffer.len() >= DENOISE_FRAME_SIZE {
+                    let chunk: Vec<f32> =
+                        state.denoised_48k_buffer.drain(..DENOISE_FRAME_SIZE).collect();
+                    match r.process(&[chunk], None) {
+                        Ok(out) => {
+                            if let Some(ch) = out.first() {
+                                if !ch.is_empty() {
+                                    let _ = state.sample_tx.send(ch.clone());
                                 }
                             }
-                            Err(e) => log::error!("Resampling 48k→16k error: {:?}", e),
                         }
+                        Err(e) => log::error!("Resampling 48k→16k error: {:?}", e),
                     }
-                    state.resampler_48k_to_16k = Some(r);
                 }
+                state.resampler_48k_to_16k = Some(r);
             }
         } else {
             // 原有路径：native → 16kHz → send
