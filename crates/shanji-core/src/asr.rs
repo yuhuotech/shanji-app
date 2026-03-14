@@ -171,6 +171,18 @@ impl AsrEngine {
             Tokenizer::new_char_tokenizer()?
         };
 
+        // 根据后端类型配置特征提取器：
+        // - 全量模型期望原始 80 维 FBank（无 LFR）
+        // - 流式模型期望 LFR(7,6) 预处理后的 560 维特征
+        let lfr = match &backend {
+            AsrBackend::Whole(_) => None,
+            AsrBackend::Streaming(_) => Some((7, 6)),
+        };
+        self.feature_extractor = FBankExtractor::new(FBankConfig {
+            lfr,
+            ..FBankConfig::default()
+        })?;
+
         self.backend = Some(backend);
         self.tokenizer = Some(tokenizer);
         Ok(())
