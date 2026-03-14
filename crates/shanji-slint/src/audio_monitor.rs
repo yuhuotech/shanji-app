@@ -30,7 +30,7 @@ pub fn toggle(device_name: Option<String>) -> Result<bool, String> {
 
     let join_handle = std::thread::spawn(move || {
         let mut capture = AudioCapture::new();
-        if let Err(err) = capture.start(selected_device.as_deref(), sample_tx, false) {
+        if let Err(err) = capture.start(selected_device.as_deref(), sample_tx) {
             state::set_status_message(format!("Microphone monitor failed: {}", err));
             state::set_mic_test_running(false);
             return;

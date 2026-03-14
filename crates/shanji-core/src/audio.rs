@@ -1,4 +1,3 @@
-use crate::denoiser::Denoiser;
 use crate::error::{AppError, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::SampleFormat;
@@ -11,10 +10,7 @@ use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 const TARGET_SAMPLE_RATE: u32 = 16_000;
-const TARGET_48K: u32 = 48_000;
 const RESAMPLE_BUFFER_SIZE: usize = 1024;
-/// nnnoiseless 帧大小（10ms @ 48kHz），也用作 48k→16k 重采样器的块大小
-const DENOISE_FRAME_SIZE: usize = 480;
 
 // ── macOS microphone permission ───────────────────────────────────────────────
 
@@ -119,50 +115,13 @@ pub fn calculate_audio_level(samples: &[f32]) -> f32 {
 struct CaptureState {
     sample_tx: Sender<Vec<f32>>,
     input_buffer: Vec<f32>,
-    /// noise_reduction=false 时：native→16kHz（原有逻辑）
-    resampler_to_16k: Option<SincFixedIn<f32>>,
-    /// noise_reduction=true 时：native→48kHz（若 mic 已是 48kHz 则 None）
-    resampler_to_48k: Option<SincFixedIn<f32>>,
-    /// noise_reduction=true 时：48kHz→16kHz（块大小 = DENOISE_FRAME_SIZE）
-    resampler_48k_to_16k: Option<SincFixedIn<f32>>,
-    /// DNN 降噪器（noise_reduction=true 时 Some）
-    denoiser: Option<Denoiser>,
-    /// 降噪后等待 48k→16k 重采样的持久缓冲（跨回调保留不足一帧的样本）
-    denoised_48k_buffer: Vec<f32>,
+    resampler: Option<SincFixedIn<f32>>,
     running: Arc<AtomicBool>,
 }
 
 pub struct AudioCapture {
     stream: Option<cpal::Stream>,
     running: Arc<AtomicBool>,
-}
-
-fn make_resampler(from: u32, to: u32, buffer_size: usize) -> Result<SincFixedIn<f32>> {
-    let params = SincInterpolationParameters {
-        sinc_len: 256,
-        f_cutoff: 0.95,
-        interpolation: SincInterpolationType::Linear,
-        oversampling_factor: 128,
-        window: WindowFunction::BlackmanHarris2,
-    };
-    SincFixedIn::<f32>::new(to as f64 / from as f64, 2.0, params, buffer_size, 1)
-        .map_err(|e| AppError::Audio(format!("Failed to create resampler {}→{}: {}", from, to, e)))
-}
-
-fn resample_chunk(buffer: &mut Vec<f32>, resampler: &mut SincFixedIn<f32>) -> Vec<f32> {
-    let mut out = Vec::new();
-    while buffer.len() >= RESAMPLE_BUFFER_SIZE {
-        let chunk: Vec<f32> = buffer.drain(..RESAMPLE_BUFFER_SIZE).collect();
-        match resampler.process(&[chunk], None) {
-            Ok(output) => {
-                if let Some(ch) = output.first() {
-                    out.extend_from_slice(ch);
-                }
-            }
-            Err(e) => log::error!("Resampling error: {:?}", e),
-        }
-    }
-    out
 }
 
 impl AudioCapture {
@@ -173,12 +132,7 @@ impl AudioCapture {
         }
     }
 
-    pub fn start(
-        &mut self,
-        device_name: Option<&str>,
-        sample_tx: Sender<Vec<f32>>,
-        noise_reduction: bool,
-    ) -> Result<()> {
+    pub fn start(&mut self, device_name: Option<&str>, sample_tx: Sender<Vec<f32>>) -> Result<()> {
         let host = cpal::default_host();
 
         let device = if let Some(name) = device_name {
@@ -197,44 +151,34 @@ impl AudioCapture {
 
         let input_sample_rate = default_config.sample_rate().0;
         let channels = default_config.channels();
-
-        let (resampler_to_16k, resampler_to_48k, resampler_48k_to_16k, denoiser) =
-            if noise_reduction {
-                // 新路径：native → 48kHz → denoise → 16kHz
-                let to_48k = if input_sample_rate != TARGET_48K {
-                    Some(make_resampler(
-                        input_sample_rate,
-                        TARGET_48K,
-                        RESAMPLE_BUFFER_SIZE,
-                    )?)
-                } else {
-                    None // mic 已是 48kHz，直通
-                };
-                let to_16k = make_resampler(TARGET_48K, TARGET_SAMPLE_RATE, DENOISE_FRAME_SIZE)?;
-                (None, to_48k, Some(to_16k), Some(Denoiser::new()))
-            } else {
-                // 原有路径：native → 16kHz
-                let to_16k = if input_sample_rate != TARGET_SAMPLE_RATE {
-                    Some(make_resampler(
-                        input_sample_rate,
-                        TARGET_SAMPLE_RATE,
-                        RESAMPLE_BUFFER_SIZE,
-                    )?)
-                } else {
-                    None
-                };
-                (to_16k, None, None, None)
+        let resampler = if input_sample_rate != TARGET_SAMPLE_RATE {
+            let params = SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: 128,
+                window: WindowFunction::BlackmanHarris2,
             };
+
+            Some(
+                SincFixedIn::<f32>::new(
+                    TARGET_SAMPLE_RATE as f64 / input_sample_rate as f64,
+                    2.0,
+                    params,
+                    RESAMPLE_BUFFER_SIZE,
+                    1,
+                )
+                .map_err(|e| AppError::Audio(format!("Failed to create resampler: {}", e)))?,
+            )
+        } else {
+            None
+        };
 
         self.running.store(true, Ordering::SeqCst);
         let state = Arc::new(std::sync::Mutex::new(CaptureState {
             sample_tx,
             input_buffer: Vec::with_capacity(RESAMPLE_BUFFER_SIZE * channels as usize),
-            resampler_to_16k,
-            resampler_to_48k,
-            resampler_48k_to_16k,
-            denoiser,
-            denoised_48k_buffer: Vec::new(),
+            resampler,
             running: self.running.clone(),
         }));
 
@@ -304,7 +248,7 @@ impl AudioCapture {
     fn process_input_data<T>(
         data: &[T],
         channels: usize,
-        _sample_rate: u32,
+        sample_rate: u32,
         state: &Arc<std::sync::Mutex<CaptureState>>,
     ) where
         T: cpal::Sample + cpal::FromSample<T>,
@@ -312,7 +256,6 @@ impl AudioCapture {
     {
         let mut state = state.lock().unwrap();
 
-        // 声道下混为单声道
         if channels == 1 {
             for sample in data {
                 state.input_buffer.push(sample.to_sample::<f32>());
@@ -324,62 +267,17 @@ impl AudioCapture {
             }
         }
 
-        if state.denoiser.is_some() {
-            // 新路径：native → 48kHz → denoise → denoised_48k_buffer → 16kHz → send
-            //
-            // 关键设计：denoised_48k_buffer 是持久缓冲，跨回调保留不足一帧的样本，
-            // 避免小批量回调（256/512 samples）导致样本丢失。
-
-            // Step 1: native → 48kHz（若 mic 已是 48kHz 则直接按 DENOISE_FRAME_SIZE 批量取）
-            let samples_48k = if let Some(mut r) = state.resampler_to_48k.take() {
-                let out = resample_chunk(&mut state.input_buffer, &mut r);
-                state.resampler_to_48k = Some(r);
-                out
-            } else {
-                // mic 已是 48kHz：按 DENOISE_FRAME_SIZE 批量取，剩余留在 input_buffer
-                let mut out = Vec::new();
-                while state.input_buffer.len() >= DENOISE_FRAME_SIZE {
-                    let chunk: Vec<f32> = state.input_buffer.drain(..DENOISE_FRAME_SIZE).collect();
-                    out.extend(chunk);
-                }
-                out
-            };
-
-            // Step 2: DNN 降噪，追加到持久缓冲
-            if !samples_48k.is_empty() {
-                let denoised = state.denoiser.as_mut().unwrap().process(&samples_48k);
-                state.denoised_48k_buffer.extend(denoised);
-            }
-
-            // Step 3: 持久缓冲 → 48k→16k 重采样 → send（块大小 = DENOISE_FRAME_SIZE）
-            if let Some(mut r) = state.resampler_48k_to_16k.take() {
-                while state.denoised_48k_buffer.len() >= DENOISE_FRAME_SIZE {
-                    let chunk: Vec<f32> =
-                        state.denoised_48k_buffer.drain(..DENOISE_FRAME_SIZE).collect();
-                    match r.process(&[chunk], None) {
-                        Ok(out) => {
-                            if let Some(ch) = out.first() {
-                                if !ch.is_empty() {
-                                    let _ = state.sample_tx.send(ch.clone());
-                                }
-                            }
-                        }
-                        Err(e) => log::error!("Resampling 48k→16k error: {:?}", e),
-                    }
-                }
-                state.resampler_48k_to_16k = Some(r);
-            }
-        } else {
-            // 原有路径：native → 16kHz → send
-            if let Some(mut resampler) = state.resampler_to_16k.take() {
+        if sample_rate != TARGET_SAMPLE_RATE {
+            if let Some(mut resampler) = state.resampler.take() {
                 while state.input_buffer.len() >= RESAMPLE_BUFFER_SIZE {
-                    let chunk: Vec<f32> =
+                    let input_chunk: Vec<f32> =
                         state.input_buffer.drain(..RESAMPLE_BUFFER_SIZE).collect();
-                    match resampler.process(&[chunk], None) {
+
+                    match resampler.process(&[input_chunk], None) {
                         Ok(output) => {
-                            if let Some(ch) = output.first() {
-                                if !ch.is_empty() {
-                                    let _ = state.sample_tx.send(ch.clone());
+                            if let Some(channel) = output.first() {
+                                if !channel.is_empty() {
+                                    let _ = state.sample_tx.send(channel.clone());
                                 }
                             }
                         }
@@ -388,13 +286,16 @@ impl AudioCapture {
                         }
                     }
                 }
-                state.resampler_to_16k = Some(resampler);
+                state.resampler = Some(resampler);
             } else {
-                const CHUNK_SIZE: usize = 1600;
-                while state.input_buffer.len() >= CHUNK_SIZE {
-                    let chunk: Vec<f32> = state.input_buffer.drain(..CHUNK_SIZE).collect();
-                    let _ = state.sample_tx.send(chunk);
-                }
+                let samples = state.input_buffer.drain(..).collect::<Vec<f32>>();
+                let _ = state.sample_tx.send(samples);
+            }
+        } else {
+            const CHUNK_SIZE: usize = 1600;
+            while state.input_buffer.len() >= CHUNK_SIZE {
+                let chunk: Vec<f32> = state.input_buffer.drain(..CHUNK_SIZE).collect();
+                let _ = state.sample_tx.send(chunk);
             }
         }
     }

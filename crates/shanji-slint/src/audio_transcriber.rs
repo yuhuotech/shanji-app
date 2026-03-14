@@ -139,11 +139,7 @@ fn run_live_asr(
 ) -> Result<(), String> {
     let mut capture = AudioCapture::new();
     capture
-        .start(
-            selected_device.as_deref(),
-            sample_tx,
-            config.audio.noise_reduction,
-        )
+        .start(selected_device.as_deref(), sample_tx)
         .map_err(|e| e.to_string())?;
 
     // 初始化 VAD（失败时降级为无 VAD，不阻断录音）
