@@ -79,7 +79,7 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_open_settings_requested(move || {
         if let Some(settings) = weak_settings.upgrade() {
             let _ = settings.show();
-            apply_settings_snapshot(&settings, app::refresh_settings_window());
+            refresh_settings_from_app(&settings);
         }
     });
 
@@ -390,6 +390,11 @@ fn main() -> Result<(), slint::PlatformError> {
 
     settings.on_set_llm_system_prompt(move |prompt| {
         let _ = app::set_llm_system_prompt(prompt.to_string());
+    });
+
+    settings.on_record_hotkey_requested(move || {
+        // TODO: implement hotkey recording UI flow
+        log::info!("Hotkey recording requested from settings");
     });
 
     // ── Timers ─────────────────────────────────────────────────────────────
