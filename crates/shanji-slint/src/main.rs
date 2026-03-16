@@ -56,7 +56,6 @@ fn main() -> Result<(), slint::PlatformError> {
     ));
 
     apply_snapshot(&app, &overlay, app::bootstrap_snapshot());
-    apply_settings_snapshot(&settings, app::refresh_settings_window());
     refresh_settings_from_app(&settings);
 
     let weak = app.as_weak();
@@ -461,10 +460,6 @@ fn main() -> Result<(), slint::PlatformError> {
                 }
                 if settings.window().is_visible() {
                     refresh_settings_from_app(&settings);
-                } else {
-                    if let Ok(snapshot) = app::refresh_settings_window() {
-                        apply_settings_snapshot(&settings, Ok(snapshot));
-                    }
                 }
             }
         },
