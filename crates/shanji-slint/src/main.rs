@@ -610,6 +610,12 @@ fn apply_settings_snapshot(
             settings.set_hotword_summary_text(snapshot.hotword_summary_text.into());
             settings.set_hotkey_summary_text(snapshot.hotkey_summary_text.into());
             settings.set_config_path_text(snapshot.config_path_text.into());
+            settings.set_llm_enabled(snapshot.llm_enabled);
+            settings.set_llm_base_url(snapshot.llm_base_url.into());
+            settings.set_llm_model_name(snapshot.llm_model_name.into());
+            settings.set_llm_system_prompt(snapshot.llm_system_prompt.into());
+            settings.set_refine_asr_enabled(snapshot.refine_asr_enabled);
+            settings.set_overlay_visible(snapshot.overlay_enabled);
         }
         Err(_err) => {
             // status display handled elsewhere in new settings design

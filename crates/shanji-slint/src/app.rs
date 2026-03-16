@@ -90,6 +90,12 @@ pub struct SettingsWindowSnapshot {
     pub hotkey_summary_text: String,
     pub overlay_visibility_text: String,
     pub config_path_text: String,
+    pub llm_enabled: bool,
+    pub llm_base_url: String,
+    pub llm_model_name: String,
+    pub llm_system_prompt: String,
+    pub refine_asr_enabled: bool,
+    pub overlay_enabled: bool,
 }
 
 const GITHUB_PROXY_VALUES: [&str; 3] = ["https://ghfast.top/", "https://gh-proxy.com/", ""];
@@ -420,6 +426,22 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
             "悬浮窗: hidden".to_string()
         },
         config_path_text: format!("配置路径: {}", paths.config_file().display()),
+        llm_enabled: cfg.rewrite.enabled,
+        llm_base_url: cfg.rewrite.providers.first()
+            .map(|p| p.base_url.clone())
+            .unwrap_or_default(),
+        llm_model_name: cfg.rewrite.providers.first()
+            .map(|p| p.model.clone())
+            .unwrap_or_default(),
+        llm_system_prompt: {
+            let active_id = &cfg.rewrite.active_prompt_id;
+            cfg.rewrite.prompts.iter()
+                .find(|p| &p.id == active_id)
+                .map(|p| p.system_prompt.clone())
+                .unwrap_or_default()
+        },
+        refine_asr_enabled: cfg.asr.refine_enabled,
+        overlay_enabled: runtime.overlay_visible,
     })
 }
 
