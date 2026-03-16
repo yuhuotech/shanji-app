@@ -49,7 +49,6 @@ fn position_overlay_window(overlay: &OverlayWindow) {
 fn main() -> Result<(), slint::PlatformError> {
     init_logging();
     let app = AppWindow::new()?;
-    let history = HistoryWindow::new()?;
     let settings = SettingsWindow::new()?;
     let overlay = OverlayWindow::new()?;
     let platform_runtime = std::rc::Rc::new(std::cell::RefCell::new(
@@ -57,8 +56,8 @@ fn main() -> Result<(), slint::PlatformError> {
     ));
 
     apply_snapshot(&app, &overlay, app::bootstrap_snapshot());
-    apply_history_snapshot(&history, app::refresh_history_window());
     apply_settings_snapshot(&settings, app::refresh_settings_window());
+    refresh_settings_from_app(&settings);
 
     let weak = app.as_weak();
     let weak_overlay = overlay.as_weak();
@@ -68,11 +67,12 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    let weak_history = history.as_weak();
+    let weak_settings = settings.as_weak();
     app.on_open_history_requested(move || {
-        if let Some(history) = weak_history.upgrade() {
-            let _ = history.show();
-            apply_history_snapshot(&history, app::refresh_history_window());
+        if let Some(settings) = weak_settings.upgrade() {
+            settings.set_active_section(SettingsSection::History);
+            let _ = settings.show();
+            refresh_settings_from_app(&settings);
         }
     });
 
@@ -119,52 +119,6 @@ fn main() -> Result<(), slint::PlatformError> {
             apply_result(&app, &overlay, app::toggle_live_asr());
         }
     });
-
-    let weak_history = history.as_weak();
-    history.on_refresh_requested(move || {
-        if let Some(history) = weak_history.upgrade() {
-            apply_history_snapshot(&history, app::refresh_history_window());
-        }
-    });
-
-    let weak_history = history.as_weak();
-    history.on_play_latest_audio_requested(move || {
-        if let Some(history) = weak_history.upgrade() {
-            apply_history_snapshot(&history, app::play_latest_history_audio());
-        }
-    });
-
-    let weak_history = history.as_weak();
-    history.on_paste_latest_requested(move || {
-        if let Some(history) = weak_history.upgrade() {
-            apply_history_snapshot(&history, app::paste_latest_history());
-        }
-    });
-
-    let weak_history = history.as_weak();
-    history.on_copy_latest_requested(move || {
-        if let Some(history) = weak_history.upgrade() {
-            apply_history_snapshot(&history, app::copy_latest_history());
-        }
-    });
-
-    let weak_history = history.as_weak();
-    history.on_delete_latest_requested(move || {
-        if let Some(history) = weak_history.upgrade() {
-            apply_history_snapshot(&history, app::delete_latest_history());
-        }
-    });
-
-    let weak_history = history.as_weak();
-    history.on_clear_history_requested(move || {
-        if let Some(history) = weak_history.upgrade() {
-            let result = app::clear_history().and_then(|_| app::refresh_history_window());
-            apply_history_snapshot(&history, result);
-        }
-    });
-
-    let weak_settings = settings.as_weak();
-    // NOTE: on_refresh_requested removed in new settings-window design
 
     let weak = app.as_weak();
     let weak_overlay = overlay.as_weak();
@@ -376,6 +330,71 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
+    // ── History callbacks ──────────────────────────────────────────────────
+
+    let weak_settings = settings.as_weak();
+    settings.on_refresh_history_requested(move || {
+        if let Some(s) = weak_settings.upgrade() {
+            refresh_settings_from_app(&s);
+        }
+    });
+
+    let weak_settings = settings.as_weak();
+    settings.on_clear_history_requested(move || {
+        if let Some(s) = weak_settings.upgrade() {
+            let _ = app::clear_history();
+            refresh_settings_from_app(&s);
+        }
+    });
+
+    settings.on_copy_record_requested(move |id| {
+        let _ = app::copy_history_record(id);
+    });
+
+    let weak_settings = settings.as_weak();
+    settings.on_paste_record_requested(move |id| {
+        let _ = app::paste_history_record(id);
+        if let Some(s) = weak_settings.upgrade() {
+            refresh_settings_from_app(&s);
+        }
+    });
+
+    let weak_settings = settings.as_weak();
+    settings.on_delete_record_requested(move |id| {
+        let _ = app::delete_history_record(id);
+        if let Some(s) = weak_settings.upgrade() {
+            refresh_settings_from_app(&s);
+        }
+    });
+
+    settings.on_play_audio_requested(move |id| {
+        let _ = app::play_history_audio(id);
+    });
+
+    settings.on_retranscribe_requested(move |id| {
+        let _ = app::retranscribe_history(id);
+    });
+
+    // ── LLM config callbacks ───────────────────────────────────────────────
+
+    settings.on_set_llm_base_url(move |url| {
+        let _ = app::set_llm_base_url(url.to_string());
+    });
+
+    settings.on_set_llm_api_key(move |key| {
+        let _ = app::set_llm_api_key(key.to_string());
+    });
+
+    settings.on_set_llm_model_name(move |model| {
+        let _ = app::set_llm_model_name(model.to_string());
+    });
+
+    settings.on_set_llm_system_prompt(move |prompt| {
+        let _ = app::set_llm_system_prompt(prompt.to_string());
+    });
+
+    // ── Timers ─────────────────────────────────────────────────────────────
+
     let bootstrap_timer = slint::Timer::default();
     let platform_runtime_ref = platform_runtime.clone();
     bootstrap_timer.start(
@@ -389,7 +408,6 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let platform_timer = slint::Timer::default();
     let weak = app.as_weak();
-    let weak_history = history.as_weak();
     let weak_settings = settings.as_weak();
     let weak_overlay = overlay.as_weak();
     let platform_runtime_ref = platform_runtime.clone();
@@ -397,9 +415,8 @@ fn main() -> Result<(), slint::PlatformError> {
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(32),
         move || {
-            if let (Some(app), Some(history), Some(settings), Some(overlay)) = (
+            if let (Some(app), Some(settings), Some(overlay)) = (
                 weak.upgrade(),
-                weak_history.upgrade(),
                 weak_settings.upgrade(),
                 weak_overlay.upgrade(),
             ) {
@@ -408,14 +425,14 @@ fn main() -> Result<(), slint::PlatformError> {
                     runtime.poll_hotkey_events()
                 };
                 for action in hotkey_actions {
-                    handle_platform_hotkey_event(&app, &history, &settings, &overlay, action);
+                    handle_platform_hotkey_event(&app, &settings, &overlay, action);
                 }
                 let tray_actions = {
                     let runtime = platform_runtime_ref.borrow();
                     runtime.poll_tray_events()
                 };
                 for action in tray_actions {
-                    handle_platform_tray_event(&app, &history, &settings, &overlay, action);
+                    handle_platform_tray_event(&app, &settings, &overlay, action);
                 }
             }
         },
@@ -423,7 +440,6 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let refresh_timer = slint::Timer::default();
     let weak = app.as_weak();
-    let weak_history = history.as_weak();
     let weak_settings = settings.as_weak();
     let weak_overlay = overlay.as_weak();
     let platform_runtime_ref = platform_runtime.clone();
@@ -431,9 +447,8 @@ fn main() -> Result<(), slint::PlatformError> {
         slint::TimerMode::Repeated,
         std::time::Duration::from_millis(450),
         move || {
-            if let (Some(app), Some(history), Some(settings), Some(overlay)) = (
+            if let (Some(app), Some(settings), Some(overlay)) = (
                 weak.upgrade(),
-                weak_history.upgrade(),
                 weak_settings.upgrade(),
                 weak_overlay.upgrade(),
             ) {
@@ -444,8 +459,13 @@ fn main() -> Result<(), slint::PlatformError> {
                 if let Ok(snapshot) = app::refresh_snapshot() {
                     apply_snapshot(&app, &overlay, snapshot);
                 }
-                apply_history_snapshot(&history, app::refresh_history_window());
-                apply_settings_snapshot(&settings, app::refresh_settings_window());
+                if settings.window().is_visible() {
+                    refresh_settings_from_app(&settings);
+                } else {
+                    if let Ok(snapshot) = app::refresh_settings_window() {
+                        apply_settings_snapshot(&settings, Ok(snapshot));
+                    }
+                }
             }
         },
     );
@@ -456,7 +476,6 @@ fn main() -> Result<(), slint::PlatformError> {
 
 fn handle_platform_hotkey_event(
     app: &AppWindow,
-    history: &HistoryWindow,
     settings: &SettingsWindow,
     overlay: &OverlayWindow,
     event: shanji_platform::hotkeys::PlatformHotkeyEvent,
@@ -491,8 +510,9 @@ fn handle_platform_hotkey_event(
             apply_result(app, overlay, app::refresh_snapshot());
         }
         (HotkeyAction::OpenHistory, HotkeyEventState::Pressed) => {
-            let _ = history.show();
-            apply_history_snapshot(history, app::refresh_history_window());
+            settings.set_active_section(SettingsSection::History);
+            let _ = settings.show();
+            refresh_settings_from_app(settings);
         }
         (HotkeyAction::ToggleRewrite, HotkeyEventState::Pressed) => {
             apply_result(app, overlay, app::toggle_rewrite_enabled());
@@ -504,7 +524,6 @@ fn handle_platform_hotkey_event(
 
 fn handle_platform_tray_event(
     app: &AppWindow,
-    history: &HistoryWindow,
     settings: &SettingsWindow,
     overlay: &OverlayWindow,
     event: shanji_platform::tray::PlatformTrayEvent,
@@ -520,8 +539,9 @@ fn handle_platform_tray_event(
             apply_result(app, overlay, app::toggle_live_asr());
         }
         PlatformTrayEvent::Action(TrayAction::OpenHistory) => {
-            let _ = history.show();
-            apply_history_snapshot(history, app::refresh_history_window());
+            settings.set_active_section(SettingsSection::History);
+            let _ = settings.show();
+            refresh_settings_from_app(settings);
         }
         PlatformTrayEvent::Action(TrayAction::OpenSettings) => {
             let _ = settings.show();
@@ -530,7 +550,6 @@ fn handle_platform_tray_event(
         PlatformTrayEvent::Action(TrayAction::Quit) => {
             let _ = overlay.hide();
             let _ = settings.hide();
-            let _ = history.hide();
             let _ = app.hide();
             let _ = slint::quit_event_loop();
         }
@@ -623,18 +642,29 @@ fn apply_settings_snapshot(
     }
 }
 
-fn apply_history_snapshot(
-    history: &HistoryWindow,
-    result: Result<app::HistoryWindowSnapshot, String>,
-) {
-    match result {
-        Ok(snapshot) => {
-            history.set_history_status_text(snapshot.status_text.into());
-            history.set_history_stats_text(snapshot.stats_text.into());
-            history.set_history_list_text(snapshot.list_text.into());
+fn refresh_settings_from_app(settings: &SettingsWindow) {
+    if let Ok(snapshot) = app::refresh_settings_window() {
+        apply_settings_snapshot(settings, Ok(snapshot));
+    }
+    // Load history cards
+    match app::load_history_cards() {
+        Ok((cards, total)) => {
+            let slint_cards: Vec<HistoryCardData> = cards
+                .into_iter()
+                .map(|c| HistoryCardData {
+                    record_id: c.record_id,
+                    timestamp: c.timestamp.into(),
+                    text: c.text.into(),
+                    has_audio: c.has_audio,
+                    is_llm_rewritten: c.is_llm_rewritten,
+                    was_pasted: c.was_pasted,
+                })
+                .collect();
+            settings.set_history_records(
+                std::rc::Rc::new(slint::VecModel::from(slint_cards)).into(),
+            );
+            settings.set_history_stats_text(format!("共 {} 条 · 最近 20 条", total).into());
         }
-        Err(err) => {
-            history.set_history_status_text(format!("History action failed: {}", err).into());
-        }
+        Err(e) => log::warn!("Failed to load history cards: {}", e),
     }
 }
