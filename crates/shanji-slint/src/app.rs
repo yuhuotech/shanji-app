@@ -704,9 +704,9 @@ pub fn set_llm_base_url(url: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    if let Some(provider) = cfg.rewrite.providers.first_mut() {
-        provider.base_url = url;
-    }
+    let provider = cfg.rewrite.providers.first_mut()
+        .ok_or_else(|| "No LLM provider configured".to_string())?;
+    provider.base_url = url;
     shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
 }
 
@@ -714,9 +714,9 @@ pub fn set_llm_model_name(model: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    if let Some(provider) = cfg.rewrite.providers.first_mut() {
-        provider.model = model;
-    }
+    let provider = cfg.rewrite.providers.first_mut()
+        .ok_or_else(|| "No LLM provider configured".to_string())?;
+    provider.model = model;
     shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
 }
 
@@ -738,12 +738,19 @@ pub fn set_llm_system_prompt(prompt: String) -> Result<(), String> {
     let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
     // system_prompt 存在于 prompts 列表中，修改当前激活的 prompt preset
     let active_id = cfg.rewrite.active_prompt_id.clone();
+    // First try to find the active non-builtin preset
     if let Some(preset) = cfg.rewrite.prompts.iter_mut()
         .find(|p| p.id == active_id && !p.is_builtin)
     {
         preset.system_prompt = prompt;
+    } else if let Some(preset) = cfg.rewrite.prompts.iter_mut()
+        .find(|p| p.id == "custom")
+    {
+        // Fall back to any existing "custom" entry (even if not currently active)
+        preset.system_prompt = prompt;
+        cfg.rewrite.active_prompt_id = "custom".to_string();
     } else {
-        // 如果没有自定义 preset，创建一个
+        // Create a new "custom" preset
         cfg.rewrite.prompts.push(shanji_core::config::PromptPreset {
             id: "custom".to_string(),
             name: "自定义".to_string(),
