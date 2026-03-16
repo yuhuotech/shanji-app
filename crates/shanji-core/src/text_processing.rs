@@ -1,100 +1,143 @@
+use crate::hotwords::Hotword;
 use std::collections::HashMap;
 
 const FILLER_WORDS: &[&str] = &[
-    "嗯", "啊", "哦", "呃", "额", "哎", "欸", "诶", "呢", "吧", "嘛", "哈", "然后呢",
+    "嗯", "啊", "哦", "呃", "额", "哎", "欸", "诶", "呢", "吧", "嘛", "哈", "然后呢", "这个",
 ];
 
 const CONNECTIVE_MARKERS: &[&str] = &[
     "尤其", "但是", "不过", "所以", "因此", "然后", "而且", "并且", "或者", "至少", "因为",
-    "另外", "同时", "例如", "比如", "不过", "其实", "如果", "就是", "接着", "最后", "同时",
-    "更建议", "建议", "不过如果", "总之",
+    "另外", "同时", "例如", "比如", "其实", "如果", "就是", "接着", "最后", "更建议", "建议",
+    "总之", "并且", "不过如果",
 ];
 
+#[derive(Clone, Debug, Default)]
+pub struct TextProcessingConfig {
+    pub punct_style: String,
+    pub insert_punct: bool,
+    pub hotwords: Vec<Hotword>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TranscriptChunk<'a> {
+    pub text: &'a str,
+    pub leading_pause_ms: u32,
+}
+
 pub fn normalize_transcript(text: &str) -> String {
+    normalize_transcript_with_hotwords(text, &[])
+}
+
+pub fn normalize_transcript_with_hotwords(text: &str, hotwords: &[Hotword]) -> String {
     let mut result = text.trim().replace("@@", "");
     result = result.replace(['\n', '\r', '\t'], " ");
     result = collapse_whitespace(&result);
     result = remove_filler_words(&result);
     result = collapse_repeated_phrases(&result);
     result = collapse_repeated_chars(&result);
-    result = normalize_ascii_tokens(&result);
+    result = normalize_ascii_tokens(&result, hotwords);
     result = normalize_mixed_spacing(&result);
+    result = apply_itn(&result);
     result = apply_common_corrections(&result);
-    result.trim().to_string()
+    result = apply_hotword_overrides(&result, hotwords);
+    collapse_whitespace(&result)
 }
 
 pub fn render_segmented_transcript(
-    committed_segments: &[&str],
-    pending_segment: Option<&str>,
+    committed_segments: &[TranscriptChunk<'_>],
+    pending_segment: Option<TranscriptChunk<'_>>,
     current_partial: &str,
-    punct_style: &str,
-    insert_punct: bool,
+    config: &TextProcessingConfig,
     is_final: bool,
 ) -> String {
     let committed = committed_segments
         .iter()
-        .map(|text| normalize_transcript(text))
-        .filter(|text| !text.is_empty())
+        .map(|chunk| RenderedChunk {
+            text: normalize_transcript_with_hotwords(chunk.text, &config.hotwords),
+            leading_pause_ms: chunk.leading_pause_ms,
+        })
+        .filter(|chunk| !chunk.text.is_empty())
         .collect::<Vec<_>>();
     let pending = pending_segment
-        .map(normalize_transcript)
-        .filter(|text| !text.is_empty());
-    let partial = normalize_transcript(current_partial);
+        .map(|chunk| RenderedChunk {
+            text: normalize_transcript_with_hotwords(chunk.text, &config.hotwords),
+            leading_pause_ms: chunk.leading_pause_ms,
+        })
+        .filter(|chunk| !chunk.text.is_empty());
+    let partial = normalize_transcript_with_hotwords(current_partial, &config.hotwords);
 
-    if !insert_punct {
-        let mut plain = String::new();
-        for part in committed {
-            plain.push_str(&part);
-        }
-        if let Some(pending) = pending {
-            plain.push_str(&pending);
-        }
-        plain.push_str(&partial);
-        return plain;
+    if !config.insert_punct {
+        return join_without_punctuation(&committed, pending.as_ref(), &partial, &config.punct_style);
     }
 
-    match punct_style {
-        "en" => render_segmented_english(committed, pending.as_deref(), &partial, is_final),
-        _ => render_segmented_chinese(committed, pending.as_deref(), &partial, is_final),
+    match config.punct_style.as_str() {
+        "en" => render_segmented_english(&committed, pending.as_ref(), &partial, is_final),
+        _ => render_segmented_chinese(&committed, pending.as_ref(), &partial, is_final),
     }
 }
 
-pub fn finalize_transcript_text(text: &str, punct_style: &str, insert_punct: bool) -> String {
-    let normalized = normalize_transcript(text);
-    if normalized.is_empty() || !insert_punct {
+pub fn finalize_transcript_text(text: &str, config: &TextProcessingConfig) -> String {
+    let normalized = normalize_transcript_with_hotwords(text, &config.hotwords);
+    if normalized.is_empty() || !config.insert_punct {
         return normalized;
     }
 
-    match punct_style {
+    match config.punct_style.as_str() {
         "en" => finalize_english_text(&normalized),
         _ => finalize_chinese_text(&normalized),
     }
 }
 
+#[derive(Clone, Debug)]
+struct RenderedChunk {
+    text: String,
+    leading_pause_ms: u32,
+}
+
+fn join_without_punctuation(
+    committed: &[RenderedChunk],
+    pending: Option<&RenderedChunk>,
+    partial: &str,
+    punct_style: &str,
+) -> String {
+    let mut parts = committed
+        .iter()
+        .map(|chunk| chunk.text.as_str())
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>();
+    if let Some(pending) = pending {
+        parts.push(pending.text.as_str());
+    }
+    if !partial.is_empty() {
+        parts.push(partial);
+    }
+
+    match punct_style {
+        "en" => parts.join(" "),
+        _ => parts.join(""),
+    }
+}
+
 fn render_segmented_chinese(
-    committed: Vec<String>,
-    pending: Option<&str>,
+    committed: &[RenderedChunk],
+    pending: Option<&RenderedChunk>,
     current_partial: &str,
     is_final: bool,
 ) -> String {
-    let mut text = committed.join("，");
+    let mut text = String::new();
+    for chunk in committed {
+        append_chunk_with_pause(&mut text, chunk);
+    }
+
     if let Some(pending) = pending {
-        if !text.is_empty() && !ends_with_punctuation(&text) {
-            text.push('，');
-        }
-        text.push_str(pending);
+        append_chunk_with_pause(&mut text, pending);
     }
 
-    let partial = refine_chinese_clause(current_partial, false);
-    if !partial.is_empty() {
+    if !current_partial.is_empty() {
         if !text.is_empty() && !ends_with_punctuation(&text) {
-            text.push('，');
+            text.push_str(if current_partial.len() > 24 { "，" } else { "" });
         }
-        text.push_str(&partial);
-    }
-
-    if text.is_empty() {
-        return text;
+        text.push_str(current_partial);
     }
 
     let text = refine_chinese_clause(&text, is_final);
@@ -106,21 +149,23 @@ fn render_segmented_chinese(
 }
 
 fn render_segmented_english(
-    committed: Vec<String>,
-    pending: Option<&str>,
+    committed: &[RenderedChunk],
+    pending: Option<&RenderedChunk>,
     current_partial: &str,
     is_final: bool,
 ) -> String {
-    let mut text = committed.join(", ");
-    if let Some(pending) = pending {
-        if !text.is_empty() && !ends_with_punctuation(&text) {
-            text.push_str(", ");
-        }
-        text.push_str(pending);
+    let mut text = String::new();
+    for chunk in committed {
+        append_english_chunk_with_pause(&mut text, chunk);
     }
+
+    if let Some(pending) = pending {
+        append_english_chunk_with_pause(&mut text, pending);
+    }
+
     if !current_partial.is_empty() {
         if !text.is_empty() && !ends_with_punctuation(&text) {
-            text.push_str(", ");
+            text.push(' ');
         }
         text.push_str(current_partial);
     }
@@ -130,6 +175,39 @@ fn render_segmented_english(
     } else {
         text
     }
+}
+
+fn append_chunk_with_pause(out: &mut String, chunk: &RenderedChunk) {
+    if chunk.text.is_empty() {
+        return;
+    }
+
+    if !out.is_empty() && !ends_with_punctuation(out) {
+        out.push_str(match chunk.leading_pause_ms {
+            0..=199 => "",
+            200..=799 => "，",
+            800..=1199 => "，",
+            _ => "。",
+        });
+    }
+
+    out.push_str(&chunk.text);
+}
+
+fn append_english_chunk_with_pause(out: &mut String, chunk: &RenderedChunk) {
+    if chunk.text.is_empty() {
+        return;
+    }
+
+    if !out.is_empty() && !ends_with_punctuation(out) {
+        out.push_str(match chunk.leading_pause_ms {
+            0..=199 => " ",
+            200..=1599 => ", ",
+            _ => ". ",
+        });
+    }
+
+    out.push_str(&chunk.text);
 }
 
 fn finalize_chinese_text(text: &str) -> String {
@@ -175,7 +253,7 @@ fn refine_chinese_clause(text: &str, is_final: bool) -> String {
         let starts_marker = CONNECTIVE_MARKERS
             .iter()
             .any(|marker| suffix.starts_with(marker));
-        if starts_marker && !out.is_empty() && !ends_with_punctuation(&out) && since_punct >= 6 {
+        if starts_marker && !out.is_empty() && !ends_with_punctuation(&out) && since_punct >= 5 {
             out.push('，');
             since_punct = 0;
         }
@@ -185,26 +263,10 @@ fn refine_chinese_clause(text: &str, is_final: bool) -> String {
         since_punct += 1;
 
         if !is_final
-            && since_punct >= 22
+            && since_punct >= 28
             && idx + 1 < chars.len()
             && !ends_with_punctuation(&out)
-            && matches!(
-                ch,
-                '是'
-                    | '要'
-                    | '用'
-                    | '做'
-                    | '让'
-                    | '把'
-                    | '在'
-                    | '对'
-                    | '到'
-                    | '后'
-                    | '前'
-                    | '时'
-                    | '并'
-                    | '或'
-            )
+            && matches!(ch, '是' | '要' | '用' | '做' | '让' | '把' | '在' | '对' | '到' | '后' | '前' | '时' | '并' | '或')
         {
             out.push('，');
             since_punct = 0;
@@ -274,9 +336,15 @@ fn is_filler_boundary(chars: &[char], start: usize, filler: &str) -> bool {
 fn collapse_repeated_chars(text: &str) -> String {
     let mut out = String::new();
     let mut prev = '\0';
+    let mut repeat_count = 0usize;
     for ch in text.chars() {
-        if ch == prev && is_repeatable_cjk(ch) {
-            continue;
+        if ch == prev {
+            repeat_count += 1;
+            if is_repeatable_cjk(ch) || (ch.is_ascii_alphabetic() && repeat_count >= 2) {
+                continue;
+            }
+        } else {
+            repeat_count = 0;
         }
         out.push(ch);
         prev = ch;
@@ -291,13 +359,13 @@ fn collapse_repeated_phrases(text: &str) -> String {
 
     while idx < chars.len() {
         let mut collapsed = false;
-        for width in (1..=4).rev() {
+        for width in (1..=6).rev() {
             if idx + width * 2 > chars.len() {
                 continue;
             }
             let left = &chars[idx..idx + width];
             let right = &chars[idx + width..idx + width * 2];
-            if left == right {
+            if left == right && is_phrase_duplicate_candidate(left) {
                 out.extend(left.iter());
                 idx += width * 2;
                 collapsed = true;
@@ -314,23 +382,8 @@ fn collapse_repeated_phrases(text: &str) -> String {
     out
 }
 
-fn normalize_ascii_tokens(text: &str) -> String {
-    let mut lexicon = HashMap::new();
-    lexicon.insert("xcode", "Xcode");
-    lexicon.insert("ios", "iOS");
-    lexicon.insert("iphone", "iPhone");
-    lexicon.insert("ipad", "iPad");
-    lexicon.insert("macbook", "MacBook");
-    lexicon.insert("mac", "Mac");
-    lexicon.insert("intel", "Intel");
-    lexicon.insert("apple", "Apple");
-    lexicon.insert("github", "GitHub");
-    lexicon.insert("onnx", "ONNX");
-    lexicon.insert("paraformer", "Paraformer");
-    lexicon.insert("funasr", "FunASR");
-    lexicon.insert("api", "API");
-    lexicon.insert("llm", "LLM");
-
+fn normalize_ascii_tokens(text: &str, hotwords: &[Hotword]) -> String {
+    let lexicon = build_ascii_lexicon(hotwords);
     let mut out = String::new();
     let mut token = String::new();
 
@@ -354,7 +407,43 @@ fn normalize_ascii_tokens(text: &str) -> String {
     out
 }
 
-fn normalize_ascii_token(token: &str, lexicon: &HashMap<&str, &str>) -> String {
+fn build_ascii_lexicon(hotwords: &[Hotword]) -> HashMap<String, String> {
+    let mut lexicon = HashMap::new();
+    for (key, value) in [
+        ("xcode", "Xcode"),
+        ("ios", "iOS"),
+        ("iphone", "iPhone"),
+        ("ipad", "iPad"),
+        ("macbook", "MacBook"),
+        ("mac", "Mac"),
+        ("intel", "Intel"),
+        ("apple", "Apple"),
+        ("github", "GitHub"),
+        ("huggingface", "Hugging Face"),
+        ("modelscope", "ModelScope"),
+        ("onnx", "ONNX"),
+        ("paraformer", "Paraformer"),
+        ("funasr", "FunASR"),
+        ("api", "API"),
+        ("sdk", "SDK"),
+        ("llm", "LLM"),
+        ("cpu", "CPU"),
+        ("gpu", "GPU"),
+        ("openai", "OpenAI"),
+        ("rust", "Rust"),
+    ] {
+        lexicon.insert(key.to_string(), value.to_string());
+    }
+
+    for hotword in hotwords {
+        if hotword.word.is_ascii() {
+            lexicon.insert(hotword.word.to_ascii_lowercase(), hotword.word.clone());
+        }
+    }
+    lexicon
+}
+
+fn normalize_ascii_token(token: &str, lexicon: &HashMap<String, String>) -> String {
     if token.contains('/') {
         return token
             .split('/')
@@ -365,10 +454,40 @@ fn normalize_ascii_token(token: &str, lexicon: &HashMap<&str, &str>) -> String {
 
     let lower = token.to_ascii_lowercase();
     if let Some(mapped) = lexicon.get(lower.as_str()) {
-        return (*mapped).to_string();
+        return mapped.clone();
+    }
+
+    if let Some(segmented) = segment_ascii_token(&lower, lexicon) {
+        return segmented;
     }
 
     token.to_string()
+}
+
+fn segment_ascii_token(token: &str, lexicon: &HashMap<String, String>) -> Option<String> {
+    let mut idx = 0usize;
+    let mut parts = Vec::new();
+    while idx < token.len() {
+        let mut found = None;
+        for end in (idx + 1..=token.len()).rev() {
+            let candidate = &token[idx..end];
+            if let Some(mapped) = lexicon.get(candidate) {
+                found = Some((end, mapped.clone()));
+                break;
+            }
+        }
+        let Some((end, mapped)) = found else {
+            return None;
+        };
+        parts.push(mapped);
+        idx = end;
+    }
+
+    if parts.len() >= 2 {
+        Some(parts.join(" "))
+    } else {
+        None
+    }
 }
 
 fn normalize_mixed_spacing(text: &str) -> String {
@@ -393,6 +512,223 @@ fn needs_space_between(left: char, right: char) -> bool {
         || (matches!(left, ')' | ']') && right.is_ascii_alphanumeric())
 }
 
+fn apply_itn(text: &str) -> String {
+    let mut text = replace_spoken_years(text);
+    text = replace_percentage(&text);
+    text = replace_suffixed_number(&text, "元");
+    text = replace_suffixed_number(&text, "块");
+    text = replace_suffixed_number(&text, "MB");
+    text = replace_suffixed_number(&text, "GB");
+    text
+}
+
+fn replace_percentage(text: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let prefix_chars = "百分之".chars().collect::<Vec<_>>();
+    let mut out = String::new();
+    let mut idx = 0usize;
+
+    while idx < chars.len() {
+        if chars[idx..].starts_with(&prefix_chars) {
+            let start = idx + prefix_chars.len();
+            let max_end = (start + 5).min(chars.len());
+            let mut replaced = false;
+
+            for end in (start + 1..=max_end).rev() {
+                let number_text = chars[start..end].iter().collect::<String>();
+                let Some(value) = parse_chinese_number(&number_text) else {
+                    continue;
+                };
+                if value > 100 {
+                    continue;
+                }
+
+                let next = chars.get(end).copied();
+                if matches!(next, Some(ch) if is_percentage_continuation(ch)) {
+                    continue;
+                }
+
+                out.push_str(&value.to_string());
+                out.push('%');
+                idx = end;
+                replaced = true;
+                break;
+            }
+
+            if replaced {
+                continue;
+            }
+        }
+
+        out.push(chars[idx]);
+        idx += 1;
+    }
+
+    out
+}
+
+fn replace_spoken_years(text: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let mut out = String::new();
+    let mut idx = 0usize;
+    while idx < chars.len() {
+        if idx + 4 < chars.len() && chars[idx + 4] == '年' {
+            let maybe_year = chars[idx..idx + 4]
+                .iter()
+                .map(|ch| chinese_digit_char(*ch))
+                .collect::<Option<String>>();
+            if let Some(year) = maybe_year {
+                out.push_str(&year);
+                out.push('年');
+                idx += 5;
+                continue;
+            }
+        }
+        out.push(chars[idx]);
+        idx += 1;
+    }
+    out
+}
+
+fn replace_suffixed_number(text: &str, suffix: &str) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    let suffix_chars = suffix.chars().collect::<Vec<_>>();
+    let mut out = String::new();
+    let mut idx = 0usize;
+
+    while idx < chars.len() {
+        let start = idx;
+        while idx < chars.len() && is_chinese_number_char(chars[idx]) {
+            idx += 1;
+        }
+        if idx > start && chars[idx..].starts_with(&suffix_chars) {
+            let number_text = chars[start..idx].iter().collect::<String>();
+            if let Some(value) = parse_chinese_number(&number_text) {
+                out.push_str(&value.to_string());
+                out.push_str(suffix);
+                idx += suffix_chars.len();
+                continue;
+            }
+        }
+
+        if start != idx {
+            out.push_str(&chars[start..idx].iter().collect::<String>());
+            continue;
+        }
+
+        out.push(chars[idx]);
+        idx += 1;
+    }
+
+    out
+}
+
+fn parse_chinese_number(text: &str) -> Option<u64> {
+    if text.is_empty() {
+        return None;
+    }
+
+    if text.chars().all(|ch| chinese_digit_char(ch).is_some()) {
+        return text
+            .chars()
+            .map(chinese_digit_value)
+            .collect::<Option<Vec<_>>>()
+            .map(|digits| digits.into_iter().fold(0u64, |acc, digit| acc * 10 + digit as u64));
+    }
+
+    let mut result = 0u64;
+    let mut section = 0u64;
+    let mut number = 0u64;
+
+    for ch in text.chars() {
+        match ch {
+            '十' => {
+                number = if number == 0 { 1 } else { number };
+                section += number * 10;
+                number = 0;
+            }
+            '百' => {
+                number = if number == 0 { 1 } else { number };
+                section += number * 100;
+                number = 0;
+            }
+            '千' => {
+                number = if number == 0 { 1 } else { number };
+                section += number * 1000;
+                number = 0;
+            }
+            '万' => {
+                section += number;
+                result += section * 10_000;
+                section = 0;
+                number = 0;
+            }
+            '亿' => {
+                section += number;
+                result += section * 100_000_000;
+                section = 0;
+                number = 0;
+            }
+            _ => {
+                number = chinese_digit_value(ch)? as u64;
+            }
+        }
+    }
+
+    Some(result + section + number)
+}
+
+fn chinese_digit_char(ch: char) -> Option<String> {
+    Some(match ch {
+        '零' | '〇' => "0",
+        '一' => "1",
+        '二' | '两' => "2",
+        '三' => "3",
+        '四' => "4",
+        '五' => "5",
+        '六' => "6",
+        '七' => "7",
+        '八' => "8",
+        '九' => "9",
+        _ => return None,
+    }
+    .to_string())
+}
+
+fn chinese_digit_value(ch: char) -> Option<u32> {
+    match ch {
+        '零' | '〇' => Some(0),
+        '一' => Some(1),
+        '二' | '两' => Some(2),
+        '三' => Some(3),
+        '四' => Some(4),
+        '五' => Some(5),
+        '六' => Some(6),
+        '七' => Some(7),
+        '八' => Some(8),
+        '九' => Some(9),
+        _ => None,
+    }
+}
+
+fn is_chinese_number_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '零' | '〇' | '一' | '二' | '两' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百' | '千' | '万' | '亿'
+    )
+}
+
+fn is_percentage_continuation(ch: char) -> bool {
+    matches!(ch, '十' | '百' | '千' | '万' | '亿')
+}
+
+fn apply_hotword_overrides(text: &str, hotwords: &[Hotword]) -> String {
+    hotwords
+        .iter()
+        .filter(|hotword| !hotword.word.is_empty() && !hotword.word.is_ascii())
+        .fold(text.to_string(), |acc, hotword| acc.replace(&hotword.word, &hotword.word))
+}
+
 fn apply_common_corrections(text: &str) -> String {
     [
         ("测是", "测试"),
@@ -401,7 +737,12 @@ fn apply_common_corrections(text: &str) -> String {
         ("册是", "测试"),
         ("英特尔mi", "Intel Mac"),
         ("英特尔mac", "Intel Mac"),
+        ("英特尔 ma", "Intel Mac"),
         ("apple硬件", "Apple 硬件"),
+        ("xcodeios", "Xcode iOS"),
+        ("xcodeiios", "Xcode iOS"),
+        ("构构建", "构建"),
+        ("显显著", "显著"),
     ]
     .into_iter()
     .fold(text.to_string(), |acc, (wrong, correct)| acc.replace(wrong, correct))
@@ -409,6 +750,10 @@ fn apply_common_corrections(text: &str) -> String {
 
 fn is_repeatable_cjk(ch: char) -> bool {
     ('\u{4e00}'..='\u{9fff}').contains(&ch)
+}
+
+fn is_phrase_duplicate_candidate(phrase: &[char]) -> bool {
+    phrase.iter().any(|ch| is_repeatable_cjk(*ch) || ch.is_whitespace())
 }
 
 fn is_boundary_punctuation(ch: char) -> bool {
@@ -429,6 +774,17 @@ fn ends_with_punctuation(text: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn zh_config() -> TextProcessingConfig {
+        TextProcessingConfig {
+            punct_style: "zh".to_string(),
+            insert_punct: true,
+            hotwords: vec![Hotword {
+                word: "Xcode".to_string(),
+                weight: 90,
+            }],
+        }
+    }
+
     #[test]
     fn normalize_removes_fillers_and_duplicates() {
         let text = "嗯 我我我觉得这个这个方案还还可以";
@@ -439,26 +795,48 @@ mod tests {
     #[test]
     fn normalize_ascii_tokens_keeps_tech_brands() {
         let text = "依赖 xcode ios github onnx";
-        let result = normalize_transcript(text);
+        let result = normalize_transcript_with_hotwords(text, &zh_config().hotwords);
         assert!(result.contains("Xcode"));
         assert!(result.contains("iOS"));
         assert!(result.contains("GitHub"));
+        assert!(result.contains("ONNX"));
     }
 
     #[test]
-    fn segmented_chinese_prefers_commas_and_final_period() {
+    fn normalize_itn_handles_year_percent_and_money() {
+        let text = "二零二五年百分之九十五一千八百元";
+        let result = normalize_transcript(text);
+        assert!(result.contains("2025年"));
+        assert!(result.contains("95%"));
+        assert!(result.contains("1800元"));
+    }
+
+    #[test]
+    fn segmented_chinese_prefers_pause_boundaries() {
         let result = render_segmented_transcript(
-            &["如果你的目标是长期稳定生产使用", "尤其要升级系统"],
-            Some("更建议直接用 Apple 硬件"),
+            &[
+                TranscriptChunk {
+                    text: "如果你的目标是长期稳定生产使用",
+                    leading_pause_ms: 0,
+                },
+                TranscriptChunk {
+                    text: "尤其要升级系统",
+                    leading_pause_ms: 480,
+                },
+            ],
+            Some(TranscriptChunk {
+                text: "更建议直接用 Apple 硬件",
+                leading_pause_ms: 1300,
+            }),
             "",
-            "zh",
-            true,
+            &zh_config(),
             false,
         );
         assert!(result.contains('，'));
+        assert!(result.contains('。'));
         assert!(!result.ends_with('。'));
 
-        let final_result = finalize_transcript_text(&result, "zh", true);
+        let final_result = finalize_transcript_text(&result, &zh_config());
         assert!(final_result.ends_with('。'));
     }
 }

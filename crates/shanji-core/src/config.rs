@@ -40,6 +40,7 @@ pub struct AudioConfig {
     pub gain: f32,
     pub recording_mode: String,
     pub vad_threshold: f32,
+    pub vad_end_threshold: f32,
     pub silence_timeout_ms: u32,
     pub min_speech_frames: u32,
     pub sound_feedback: bool,
@@ -53,8 +54,9 @@ impl Default for AudioConfig {
             gain: 1.0,
             recording_mode: "toggle".to_string(),
             vad_threshold: 0.5,
+            vad_end_threshold: 0.35,
             silence_timeout_ms: 1500,
-            min_speech_frames: 1,
+            min_speech_frames: 3,
             sound_feedback: true,
             noise_reduction: true,
         }
@@ -250,7 +252,7 @@ fn default_version() -> u32 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 5,
             general: GeneralConfig::default(),
             audio: AudioConfig::default(),
             asr: AsrConfig::default(),
@@ -313,6 +315,20 @@ impl AppConfig {
             modified = true;
         }
 
+        if self.version < 5 {
+            if !(0.0..=1.0).contains(&self.audio.vad_end_threshold)
+                || self.audio.vad_end_threshold <= 0.0
+            {
+                self.audio.vad_end_threshold =
+                    (self.audio.vad_threshold * 0.7).clamp(0.2, self.audio.vad_threshold);
+            }
+            if self.audio.min_speech_frames == 0 {
+                self.audio.min_speech_frames = 3;
+            }
+            self.version = 5;
+            modified = true;
+        }
+
         modified
     }
 }
@@ -336,6 +352,7 @@ fn needs_native_hotkey_migration(value: &str) -> bool {
 
 pub fn init_config(paths: &AppPaths) -> Result<()> {
     paths.ensure_base_dirs()?;
+    crate::hotwords::ensure_default_libraries_with_paths(paths)?;
 
     let config_path = paths.config_file();
     if !config_path.exists() {

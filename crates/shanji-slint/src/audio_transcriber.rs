@@ -2,12 +2,15 @@ use shanji_core::asr::{AsrConfig, AsrEngine};
 use shanji_core::audio::{self, AudioCapture};
 use shanji_core::config::{self, AppConfig, AppState};
 use shanji_core::history::{HistoryDb, HistoryRecord};
+use shanji_core::hotwords;
 use shanji_core::llm;
 use shanji_core::model;
 use shanji_core::output;
 use shanji_core::paths::AppPaths;
 use shanji_core::state;
-use shanji_core::text_processing::{finalize_transcript_text, render_segmented_transcript};
+use shanji_core::text_processing::{
+    finalize_transcript_text, render_segmented_transcript, TextProcessingConfig, TranscriptChunk,
+};
 use shanji_core::vad::{self, VadDetector, VadEvent};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread::JoinHandle;
@@ -25,6 +28,7 @@ struct PendingPaste {
 #[derive(Clone)]
 struct TranscriptSegment {
     id: u64,
+    leading_pause_ms: u32,
     live_text: String,
     corrected_text: Option<String>,
 }
@@ -47,6 +51,7 @@ struct RefineWorker {
 }
 
 struct PendingSegment {
+    leading_pause_ms: u32,
     audio: Vec<f32>,
     live_text: String,
 }
@@ -180,11 +185,21 @@ fn run_live_asr(
         .start(selected_device.as_deref(), sample_tx)
         .map_err(|e| e.to_string())?;
 
+    let hotword_inventory = hotwords::load_all_enabled_with_paths(&paths).unwrap_or_else(|err| {
+        log::warn!("Failed to load hotword libraries, continuing without them: {}", err);
+        Vec::new()
+    });
+    let text_config = TextProcessingConfig {
+        punct_style: config.asr.punct_style.clone(),
+        insert_punct: config.asr.insert_punct,
+        hotwords: hotword_inventory.clone(),
+    };
+
     let mut vad_detector: Option<VadDetector> = if config.audio.noise_reduction {
         let vad_model_dir = model::get_model_dir_with_paths(&paths, "silero-vad");
         let vad_model_path = vad_model_dir.join("silero_vad.onnx");
         match vad::ensure_vad_model(&vad_model_path) {
-            Ok(()) => match VadDetector::new(&vad_model_path, config.audio.vad_threshold) {
+            Ok(()) => match VadDetector::new(&vad_model_path, config.audio.vad_threshold, config.audio.vad_end_threshold, config.audio.min_speech_frames, config.audio.silence_timeout_ms) {
                 Ok(v) => Some(v),
                 Err(e) => {
                     log::warn!("VAD init failed, running without VAD: {}", e);
@@ -205,7 +220,8 @@ fn run_live_asr(
         config.asr.refine_enabled
     );
 
-    let mut live_engine = build_engine(&paths, &config, &config.asr.live_model_id)?;
+    let mut live_engine =
+        build_engine(&paths, &config, &text_config.hotwords, &config.asr.live_model_id)?;
     let mut refine_worker = if config.asr.refine_enabled
         && model::is_model_downloaded_with_paths(&paths, &config.asr.refine_model_id)
     {
@@ -237,6 +253,8 @@ fn run_live_asr(
     let mut all_audio = Vec::new();
     let mut current_segment_audio = Vec::new();
     let mut segment_overlap_audio = Vec::new();
+    let mut current_segment_leading_pause_ms = 0u32;
+    let mut accumulated_silence_ms = 0u32;
     let mut pending_segment: Option<PendingSegment> = None;
     let mut current_partial = String::new();
     let mut segments: Vec<TranscriptSegment> = Vec::new();
@@ -249,7 +267,12 @@ fn run_live_asr(
 
         if let Some(worker) = refine_worker.as_mut() {
             collect_refine_results(&worker.result_rx, &mut segments);
-            sync_runtime_transcript(&config, &segments, pending_segment.as_ref(), &current_partial);
+            sync_runtime_transcript(
+                &text_config,
+                &segments,
+                pending_segment.as_ref(),
+                &current_partial,
+            );
         }
 
         match sample_rx.recv_timeout(Duration::from_millis(120)) {
@@ -272,7 +295,7 @@ fn run_live_asr(
                             ));
                             vad_detector = None;
                             if let Err(err) = process_live_chunk(
-                                &config,
+                                &text_config,
                                 &mut live_engine,
                                 &samples,
                                 &mut current_segment_audio,
@@ -282,7 +305,7 @@ fn run_live_asr(
                                 pending_segment.as_ref(),
                             ) {
                                 recover_live_segment(
-                                    &config,
+                                    &text_config,
                                     &mut live_engine,
                                     &mut current_segment_audio,
                                     &mut segment_overlap_audio,
@@ -299,8 +322,12 @@ fn run_live_asr(
                         match event {
                             VadEvent::Speech(chunk) => {
                                 log::debug!("VAD speech event: samples={}", chunk.len());
+                                if current_segment_audio.is_empty() {
+                                    current_segment_leading_pause_ms = accumulated_silence_ms;
+                                }
+                                accumulated_silence_ms = 0;
                                 if let Err(err) = process_live_chunk(
-                                    &config,
+                                    &text_config,
                                     &mut live_engine,
                                     &chunk,
                                     &mut current_segment_audio,
@@ -310,7 +337,7 @@ fn run_live_asr(
                                     pending_segment.as_ref(),
                                 ) {
                                     recover_live_segment(
-                                        &config,
+                                        &text_config,
                                         &mut live_engine,
                                         &mut current_segment_audio,
                                         &mut segment_overlap_audio,
@@ -322,6 +349,8 @@ fn run_live_asr(
                                 }
                             }
                             VadEvent::Silence => {
+                                accumulated_silence_ms =
+                                    accumulated_silence_ms.saturating_add(32);
                                 if !current_segment_audio.is_empty() || !current_partial.is_empty()
                                 {
                                     log::info!(
@@ -331,10 +360,11 @@ fn run_live_asr(
                                     );
                                 }
                                 if let Err(err) = finalize_segment(
-                                    &config,
+                                    &text_config,
                                     &mut live_engine,
                                     &mut current_segment_audio,
                                     &mut segment_overlap_audio,
+                                    &mut current_segment_leading_pause_ms,
                                     &mut pending_segment,
                                     &mut current_partial,
                                     &mut segments,
@@ -343,7 +373,7 @@ fn run_live_asr(
                                     false,
                                 ) {
                                     recover_live_segment(
-                                        &config,
+                                        &text_config,
                                         &mut live_engine,
                                         &mut current_segment_audio,
                                         &mut segment_overlap_audio,
@@ -358,7 +388,7 @@ fn run_live_asr(
                     }
                 } else {
                     if let Err(err) = process_live_chunk(
-                        &config,
+                        &text_config,
                         &mut live_engine,
                         &samples,
                         &mut current_segment_audio,
@@ -368,7 +398,7 @@ fn run_live_asr(
                         pending_segment.as_ref(),
                     ) {
                         recover_live_segment(
-                            &config,
+                            &text_config,
                             &mut live_engine,
                             &mut current_segment_audio,
                             &mut segment_overlap_audio,
@@ -392,10 +422,11 @@ fn run_live_asr(
     }
 
     finalize_segment(
-        &config,
+        &text_config,
         &mut live_engine,
         &mut current_segment_audio,
         &mut segment_overlap_audio,
+        &mut current_segment_leading_pause_ms,
         &mut pending_segment,
         &mut current_partial,
         &mut segments,
@@ -411,14 +442,12 @@ fn run_live_asr(
     }
 
     let live_transcribed = finalize_transcript_text(
-        &compose_live_transcript(&config, &segments, pending_segment.as_ref()),
-        &config.asr.punct_style,
-        config.asr.insert_punct,
+        &compose_live_transcript(&text_config, &segments, pending_segment.as_ref()),
+        &text_config,
     );
     let corrected_transcribed = finalize_transcript_text(
-        &compose_transcript(&config, &segments, pending_segment.as_ref(), "", true),
-        &config.asr.punct_style,
-        config.asr.insert_punct,
+        &compose_transcript(&text_config, &segments, pending_segment.as_ref(), "", true),
+        &text_config,
     );
     let final_transcribed = if corrected_transcribed.is_empty() {
         live_transcribed.clone()
@@ -483,10 +512,19 @@ fn run_live_asr(
     Ok(())
 }
 
-fn build_engine(paths: &AppPaths, config: &AppConfig, model_id: &str) -> Result<AsrEngine, String> {
+fn build_engine(
+    paths: &AppPaths,
+    config: &AppConfig,
+    hotwords: &[shanji_core::hotwords::Hotword],
+    model_id: &str,
+) -> Result<AsrEngine, String> {
     let mut engine = AsrEngine::new(AsrConfig {
         insert_punct: config.asr.insert_punct,
         punct_style: config.asr.punct_style.clone(),
+        hotwords: hotwords
+            .iter()
+            .map(|word| (word.word.clone(), word.weight))
+            .collect(),
         ..AsrConfig::default()
     })
     .map_err(|e| e.to_string())?;
@@ -502,7 +540,9 @@ fn spawn_refine_worker(paths: AppPaths, config: AppConfig) -> Result<RefineWorke
     let (task_tx, task_rx) = mpsc::channel::<RefineTask>();
     let (result_tx, result_rx) = mpsc::channel::<RefineResult>();
     let join_handle = std::thread::spawn(move || {
-        let mut engine = match build_engine(&paths, &config, &config.asr.refine_model_id) {
+        let hotwords = hotwords::load_all_enabled_with_paths(&paths).unwrap_or_default();
+        let mut engine = match build_engine(&paths, &config, &hotwords, &config.asr.refine_model_id)
+        {
             Ok(engine) => engine,
             Err(err) => {
                 log::warn!("Failed to start refine worker: {}", err);
@@ -541,7 +581,7 @@ fn refine_segment(engine: &mut AsrEngine, audio: &[f32]) -> Result<String, Strin
 }
 
 fn process_live_chunk(
-    config: &AppConfig,
+    text_config: &TextProcessingConfig,
     live_engine: &mut AsrEngine,
     samples: &[f32],
     current_segment_audio: &mut Vec<f32>,
@@ -566,7 +606,7 @@ fn process_live_chunk(
     {
         Some(text) if !text.is_empty() => {
             *current_partial = text;
-            sync_runtime_transcript(config, segments, pending_segment, current_partial);
+            sync_runtime_transcript(text_config, segments, pending_segment, current_partial);
             state::set_state(AppState::Transcribing);
             state::set_status_message("Live ASR is producing partial text");
             log::info!(
@@ -588,10 +628,11 @@ fn process_live_chunk(
 }
 
 fn finalize_segment(
-    config: &AppConfig,
+    text_config: &TextProcessingConfig,
     live_engine: &mut AsrEngine,
     current_segment_audio: &mut Vec<f32>,
     segment_overlap_audio: &mut Vec<f32>,
+    current_segment_leading_pause_ms: &mut u32,
     pending_segment: &mut Option<PendingSegment>,
     current_partial: &mut String,
     segments: &mut Vec<TranscriptSegment>,
@@ -602,7 +643,7 @@ fn finalize_segment(
     if current_segment_audio.is_empty() && current_partial.is_empty() {
         if flush_short_segments {
             commit_pending_segment(pending_segment, segments, next_segment_id, refine_worker)?;
-            sync_runtime_transcript(config, segments, pending_segment.as_ref(), "");
+            sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
         }
         return Ok(());
     }
@@ -622,7 +663,8 @@ fn finalize_segment(
             flush_short_segments
         );
         current_segment_audio.clear();
-        sync_runtime_transcript(config, segments, pending_segment.as_ref(), "");
+        *current_segment_leading_pause_ms = 0;
+        sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
         return Ok(());
     }
 
@@ -636,6 +678,7 @@ fn finalize_segment(
         merged_audio.extend_from_slice(&segment_audio);
         segment_audio = merged_audio;
         live_text = format!("{}{}", previous.live_text, live_text);
+        *current_segment_leading_pause_ms = previous.leading_pause_ms;
     }
 
     if !flush_short_segments && segment_audio.len() < MIN_REFINE_SEGMENT_SAMPLES {
@@ -645,10 +688,12 @@ fn finalize_segment(
             live_text
         );
         *pending_segment = Some(PendingSegment {
+            leading_pause_ms: *current_segment_leading_pause_ms,
             audio: segment_audio,
             live_text,
         });
-        sync_runtime_transcript(config, segments, pending_segment.as_ref(), "");
+        *current_segment_leading_pause_ms = 0;
+        sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
         return Ok(());
     }
 
@@ -656,18 +701,21 @@ fn finalize_segment(
         segments,
         next_segment_id,
         refine_worker,
+        *current_segment_leading_pause_ms,
         segment_audio,
         live_text,
     );
+    *current_segment_leading_pause_ms = 0;
     if let Some(segment) = segments.last() {
         log::info!(
-            "Segment committed: id={}, text='{}', corrected={}",
+            "Segment committed: id={}, pause_ms={}, text='{}', corrected={}",
             segment.id,
+            segment.leading_pause_ms,
             segment.live_text,
             segment.corrected_text.is_some()
         );
     }
-    sync_runtime_transcript(config, segments, pending_segment.as_ref(), "");
+    sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
     Ok(())
 }
 
@@ -685,6 +733,7 @@ fn commit_pending_segment(
         segments,
         next_segment_id,
         refine_worker,
+        pending.leading_pause_ms,
         pending.audio,
         pending.live_text,
     );
@@ -695,6 +744,7 @@ fn push_segment(
     segments: &mut Vec<TranscriptSegment>,
     next_segment_id: &mut u64,
     refine_worker: Option<&mut RefineWorker>,
+    leading_pause_ms: u32,
     segment_audio: Vec<f32>,
     live_text: String,
 ) {
@@ -702,6 +752,7 @@ fn push_segment(
     *next_segment_id += 1;
     segments.push(TranscriptSegment {
         id: segment_id,
+        leading_pause_ms,
         live_text: live_text.clone(),
         corrected_text: None,
     });
@@ -755,25 +806,30 @@ fn apply_refine_result(segments: &mut [TranscriptSegment], result: RefineResult)
 }
 
 fn compose_live_transcript(
-    config: &AppConfig,
+    text_config: &TextProcessingConfig,
     segments: &[TranscriptSegment],
     pending_segment: Option<&PendingSegment>,
 ) -> String {
     render_segmented_transcript(
         &segments
             .iter()
-            .map(|segment| segment.live_text.as_str())
+            .map(|segment| TranscriptChunk {
+                text: segment.live_text.as_str(),
+                leading_pause_ms: segment.leading_pause_ms,
+            })
             .collect::<Vec<_>>(),
-        pending_segment.map(|segment| segment.live_text.as_str()),
+        pending_segment.map(|segment| TranscriptChunk {
+            text: segment.live_text.as_str(),
+            leading_pause_ms: segment.leading_pause_ms,
+        }),
         "",
-        &config.asr.punct_style,
-        config.asr.insert_punct,
+        text_config,
         false,
     )
 }
 
 fn compose_transcript(
-    config: &AppConfig,
+    text_config: &TextProcessingConfig,
     segments: &[TranscriptSegment],
     pending_segment: Option<&PendingSegment>,
     current_partial: &str,
@@ -782,28 +838,37 @@ fn compose_transcript(
     render_segmented_transcript(
         &segments
             .iter()
-            .map(|segment| {
-                segment
+            .map(|segment| TranscriptChunk {
+                text: segment
                     .corrected_text
                     .as_deref()
-                    .unwrap_or(segment.live_text.as_str())
+                    .unwrap_or(segment.live_text.as_str()),
+                leading_pause_ms: segment.leading_pause_ms,
             })
             .collect::<Vec<_>>(),
-        pending_segment.map(|segment| segment.live_text.as_str()),
+        pending_segment.map(|segment| TranscriptChunk {
+            text: segment.live_text.as_str(),
+            leading_pause_ms: segment.leading_pause_ms,
+        }),
         current_partial,
-        &config.asr.punct_style,
-        config.asr.insert_punct,
+        text_config,
         is_final,
     )
 }
 
 fn sync_runtime_transcript(
-    config: &AppConfig,
+    text_config: &TextProcessingConfig,
     segments: &[TranscriptSegment],
     pending_segment: Option<&PendingSegment>,
     current_partial: &str,
 ) {
-    let display = compose_transcript(config, segments, pending_segment, current_partial, false);
+    let display = compose_transcript(
+        text_config,
+        segments,
+        pending_segment,
+        current_partial,
+        false,
+    );
     state::set_live_transcript(display.clone());
     state::set_last_transcript(display.clone());
     log::info!(
@@ -822,7 +887,7 @@ fn sync_runtime_transcript(
 }
 
 fn recover_live_segment(
-    config: &AppConfig,
+    text_config: &TextProcessingConfig,
     live_engine: &mut AsrEngine,
     current_segment_audio: &mut Vec<f32>,
     segment_overlap_audio: &mut Vec<f32>,
@@ -836,7 +901,7 @@ fn recover_live_segment(
     current_segment_audio.clear();
     segment_overlap_audio.clear();
     current_partial.clear();
-    sync_runtime_transcript(config, segments, pending_segment, "");
+    sync_runtime_transcript(text_config, segments, pending_segment, "");
     state::set_state(AppState::Recording);
     state::set_status_message(format!("实时转写分段异常，已自动恢复: {}", err));
 }

@@ -4,6 +4,34 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+const BUILTIN_LIBRARY_ID: &str = "builtin_tech_terms";
+const BUILTIN_LIBRARY_NAME: &str = "内置技术词库";
+const BUILTIN_LIBRARY_CONTENT: &str = r#"Apple 95
+Intel 95
+Mac 90
+MacBook 90
+Xcode 95
+iOS 95
+iPhone 90
+iPad 90
+GitHub 90
+ModelScope 85
+Hugging Face 85
+OpenAI 85
+Paraformer 90
+FunASR 90
+ONNX 95
+API 85
+SDK 85
+LLM 85
+CPU 80
+GPU 80
+Rust 90
+苹果 80
+英特尔 80
+微信 70
+"#;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Hotword {
@@ -30,6 +58,42 @@ pub enum LibraryFormat {
     Csv,
     Scel,
     Thuocl,
+}
+
+pub fn ensure_default_libraries_with_paths(paths: &AppPaths) -> Result<()> {
+    let mut libraries = load_libraries_with_paths(paths)?;
+    if libraries.contains_key(BUILTIN_LIBRARY_ID) {
+        return Ok(());
+    }
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    let words = parse_txt(BUILTIN_LIBRARY_CONTENT);
+    let file_path =
+        get_library_file_path_with_paths(paths, BUILTIN_LIBRARY_ID, LibraryFormat::Txt);
+    if let Some(parent) = file_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppError::Io(format!("Failed to create hotword dir: {}", e)))?;
+    }
+    std::fs::write(&file_path, BUILTIN_LIBRARY_CONTENT)
+        .map_err(|e| AppError::Io(format!("Failed to write built-in hotwords: {}", e)))?;
+
+    libraries.insert(
+        BUILTIN_LIBRARY_ID.to_string(),
+        HotwordLibrary {
+            id: BUILTIN_LIBRARY_ID.to_string(),
+            name: BUILTIN_LIBRARY_NAME.to_string(),
+            enabled: true,
+            format: LibraryFormat::Txt,
+            word_count: words.len(),
+            created_at: now,
+            updated_at: now,
+        },
+    );
+    save_libraries_with_paths(paths, &libraries)?;
+    Ok(())
 }
 
 impl std::fmt::Display for LibraryFormat {

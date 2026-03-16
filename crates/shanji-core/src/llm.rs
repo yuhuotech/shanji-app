@@ -184,6 +184,12 @@ pub fn load_api_key(provider_id: &str) -> Result<String> {
         .map_err(|e| AppError::Internal(e.to_string()))
 }
 
+pub fn save_api_key(provider_id: &str, key: &str) -> Result<()> {
+    keyring::Entry::new(KEYRING_SERVICE, provider_id)
+        .and_then(|entry| entry.set_password(key))
+        .map_err(|e| AppError::Internal(e.to_string()))
+}
+
 pub fn create_client(provider_id: &str, config: &RewriteConfig) -> Result<LlmClient> {
     let provider = builtin_providers()
         .into_iter()

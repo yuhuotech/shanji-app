@@ -644,6 +644,117 @@ pub fn clear_history() -> Result<UiSnapshot, String> {
     Ok(snapshot)
 }
 
+pub fn load_history_cards() -> Result<(Vec<shanji_core::history::HistoryCardData>, u32), String> {
+    let paths = resolve_app_paths();
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
+        .map_err(|e| e.to_string())?;
+    db.list_cards(20).map_err(|e| e.to_string())
+}
+
+pub fn copy_history_record(record_id: i32) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
+        .map_err(|e| e.to_string())?;
+    let record = db.get(record_id as i64)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Record {} not found", record_id))?;
+    let text = record_output_text(&record);
+    shanji_core::output::copy_to_clipboard(&text).map_err(|e| e.to_string())
+}
+
+pub fn paste_history_record(record_id: i32) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
+        .map_err(|e| e.to_string())?;
+    let record = db.get(record_id as i64)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Record {} not found", record_id))?;
+    let cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
+    let text = record_output_text(&record);
+    shanji_core::output::deliver_output(&text, &cfg.output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn delete_history_record(record_id: i32) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
+        .map_err(|e| e.to_string())?;
+    db.delete(record_id as i64).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn play_history_audio(record_id: i32) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
+        .map_err(|e| e.to_string())?;
+    let record = db.get(record_id as i64)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Record {} not found", record_id))?;
+    let audio_path = record.audio_path
+        .ok_or_else(|| format!("Record {} has no audio file", record_id))?;
+    open_path_in_system(&audio_path)
+}
+
+pub fn retranscribe_history(record_id: i32) -> Result<(), String> {
+    // Phase 1：仅打开音频文件（完整重新转录需要音频管道，暂留为占位实现）
+    play_history_audio(record_id)
+}
+
+pub fn set_llm_base_url(url: String) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
+    if let Some(provider) = cfg.rewrite.providers.first_mut() {
+        provider.base_url = url;
+    }
+    shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
+}
+
+pub fn set_llm_model_name(model: String) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
+    if let Some(provider) = cfg.rewrite.providers.first_mut() {
+        provider.model = model;
+    }
+    shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
+}
+
+pub fn set_llm_api_key(key: String) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    let cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
+    let provider_id = cfg.rewrite.providers.first()
+        .map(|p| p.id.clone())
+        .unwrap_or_else(|| cfg.rewrite.active_provider_id.clone());
+    if provider_id.is_empty() {
+        return Err("No LLM provider configured".to_string());
+    }
+    shanji_core::llm::save_api_key(&provider_id, &key).map_err(|e| e.to_string())
+}
+
+pub fn set_llm_system_prompt(prompt: String) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
+    // system_prompt 存在于 prompts 列表中，修改当前激活的 prompt preset
+    let active_id = cfg.rewrite.active_prompt_id.clone();
+    if let Some(preset) = cfg.rewrite.prompts.iter_mut()
+        .find(|p| p.id == active_id && !p.is_builtin)
+    {
+        preset.system_prompt = prompt;
+    } else {
+        // 如果没有自定义 preset，创建一个
+        cfg.rewrite.prompts.push(shanji_core::config::PromptPreset {
+            id: "custom".to_string(),
+            name: "自定义".to_string(),
+            system_prompt: prompt,
+            is_builtin: false,
+        });
+        cfg.rewrite.active_prompt_id = "custom".to_string();
+    }
+    shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
+}
+
 pub fn paste_latest_history() -> Result<HistoryWindowSnapshot, String> {
     let paths = resolve_app_paths();
     let db = HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;

@@ -34,7 +34,6 @@ pub fn ensure_vad_model(target_path: &Path) -> Result<()> {
 
 const FRAME_SIZE: usize = 512;
 const PRE_BUFFER_FRAMES: usize = 6; // 200ms
-const TAIL_FRAMES: usize = 15; // 500ms
 const SAMPLE_RATE: i64 = 16000;
 
 #[derive(Debug)]
@@ -48,36 +47,54 @@ pub enum VadEvent {
 #[derive(Debug, PartialEq)]
 enum VadState {
     Silence,
+    SpeechStarting,
     Speaking,
     SpeechEnding,
 }
 
 pub struct VadDetector {
     session: Session,
-    threshold: f32,
+    start_threshold: f32,
+    end_threshold: f32,
+    min_speech_frames: usize,
     /// Silero VAD v5 RNN state，shape [2, 1, 128]
     rnn_state: Array3<f32>,
     vad_state: VadState,
     /// 前置缓冲，保存最近 PRE_BUFFER_FRAMES 帧
     pre_buffer: VecDeque<Vec<f32>>,
+    startup_buffer: Vec<Vec<f32>>,
+    speech_frames: usize,
     tail_remaining: usize,
+    tail_frames: usize,
     frame_buffer: Vec<f32>,
 }
 
 impl VadDetector {
-    pub fn new(model_path: &Path, threshold: f32) -> Result<Self> {
+    pub fn new(
+        model_path: &Path,
+        start_threshold: f32,
+        end_threshold: f32,
+        min_speech_frames: u32,
+        silence_timeout_ms: u32,
+    ) -> Result<Self> {
         let session = Session::builder()
             .map_err(|e| AppError::Asr(format!("VAD session builder failed: {}", e)))?
             .commit_from_file(model_path)
             .map_err(|e| AppError::Asr(format!("Failed to load VAD model: {}", e)))?;
+        let tail_frames = ((silence_timeout_ms as f32) / 32.0).round().max(1.0) as usize;
 
         Ok(Self {
             session,
-            threshold,
+            start_threshold,
+            end_threshold: end_threshold.min(start_threshold),
+            min_speech_frames: min_speech_frames.max(1) as usize,
             rnn_state: Array3::<f32>::zeros((2, 1, 128)),
             vad_state: VadState::Silence,
             pre_buffer: VecDeque::with_capacity(PRE_BUFFER_FRAMES + 1),
+            startup_buffer: Vec::with_capacity(PRE_BUFFER_FRAMES + 4),
+            speech_frames: 0,
             tail_remaining: 0,
+            tail_frames,
             frame_buffer: Vec::with_capacity(FRAME_SIZE * 2),
         })
     }
@@ -101,34 +118,57 @@ impl VadDetector {
 
         match self.vad_state {
             VadState::Silence => {
-                if self.pre_buffer.len() >= PRE_BUFFER_FRAMES {
-                    self.pre_buffer.pop_front();
-                }
-                self.pre_buffer.push_back(frame);
+                self.push_pre_buffer(frame);
 
-                if prob >= self.threshold {
-                    self.vad_state = VadState::Speaking;
-                    // 回放前置缓冲
-                    let mut speech: Vec<f32> = Vec::new();
-                    for buf in self.pre_buffer.drain(..) {
-                        speech.extend(buf);
+                if prob >= self.start_threshold {
+                    self.vad_state = VadState::SpeechStarting;
+                    self.speech_frames = 1;
+                    self.startup_buffer = self.pre_buffer.iter().cloned().collect();
+
+                    if self.min_speech_frames <= 1 {
+                        self.vad_state = VadState::Speaking;
+                        return Ok(VadEvent::Speech(self.take_startup_speech()));
                     }
-                    Ok(VadEvent::Speech(speech))
+
+                    Ok(VadEvent::Silence)
                 } else {
                     Ok(VadEvent::Silence)
                 }
             }
 
+            VadState::SpeechStarting => {
+                if prob >= self.start_threshold {
+                    self.speech_frames += 1;
+                    self.startup_buffer.push(frame);
+
+                    if self.speech_frames >= self.min_speech_frames {
+                        self.vad_state = VadState::Speaking;
+                        Ok(VadEvent::Speech(self.take_startup_speech()))
+                    } else {
+                        Ok(VadEvent::Silence)
+                    }
+                } else if prob < self.end_threshold {
+                    self.vad_state = VadState::Silence;
+                    self.speech_frames = 0;
+                    self.startup_buffer.clear();
+                    self.pre_buffer.clear();
+                    Ok(VadEvent::Silence)
+                } else {
+                    self.startup_buffer.push(frame);
+                    Ok(VadEvent::Silence)
+                }
+            }
+
             VadState::Speaking => {
-                if prob < self.threshold {
+                if prob < self.end_threshold {
                     self.vad_state = VadState::SpeechEnding;
-                    self.tail_remaining = TAIL_FRAMES;
+                    self.tail_remaining = self.tail_frames;
                 }
                 Ok(VadEvent::Speech(frame))
             }
 
             VadState::SpeechEnding => {
-                if prob >= self.threshold {
+                if prob >= self.start_threshold {
                     self.vad_state = VadState::Speaking;
                     return Ok(VadEvent::Speech(frame));
                 }
@@ -138,11 +178,31 @@ impl VadDetector {
                     Ok(VadEvent::Speech(frame))
                 } else {
                     self.vad_state = VadState::Silence;
+                    self.speech_frames = 0;
+                    self.startup_buffer.clear();
                     self.pre_buffer.clear();
+                    self.push_pre_buffer(frame);
                     Ok(VadEvent::Silence)
                 }
             }
         }
+    }
+
+    fn push_pre_buffer(&mut self, frame: Vec<f32>) {
+        if self.pre_buffer.len() >= PRE_BUFFER_FRAMES {
+            self.pre_buffer.pop_front();
+        }
+        self.pre_buffer.push_back(frame);
+    }
+
+    fn take_startup_speech(&mut self) -> Vec<f32> {
+        let mut speech = Vec::new();
+        for buf in self.startup_buffer.drain(..) {
+            speech.extend(buf);
+        }
+        self.pre_buffer.clear();
+        self.speech_frames = 0;
+        speech
     }
 
     fn infer(&mut self, frame: &[f32]) -> Result<f32> {
@@ -188,6 +248,8 @@ impl VadDetector {
         self.rnn_state = Array3::<f32>::zeros((2, 1, 128));
         self.vad_state = VadState::Silence;
         self.pre_buffer.clear();
+        self.startup_buffer.clear();
+        self.speech_frames = 0;
         self.tail_remaining = 0;
         self.frame_buffer.clear();
     }
