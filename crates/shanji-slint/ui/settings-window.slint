@@ -723,7 +723,7 @@ if root.active-section == SettingsSection.History: Rectangle {
                     background: Palette.card-bg;
                     border-width: 1px;
                     border-color: Palette.border;
-                    height: card-inner.min-height + 24px;
+                    height: card-inner.min-height;
 
                     card-inner := VerticalLayout {
                         padding-top: 12px;
@@ -769,15 +769,15 @@ if root.active-section == SettingsSection.History: Rectangle {
                                 border-radius: 3px;
                                 background: #eff6ff;
                                 height: 16px;
-                                width: tag-llm.preferred-width + 10px;
-                                tag-llm := Text { text: "LLM润色"; color: #3b82f6; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                                width: 56px;
+                                Text { text: "LLM润色"; color: #3b82f6; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
                             }
                             if !card.is-llm-rewritten: Rectangle {
                                 border-radius: 3px;
                                 background: #f3f4f6;
                                 height: 16px;
-                                width: tag-raw.preferred-width + 10px;
-                                tag-raw := Text { text: "原始转录"; color: Palette.text-muted; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                                width: 56px;
+                                Text { text: "原始转录"; color: Palette.text-muted; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
                             }
                             if card.has-audio: Rectangle {
                                 border-radius: 3px;
@@ -785,8 +785,8 @@ if root.active-section == SettingsSection.History: Rectangle {
                                 border-width: 1px;
                                 border-color: Palette.border;
                                 height: 16px;
-                                width: tag-audio.preferred-width + 10px;
-                                tag-audio := Text { text: "🎙 有录音"; color: Palette.text-muted; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                                width: 56px;
+                                Text { text: "🎙 有录音"; color: Palette.text-muted; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
                             }
                         }
                     }
