@@ -71,18 +71,14 @@ pub struct UiSnapshot {
 }
 
 pub struct SettingsWindowSnapshot {
-    pub status_text: String,
     pub theme_text: String,
     pub model_text: String,
-    pub network_text: String,
     pub audio_device_text: String,
     pub recording_mode_text: String,
-    pub rewrite_text: String,
     pub punct_style_text: String,
     pub append_content_text: String,
     pub hotword_summary_text: String,
     pub hotkey_summary_text: String,
-    pub overlay_visibility_text: String,
     pub config_path_text: String,
     pub llm_enabled: bool,
     pub llm_base_url: String,
@@ -379,7 +375,6 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
         crate::model_downloader::is_downloading(&cfg.asr.refine_model_id);
 
     Ok(SettingsWindowSnapshot {
-        status_text: "原生设置窗口已同步到共享配置".to_string(),
         theme_text: format!("主题: {}", cfg.general.theme),
         model_text: format!(
             "实时模型: {} ({})\n整体纠正: {} / {}",
@@ -396,29 +391,15 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
                 model_install_state_text(refine_model_downloaded, refine_model_downloading)
             )
         ),
-        network_text: format!("下载代理: {}", github_proxy_display(&cfg)),
         audio_device_text: format!(
             "音频输入: {}",
             selected_audio_device_name(&cfg, &audio::list_input_devices().unwrap_or_default())
         ),
         recording_mode_text: format!("录音模式: {}", cfg.audio.recording_mode),
-        rewrite_text: format!(
-            "LLM润色: {}",
-            if cfg.rewrite.enabled {
-                "enabled"
-            } else {
-                "disabled"
-            }
-        ),
         punct_style_text: format!("标点风格: {}", cfg.output.punct_style),
         append_content_text: format!("附加内容: {}", cfg.output.append_content),
         hotword_summary_text: load_hotword_summary(&paths),
         hotkey_summary_text: load_hotkey_summary(&cfg),
-        overlay_visibility_text: if runtime.overlay_visible {
-            "悬浮窗: visible".to_string()
-        } else {
-            "悬浮窗: hidden".to_string()
-        },
         config_path_text: format!("配置路径: {}", paths.config_file().display()),
         llm_enabled: cfg.rewrite.enabled,
         llm_base_url: cfg.rewrite.providers.first()
