@@ -373,7 +373,7 @@ impl HistoryDb {
         let total = self.count()?;
         let records = self.list(0, limit)?;
         let cards = records.into_iter().filter_map(|r| {
-            let id = r.id? as i32;
+            let id = i32::try_from(r.id?).ok()?;
             // 注意：先捕获 is_llm_rewritten，再 move rewritten 字段
             let is_llm_rewritten = r.rewritten.as_ref()
                 .map(|s| !s.is_empty()).unwrap_or(false);
@@ -603,5 +603,29 @@ mod tests {
         db.insert(&record).unwrap();
         let (cards, _) = db.list_cards(20).unwrap();
         assert!(!cards[0].has_audio);
+    }
+
+    #[test]
+    fn test_list_cards_corrected_transcribed_fallback() {
+        let db = create_test_db();
+        let record = HistoryRecord {
+            id: None,
+            created_at: 1000000000000,
+            transcribed: "raw".to_string(),
+            rewritten: None,
+            live_transcribed: None,
+            corrected_transcribed: Some("corrected".to_string()),
+            duration_ms: None,
+            model_id: None,
+            live_model_id: None,
+            refine_model_id: None,
+            refine_enabled: false,
+            provider_id: None,
+            audio_path: None,
+        };
+        db.insert(&record).unwrap();
+        let (cards, _) = db.list_cards(20).unwrap();
+        assert_eq!(cards[0].text, "corrected");
+        assert!(!cards[0].is_llm_rewritten);
     }
 }
