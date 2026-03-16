@@ -164,11 +164,7 @@ fn main() -> Result<(), slint::PlatformError> {
     });
 
     let weak_settings = settings.as_weak();
-    settings.on_refresh_requested(move || {
-        if let Some(settings) = weak_settings.upgrade() {
-            apply_settings_snapshot(&settings, app::refresh_settings_window());
-        }
-    });
+    // NOTE: on_refresh_requested removed in new settings-window design
 
     let weak = app.as_weak();
     let weak_overlay = overlay.as_weak();
@@ -605,22 +601,18 @@ fn apply_settings_snapshot(
 ) {
     match result {
         Ok(snapshot) => {
-            settings.set_settings_status_text(snapshot.status_text.into());
             settings.set_theme_text(snapshot.theme_text.into());
             settings.set_model_text(snapshot.model_text.into());
-            settings.set_network_text(snapshot.network_text.into());
             settings.set_audio_device_text(snapshot.audio_device_text.into());
             settings.set_recording_mode_text(snapshot.recording_mode_text.into());
-            settings.set_rewrite_text(snapshot.rewrite_text.into());
             settings.set_punct_style_text(snapshot.punct_style_text.into());
             settings.set_append_content_text(snapshot.append_content_text.into());
             settings.set_hotword_summary_text(snapshot.hotword_summary_text.into());
             settings.set_hotkey_summary_text(snapshot.hotkey_summary_text.into());
-            settings.set_overlay_visibility_text(snapshot.overlay_visibility_text.into());
             settings.set_config_path_text(snapshot.config_path_text.into());
         }
-        Err(err) => {
-            settings.set_settings_status_text(format!("设置操作失败: {}", err).into());
+        Err(_err) => {
+            // status display handled elsewhere in new settings design
         }
     }
 }

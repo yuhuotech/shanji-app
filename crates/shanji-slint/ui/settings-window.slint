@@ -1,23 +1,147 @@
-import { Button, ScrollView } from "std-widgets.slint";
+import { Button, ScrollView, LineEdit, TextEdit, CheckBox } from "std-widgets.slint";
 
+// ── 配色 Palette（浅色模式，in-out 支持将来深色模式切换）─────────────────
+global Palette {
+    in-out property <brush> sidebar-bg: #f3f4f6;
+    in-out property <brush> content-bg: #ffffff;
+    in-out property <brush> card-bg: #f9fafb;
+    in-out property <brush> border: #e5e7eb;
+    in-out property <brush> text-primary: #111827;
+    in-out property <brush> text-secondary: #6b7280;
+    in-out property <brush> text-muted: #9ca3af;
+    in-out property <brush> nav-active-bg: #e5e7eb;
+    in-out property <brush> accent: #2563eb;
+    in-out property <brush> danger: #dc2626;
+    in-out property <brush> danger-bg: #fef2f2;
+    in-out property <brush> danger-border: #fecaca;
+}
+
+// ── 页面枚举 ──────────────────────────────────────────────────────────────
+enum SettingsSection { Asr, Llm, Output, Hotkeys, Network, History, About }
+
+// ── 历史卡片数据结构 ───────────────────────────────────────────────────────
+struct HistoryCardData {
+    record-id: int,
+    timestamp: string,
+    text: string,
+    has-audio: bool,
+    is-llm-rewritten: bool,
+    was-pasted: bool,
+}
+
+// ── 可复用：侧边栏菜单项 ──────────────────────────────────────────────────
+component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <bool> active: false;
+    callback clicked;
+
+    height: 34px;
+    border-radius: 6px;
+    background: active ? Palette.nav-active-bg : transparent;
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: start;
+        spacing: 8px;
+
+        Text {
+            text: root.label;
+            color: root.active ? Palette.text-primary : Palette.text-secondary;
+            font-size: 13px;
+            font-weight: root.active ? 600 : 400;
+            vertical-alignment: center;
+        }
+    }
+}
+
+// ── 可复用：设置分组标题 ──────────────────────────────────────────────────
+component SectionLabel inherits Text {
+    in property <string> label;
+    text: root.label;
+    color: Palette.text-muted;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+}
+
+// ── 可复用：开关控件 ───────────────────────────────────────────────────────
+component ToggleSwitch inherits Rectangle {
+    in-out property <bool> checked: false;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+
+    width: 36px;
+    height: 20px;
+    border-radius: 10px;
+    background: root.checked ? (root.enabled ? Palette.accent : #93c5fd) : #d1d5db;
+
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+        mouse-cursor: pointer;
+    }
+
+    thumb := Rectangle {
+        x: root.checked ? (parent.width - self.width - 2px) : 2px;
+        y: 2px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: #ffffff;
+
+        animate x { duration: 120ms; easing: ease-in-out; }
+    }
+}
+
+// ── 主窗口 ─────────────────────────────────────────────────────────────────
 export component SettingsWindow inherits Window {
-    in-out property <string> settings-status-text: "设置已同步";
-    in-out property <string> theme-text: "主题: system";
-    in-out property <string> model-text: "模型: paraformer-zh";
-    in-out property <string> network-text: "下载代理: 直连 GitHub";
-    in-out property <string> audio-device-text: "音频输入: system default";
-    in-out property <string> recording-mode-text: "录音模式: toggle";
-    in-out property <string> rewrite-text: "LLM润色: disabled";
-    in-out property <string> punct-style-text: "标点风格: zh";
-    in-out property <string> append-content-text: "附加内容: space";
-    in-out property <string> hotword-summary-text: "热词库: no libraries";
-    in-out property <string> hotkey-summary-text: "快捷键: unavailable";
-    in-out property <string> overlay-visibility-text: "悬浮窗: hidden";
-    in-out property <string> config-path-text: "配置路径: unknown";
+    // ── 导航状态 ──
+    in-out property <SettingsSection> active-section: SettingsSection.Asr;
 
-    callback refresh-requested();
-    callback cycle-theme-requested();
-    callback cycle-github-proxy-requested();
+    // ── ASR 页属性 ──
+    in-out property <string> model-text: "paraformer-zh-streaming";
+    in-out property <string> audio-device-text: "系统默认";
+    in-out property <string> recording-mode-text: "toggle";
+    in-out property <bool>   refine-asr-enabled: false;
+    in-out property <string> hotword-summary-text: "无热词库";
+
+    // ── LLM 页属性 ──
+    in-out property <bool>   llm-enabled: false;
+    in-out property <string> llm-base-url: "https://api.openai.com/v1";
+    in-out property <string> llm-model-name: "gpt-4o-mini";
+    in-out property <string> llm-system-prompt: "";
+
+    // ── Output 页属性 ──
+    in-out property <string> punct-style-text: "zh";
+    in-out property <string> append-content-text: "space";
+    in-out property <bool>   overlay-visible: false;
+    in-out property <string> theme-text: "system";
+
+    // ── Hotkeys 页属性 ──
+    in-out property <string> hotkey-summary-text: "未设置";
+
+    // ── Network 页属性 ──
+    in-out property <int>    github-proxy-index: 0;
+
+    // ── History 页属性 ──
+    in property  <[HistoryCardData]> history-records: [];
+    in-out property <string> history-stats-text: "共 0 条";
+
+    // ── About 页属性 ──
+    in-out property <string> app-version-text: "v0.1";
+    in-out property <string> config-path-text: "";
+
+    // ── Callbacks ──
+    // ASR
     callback cycle-live-model-requested();
     callback cycle-refine-model-requested();
     callback toggle-refine-asr-requested();
@@ -25,113 +149,192 @@ export component SettingsWindow inherits Window {
     callback download-refine-model-requested();
     callback cycle-audio-device-requested();
     callback cycle-recording-mode-requested();
+    callback toggle-hotword-requested();
+    // LLM
     callback toggle-rewrite-requested();
+    callback set-llm-base-url(string);
+    callback set-llm-api-key(string);
+    callback set-llm-model-name(string);
+    callback set-llm-system-prompt(string);
+    // Output
     callback cycle-punct-style-requested();
     callback cycle-append-content-requested();
-    callback toggle-hotword-requested();
     callback toggle-overlay-requested();
+    callback cycle-theme-requested();
+    // Hotkeys
+    callback record-hotkey-requested();
+    // Network
+    callback cycle-github-proxy-requested();
+    // History
+    callback refresh-history-requested();
+    callback clear-history-requested();
+    callback play-audio-requested(int);
+    callback retranscribe-requested(int);
+    callback copy-record-requested(int);
+    callback paste-record-requested(int);
+    callback delete-record-requested(int);
+    // About
     callback clear-session-requested();
 
-    title: "闪记设置";
-    width: 760px;
-    height: 720px;
+    title: "闪记";
+    width: 900px;
+    height: 620px;
     default-font-family: "Hiragino Sans GB";
 
     Rectangle {
-        background: #f4efe6;
+        background: Palette.content-bg;
 
-        ScrollView {
-            width: parent.width;
-            height: parent.height;
+        HorizontalLayout {
 
-            content := VerticalLayout {
-                width: max(root.width - 48px, 360px);
-                padding: 24px;
-                spacing: 16px;
+            // ── 左侧边栏 ─────────────────────────────────────────────────
+            Rectangle {
+                width: 180px;
+                background: Palette.sidebar-bg;
+                border-width: 0px;
 
+                // 右侧 1px 分割线
                 Rectangle {
-                    border-radius: 20px;
-                    background: #24303c;
+                    x: parent.width - 1px;
+                    width: 1px;
+                    height: parent.height;
+                    background: Palette.border;
+                }
 
-                    VerticalLayout {
-                        padding: 20px;
-                        spacing: 8px;
+                VerticalLayout {
+                    padding: 0px;
 
-                        Text {
-                            text: "设置";
-                            color: #f8f1e2;
-                            font-size: 28px;
-                            font-weight: 700;
+                    // App 信息区
+                    Rectangle {
+                        height: 56px;
+                        VerticalLayout {
+                            padding-left: 14px;
+                            padding-right: 14px;
+                            alignment: center;
+                            spacing: 2px;
+                            Text {
+                                text: "闪记";
+                                color: Palette.text-primary;
+                                font-size: 15px;
+                                font-weight: 800;
+                            }
+                            Text {
+                                text: root.app-version-text + " · 设置";
+                                color: Palette.text-muted;
+                                font-size: 11px;
+                            }
                         }
-
-                        Text {
-                            text: settings-status-text;
-                            color: #ddd1bf;
-                            wrap: word-wrap;
-                            font-size: 14px;
+                        // 底部分割线
+                        Rectangle {
+                            y: parent.height - 1px;
+                            height: 1px;
+                            background: Palette.border;
                         }
                     }
-                }
 
-                HorizontalLayout {
-                    spacing: 12px;
+                    // 菜单项
+                    Rectangle { height: 6px; }  // 顶部间距
 
-                    Button { text: "刷新"; primary: true; clicked => { root.refresh-requested(); } }
-                    Button { text: "切换主题"; clicked => { root.cycle-theme-requested(); } }
-                    Button { text: "切换下载代理"; clicked => { root.cycle-github-proxy-requested(); } }
-                    Button { text: "切换实时模型"; clicked => { root.cycle-live-model-requested(); } }
-                    Button { text: "切换纠正模型"; clicked => { root.cycle-refine-model-requested(); } }
-                }
-
-                HorizontalLayout {
-                    spacing: 12px;
-
-                    Button { text: "切换设备"; clicked => { root.cycle-audio-device-requested(); } }
-                    Button { text: "录音模式"; clicked => { root.cycle-recording-mode-requested(); } }
-                    Button { text: "整体纠正"; clicked => { root.toggle-refine-asr-requested(); } }
-                    Button { text: "下载实时模型"; clicked => { root.download-live-model-requested(); } }
-                    Button { text: "下载纠正模型"; clicked => { root.download-refine-model-requested(); } }
-                }
-
-                HorizontalLayout {
-                    spacing: 12px;
-
-                    Button { text: "LLM润色"; clicked => { root.toggle-rewrite-requested(); } }
-                    Button { text: "标点风格"; clicked => { root.cycle-punct-style-requested(); } }
-                    Button { text: "追加内容"; clicked => { root.cycle-append-content-requested(); } }
-                }
-
-                HorizontalLayout {
-                    spacing: 12px;
-
-                    Button { text: "热词开关"; clicked => { root.toggle-hotword-requested(); } }
-                    Button { text: "悬浮窗"; clicked => { root.toggle-overlay-requested(); } }
-                    Button { text: "清理会话"; clicked => { root.clear-session-requested(); } }
-                }
-
-                Rectangle {
-                    border-radius: 18px;
-                    background: #fffaf0;
-                    border-width: 1px;
-                    border-color: #d4c7b1;
-
-                    VerticalLayout {
-                        padding: 18px;
-                        spacing: 10px;
-
-                        Text { text: theme-text; color: #2e261f; font-size: 15px; }
-                        Text { text: model-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
-                        Text { text: network-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
-                        Text { text: audio-device-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
-                        Text { text: recording-mode-text; color: #2e261f; font-size: 15px; }
-                        Text { text: rewrite-text; color: #2e261f; font-size: 15px; }
-                        Text { text: punct-style-text; color: #2e261f; font-size: 15px; }
-                        Text { text: append-content-text; color: #2e261f; font-size: 15px; }
-                        Text { text: hotword-summary-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
-                        Text { text: hotkey-summary-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
-                        Text { text: overlay-visibility-text; color: #2e261f; font-size: 15px; }
-                        Text { text: config-path-text; color: #75695e; wrap: word-wrap; font-size: 13px; }
+                    Rectangle {
+                        height: 34px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        NavItem {
+                            width: 100%;
+                            label: "🎙 语音识别";
+                            active: root.active-section == SettingsSection.Asr;
+                            clicked => { root.active-section = SettingsSection.Asr; }
+                        }
                     }
+                    Rectangle {
+                        height: 34px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        NavItem {
+                            width: 100%;
+                            label: "✨ LLM 润色";
+                            active: root.active-section == SettingsSection.Llm;
+                            clicked => { root.active-section = SettingsSection.Llm; }
+                        }
+                    }
+                    Rectangle {
+                        height: 34px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        NavItem {
+                            width: 100%;
+                            label: "⌨️ 输出";
+                            active: root.active-section == SettingsSection.Output;
+                            clicked => { root.active-section = SettingsSection.Output; }
+                        }
+                    }
+                    Rectangle {
+                        height: 34px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        NavItem {
+                            width: 100%;
+                            label: "🔑 快捷键";
+                            active: root.active-section == SettingsSection.Hotkeys;
+                            clicked => { root.active-section = SettingsSection.Hotkeys; }
+                        }
+                    }
+                    Rectangle {
+                        height: 34px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        NavItem {
+                            width: 100%;
+                            label: "🌐 网络";
+                            active: root.active-section == SettingsSection.Network;
+                            clicked => { root.active-section = SettingsSection.Network; }
+                        }
+                    }
+                    Rectangle {
+                        height: 34px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        NavItem {
+                            width: 100%;
+                            label: "🕑 历史记录";
+                            active: root.active-section == SettingsSection.History;
+                            clicked => { root.active-section = SettingsSection.History; }
+                        }
+                    }
+
+                    // 弹性空白
+                    Rectangle { vertical-stretch: 1; }
+
+                    // 关于（置底）
+                    Rectangle {
+                        height: 1px;
+                        background: Palette.border;
+                    }
+                    Rectangle {
+                        height: 34px;
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        NavItem {
+                            width: 100%;
+                            label: "ℹ️ 关于";
+                            active: root.active-section == SettingsSection.About;
+                            clicked => { root.active-section = SettingsSection.About; }
+                        }
+                    }
+                    Rectangle { height: 8px; }
+                }
+            }
+
+            // ── 右侧内容区（各页面在 Task 4 中填充）─────────────────────
+            Rectangle {
+                horizontal-stretch: 1;
+                background: Palette.content-bg;
+                clip: true;
+
+                Text {
+                    text: "Loading...";
+                    color: Palette.text-muted;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
                 }
             }
         }
