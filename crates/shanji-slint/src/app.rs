@@ -70,12 +70,6 @@ pub struct UiSnapshot {
     pub overlay_body_text: String,
 }
 
-pub struct HistoryWindowSnapshot {
-    pub status_text: String,
-    pub stats_text: String,
-    pub list_text: String,
-}
-
 pub struct SettingsWindowSnapshot {
     pub status_text: String,
     pub theme_text: String,
@@ -445,23 +439,6 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
     })
 }
 
-pub fn refresh_history_window() -> Result<HistoryWindowSnapshot, String> {
-    let paths = resolve_app_paths();
-    let db = HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
-    let total = db.count().map_err(|e| e.to_string())?;
-    let records = db.list(0, 20).map_err(|e| e.to_string())?;
-
-    Ok(HistoryWindowSnapshot {
-        status_text: if records.is_empty() {
-            "Native history window ready".to_string()
-        } else {
-            "Native history window synced from shared core".to_string()
-        },
-        stats_text: format!("History: {} total records", total),
-        list_text: format_history_records(&records),
-    })
-}
-
 pub fn cycle_theme() -> Result<UiSnapshot, String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
@@ -782,69 +759,6 @@ pub fn set_llm_system_prompt(prompt: String) -> Result<(), String> {
         cfg.rewrite.active_prompt_id = "custom".to_string();
     }
     shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
-}
-
-pub fn paste_latest_history() -> Result<HistoryWindowSnapshot, String> {
-    let paths = resolve_app_paths();
-    let db = HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
-    let record = latest_history_record(&db)?;
-    let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    let text = record_output_text(&record);
-
-    let delivery =
-        shanji_core::output::deliver_output(&text, &cfg.output).map_err(|e| e.to_string())?;
-    let mut snapshot = refresh_history_window()?;
-    snapshot.status_text = if let Some(err) = delivery.auto_paste_error {
-        format!(
-            "Latest history copied to clipboard because auto-paste failed: {}",
-            err
-        )
-    } else {
-        "Latest history pasted to active cursor target".to_string()
-    };
-    Ok(snapshot)
-}
-
-pub fn play_latest_history_audio() -> Result<HistoryWindowSnapshot, String> {
-    let paths = resolve_app_paths();
-    let db = HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
-    let record = latest_history_record(&db)?;
-    let audio_path = record
-        .audio_path
-        .clone()
-        .ok_or_else(|| "Latest history record has no audio file".to_string())?;
-    open_path_in_system(&audio_path)?;
-
-    let mut snapshot = refresh_history_window()?;
-    snapshot.status_text = format!("Opened latest history audio: {}", audio_path);
-    Ok(snapshot)
-}
-
-pub fn copy_latest_history() -> Result<HistoryWindowSnapshot, String> {
-    let paths = resolve_app_paths();
-    let db = HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
-    let record = latest_history_record(&db)?;
-    let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    let text = shanji_core::output::format_output(&record_output_text(&record), &cfg.output);
-    shanji_core::output::copy_to_clipboard(&text).map_err(|e| e.to_string())?;
-
-    let mut snapshot = refresh_history_window()?;
-    snapshot.status_text = "Latest history copied to clipboard".to_string();
-    Ok(snapshot)
-}
-
-pub fn delete_latest_history() -> Result<HistoryWindowSnapshot, String> {
-    let paths = resolve_app_paths();
-    let db = HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
-    let record = latest_history_record(&db)?;
-    let id = record
-        .id
-        .ok_or_else(|| "Latest history record is missing an id".to_string())?;
-    db.delete(id).map_err(|e| e.to_string())?;
-
-    let mut snapshot = refresh_history_window()?;
-    snapshot.status_text = "Deleted latest history record".to_string();
-    Ok(snapshot)
 }
 
 pub fn start_model_download() -> Result<UiSnapshot, String> {
@@ -1246,46 +1160,6 @@ fn load_history_preview(paths: &AppPaths) -> String {
         Ok(_) => "No history records yet".to_string(),
         Err(_) => "History preview unavailable".to_string(),
     }
-}
-
-fn format_history_records(records: &[shanji_core::history::HistoryRecord]) -> String {
-    if records.is_empty() {
-        return "No history records yet".to_string();
-    }
-
-    records
-        .iter()
-        .enumerate()
-        .map(|(idx, record)| {
-            let body = record_output_text(record);
-            let audio_tag = if record.audio_path.is_some() {
-                " / 含录音"
-            } else {
-                ""
-            };
-            let refine_tag = if record.refine_enabled {
-                " / 已纠正"
-            } else {
-                ""
-            };
-            format!(
-                "{}. {}{}{}",
-                idx + 1,
-                truncate(&body, 120),
-                audio_tag,
-                refine_tag
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
-}
-
-fn latest_history_record(db: &HistoryDb) -> Result<shanji_core::history::HistoryRecord, String> {
-    db.list(0, 1)
-        .map_err(|e| e.to_string())?
-        .into_iter()
-        .next()
-        .ok_or_else(|| "No history records available".to_string())
 }
 
 fn record_output_text(record: &shanji_core::history::HistoryRecord) -> String {
