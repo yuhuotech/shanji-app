@@ -27,3 +27,5 @@ dist-models/
 
 # Build output
 target/
+.superpowers/
+scripts/__pycache__
