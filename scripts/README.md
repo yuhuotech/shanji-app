@@ -22,7 +22,7 @@ python download_models.py
 
 ```bash
 python export_funasr_model.py \
-    --model damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch \
+    --model iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch \
     --output ./models/paraformer-zh
 ```
 
@@ -30,49 +30,65 @@ python export_funasr_model.py \
 
 ```bash
 python export_funasr_model.py \
-    --model damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online \
+    --model iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online \
     --output ./models/paraformer-zh-streaming
 ```
+
+### 4. 直接上传流式 ONNX 文件到 GitHub Release
+
+```bash
+./scripts/publish_paraformer_zh_streaming.sh \
+    --repo yuhuotech/paraformer-zh
+```
+
+### 5. 直接上传整体转写 ONNX 文件到 GitHub Release
+
+```bash
+./scripts/publish_paraformer_zh.sh \
+    --repo yuhuotech/paraformer-zh
+```
+
+这两个发布脚本都不会打包 `.tar.gz`，而是：
+- 导出模型
+- 将文件重命名为统一标准命名
+- 更新 `public/model_registry.json` 为 `backend + artifacts(role,fileName)` 结构
+- 直接上传模型目录里的所有文件和 `model_registry.json`
 
 ## 支持的模型
 
 | 模型 | ModelScope ID | 说明 |
 |------|--------------|------|
-| Paraformer 中文 | `damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | 非流式，精度高 |
-| Paraformer 流式中文 | `damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online` | 流式，延迟低 |
-| Paraformer 英文 | `damo/speech_paraformer-large_asr_nat-en-16k-common-vocab10020` | 英语识别 |
+| Paraformer 中文 | `iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch` | 非流式，精度高 |
+| Paraformer 流式中文 | `iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online` | 流式，延迟低 |
+| Paraformer 英文 | `iic/speech_paraformer-large_asr_nat-en-16k-common-vocab10020` | 英语识别 |
 
 ## 输出文件结构
 
 ```text
 models/paraformer-zh/
-├── encoder.onnx
-├── decoder.onnx
-├── vocab.txt
-└── config.yaml
+├── paraformer-zh-model.onnx
+├── paraformer-zh-model-quant.onnx
+├── paraformer-zh-am.mvn
+├── paraformer-zh-config.yaml
+└── paraformer-zh-vocab.txt
 ```
 
-## 发布模型包
-
-桌面应用当前接受 `.tar.gz` 模型包，并通过模型注册表读取下载地址。可使用：
-
-```bash
-./scripts/publish_paraformer_zh.sh
-```
-
-该脚本默认会：
-- 导出 `./models/paraformer-zh`
-- 打包为 `.tar.gz`
-- 更新 `public/model_registry.json`
-- 上传到 GitHub Release
-
-如果只想本地打包：
-
-```bash
-./scripts/publish_paraformer_zh.sh --package-only
+```text
+models/paraformer-zh-streaming/
+├── paraformer-zh-streaming-encoder.onnx
+├── paraformer-zh-streaming-encoder-quant.onnx
+├── paraformer-zh-streaming-decoder.onnx
+├── paraformer-zh-streaming-decoder-quant.onnx
+├── paraformer-zh-streaming-am.mvn
+├── paraformer-zh-streaming-config.yaml
+└── paraformer-zh-streaming-vocab.txt
 ```
 
 ## 备注
 
-- 模型文件格式、下载地址和校验逻辑由当前原生项目直接使用
+- 运行时不再依赖 `tokens.txt -> vocab.txt` 的特殊重命名
+- 模型文件名和下载文件名保持一致，由 registry 中的 artifact role 驱动加载
 - `public/model_registry.json` 是当前模型注册表位置
+- 桌面应用内置 GitHub 下载代理配置，默认使用 `https://ghfast.top/`
+- 设置窗口可在 `https://ghfast.top/`、`https://gh-proxy.com/` 和直连 GitHub 之间切换
+- 代理会同时作用于 `model_registry.json` 和 release 资产下载，代理失败时会自动回退直连

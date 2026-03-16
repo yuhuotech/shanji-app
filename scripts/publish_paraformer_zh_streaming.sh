@@ -4,33 +4,34 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REGISTRY_PATH="${ROOT_DIR}/public/model_registry.json"
-MODEL_ID="paraformer-zh"
-MODEL_NAME="Paraformer 中文"
+MODEL_ID="paraformer-zh-streaming"
+MODEL_NAME="Paraformer 流式中文"
 MODEL_LANGUAGE="zh"
-MODEL_DESCRIPTION="中文普通话语音识别模型"
-MODEL_SOURCE="iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+MODEL_DESCRIPTION="中文流式语音识别模型，适合低延迟实时转写"
+MODEL_SOURCE="iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online"
 MODEL_DIR="${ROOT_DIR}/models/${MODEL_ID}"
 VERSION="v1.0.0"
 DEVICE="cpu"
 RELEASE_TAG="models"
 REPO="yuhuotech/paraformer-zh"
 SKIP_EXPORT="false"
-MANUAL_EXPORT="false"
+MANUAL_EXPORT="true"
 REGISTRY_ONLY="false"
 MODELSCOPE_CACHE_DIR="${ROOT_DIR}/.modelscope_cache"
 
 usage() {
   cat <<'EOF'
-导出 Paraformer 中文整体转写模型并将所有文件直接上传到 GitHub Release
+导出 Paraformer 流式中文模型并将所有文件直接上传到 GitHub Release
 
 默认会执行：
 1. 如本地模型目录不存在，则从官方 FunASR / ModelScope 导出 ONNX
-2. 将导出结果重命名为统一的标准文件名
-3. 更新 public/model_registry.json 为“逐文件下载”模式
-4. 上传模型文件和 model_registry.json 到目标仓库 release
+2. 更新 public/model_registry.json 为“逐文件下载”模式
+3. 将导出结果重命名为统一的标准文件名
+4. 上传统一命名后的所有模型文件
+5. 上传 model_registry.json 到目标仓库 release
 
 用法：
-  ./scripts/publish_paraformer_zh.sh
+  ./scripts/publish_paraformer_zh_streaming.sh
 
 常用选项：
   --version v1.0.0                版本号
@@ -39,7 +40,7 @@ usage() {
   --release-tag models            Release tag
   --model-dir PATH                自定义模型目录
   --skip-export                   跳过导出，直接上传当前模型目录
-  --manual-export                 显式启用手动导出模式
+  --manual-export                 显式启用手动导出模式（默认已启用）
   --registry-only                 只更新并上传 model_registry.json，不上传模型文件
   --help                          显示帮助
 
@@ -87,11 +88,16 @@ rename_if_exists() {
 
 normalize_model_dir() {
   local model_dir="$1"
-  rename_if_exists "${model_dir}/model.onnx" "${model_dir}/${MODEL_ID}-model.onnx"
-  rename_if_exists "${model_dir}/model_quant.onnx" "${model_dir}/${MODEL_ID}-model-quant.onnx"
-  rename_if_exists "${model_dir}/am.mvn" "${model_dir}/${MODEL_ID}-am.mvn"
-  rename_if_exists "${model_dir}/asr.yaml" "${model_dir}/${MODEL_ID}-config.yaml"
+  rename_if_exists "${model_dir}/model.onnx" "${model_dir}/${MODEL_ID}-encoder.onnx"
+  rename_if_exists "${model_dir}/encoder.onnx" "${model_dir}/${MODEL_ID}-encoder.onnx"
+  rename_if_exists "${model_dir}/model_quant.onnx" "${model_dir}/${MODEL_ID}-encoder-quant.onnx"
+  rename_if_exists "${model_dir}/encoder_quant.onnx" "${model_dir}/${MODEL_ID}-encoder-quant.onnx"
+  rename_if_exists "${model_dir}/encoder.int8.onnx" "${model_dir}/${MODEL_ID}-encoder-quant.onnx"
+  rename_if_exists "${model_dir}/decoder.onnx" "${model_dir}/${MODEL_ID}-decoder.onnx"
+  rename_if_exists "${model_dir}/decoder_quant.onnx" "${model_dir}/${MODEL_ID}-decoder-quant.onnx"
+  rename_if_exists "${model_dir}/decoder.int8.onnx" "${model_dir}/${MODEL_ID}-decoder-quant.onnx"
   rename_if_exists "${model_dir}/config.yaml" "${model_dir}/${MODEL_ID}-config.yaml"
+  rename_if_exists "${model_dir}/am.mvn" "${model_dir}/${MODEL_ID}-am.mvn"
   rename_if_exists "${model_dir}/vocab.txt" "${model_dir}/${MODEL_ID}-vocab.txt"
 }
 
@@ -163,7 +169,7 @@ echo "download base url: ${DOWNLOAD_BASE_URL}"
 
 if [[ "${SKIP_EXPORT}" != "true" ]]; then
   HAS_MODEL_EXPORT="false"
-  if [[ -f "${MODEL_DIR}/${MODEL_ID}-model.onnx" || -f "${MODEL_DIR}/${MODEL_ID}-model-quant.onnx" ]]; then
+  if [[ -f "${MODEL_DIR}/${MODEL_ID}-encoder.onnx" ]]; then
     HAS_MODEL_EXPORT="true"
   fi
 
@@ -172,7 +178,7 @@ if [[ "${SKIP_EXPORT}" != "true" ]]; then
     echo "detected existing exported model, skipping export"
   else
     echo
-    echo "exporting official model to ONNX..."
+    echo "exporting official streaming model to ONNX..."
     echo "using OpenMP compatibility mode for local export"
     echo "using local ModelScope cache: ${MODELSCOPE_CACHE_DIR}"
     check_python_export_deps
@@ -204,7 +210,7 @@ python3 "${ROOT_DIR}/scripts/register_model_dir.py" \
   --name "${MODEL_NAME}" \
   --language "${MODEL_LANGUAGE}" \
   --description "${MODEL_DESCRIPTION}" \
-  --backend "whole" \
+  --backend "streaming" \
   --version "${VERSION}" \
   --model-dir "${MODEL_DIR}" \
   --registry "${REGISTRY_PATH}" \

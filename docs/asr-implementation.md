@@ -128,7 +128,7 @@ models/
 cd scripts
 pip install funasr modelscope torch onnx
 python export_funasr_model.py \
-    --model damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch \
+    --model iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch \
     --output ./models/paraformer-zh
 ```
 

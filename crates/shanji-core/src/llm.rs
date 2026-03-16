@@ -28,9 +28,7 @@ impl Default for LlmConfig {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
             model: "gpt-4o-mini".to_string(),
-            system_prompt:
-                "请将以下口语化的语音转写文本改写为书面语，去除语气词和重复内容，保持原意："
-                    .to_string(),
+            system_prompt: "请将以下语音输入文本整理为适合直接输入或粘贴的最终文本：修正明显识别错误，去除语气词、口吃和重复表达，补全自然标点，保留原意，不要无端扩写。只输出整理后的文本。".to_string(),
             max_tokens: 2048,
             temperature: 0.7,
         }

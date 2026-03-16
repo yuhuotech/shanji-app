@@ -6,7 +6,7 @@
 use crate::error::{AppError, Result};
 use ndarray::{Array1, Array3, Axis};
 use ort::session::Session;
-use ort::value::Tensor;
+use ort::value::{DynTensor, Tensor, TensorElementType};
 use std::collections::VecDeque;
 
 /// Paraformer encoder wrapper
@@ -23,6 +23,203 @@ pub struct EncoderCache {
     pub hidden: Array3<f32>,
     /// Previous positions
     pub pos: Array1<i64>,
+}
+
+#[derive(Clone)]
+struct OnlineCifState {
+    residual_alpha: f32,
+    residual_frame: Vec<f32>,
+    tail_threshold: f32,
+}
+
+impl OnlineCifState {
+    fn new(hidden_size: usize, tail_threshold: f32) -> Self {
+        Self {
+            residual_alpha: 0.0,
+            residual_frame: vec![0.0; hidden_size],
+            tail_threshold,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.residual_alpha = 0.0;
+        self.residual_frame.fill(0.0);
+    }
+
+    fn build_acoustic_embeds(
+        &mut self,
+        encoder_out: Option<&Array3<f32>>,
+        alphas: &[f32],
+        is_final: bool,
+    ) -> Result<Option<(Array3<f32>, i64)>> {
+        let hidden_size = self.residual_frame.len();
+        if hidden_size == 0 {
+            return Ok(None);
+        }
+
+        let mut integrate = self.residual_alpha.max(0.0);
+        let mut frames = self
+            .residual_frame
+            .iter()
+            .map(|value| *value * integrate)
+            .collect::<Vec<_>>();
+        let mut emitted = Vec::new();
+
+        if let Some(encoder_out) = encoder_out {
+            let shape = encoder_out.shape();
+            if shape[0] == 0 || shape[2] != hidden_size {
+                return Err(AppError::Asr(format!(
+                    "Unexpected encoder output shape for CIF: {:?}",
+                    shape
+                )));
+            }
+
+            for (t, alpha) in alphas.iter().copied().enumerate() {
+                let hidden = encoder_out.index_axis(Axis(1), t);
+                if alpha + integrate < 1.0 {
+                    integrate += alpha;
+                    for i in 0..hidden_size {
+                        frames[i] += alpha * hidden[[0, i]];
+                    }
+                } else {
+                    let remain = 1.0 - integrate;
+                    for i in 0..hidden_size {
+                        frames[i] += remain * hidden[[0, i]];
+                    }
+                    emitted.extend_from_slice(&frames);
+
+                    integrate = alpha + integrate - 1.0;
+                    for i in 0..hidden_size {
+                        frames[i] = integrate * hidden[[0, i]];
+                    }
+                }
+            }
+        }
+
+        if is_final && integrate > 0.0 {
+            let alpha = self.tail_threshold.max(0.0);
+            if alpha + integrate >= 1.0 {
+                emitted.extend_from_slice(&frames);
+                integrate = alpha + integrate - 1.0;
+                frames.fill(0.0);
+            } else {
+                integrate += alpha;
+            }
+        }
+
+        if integrate > 0.0 {
+            for (avg, sum) in self.residual_frame.iter_mut().zip(frames.iter()) {
+                *avg = *sum / integrate;
+            }
+        } else {
+            self.residual_frame.fill(0.0);
+        }
+        self.residual_alpha = integrate;
+
+        if emitted.is_empty() {
+            return Ok(None);
+        }
+
+        let token_count = emitted.len() / hidden_size;
+        let acoustic_embeds = Array3::from_shape_vec((1, token_count, hidden_size), emitted)
+            .map_err(|e| AppError::Asr(format!("Invalid acoustic embeds shape: {}", e)))?;
+        Ok(Some((acoustic_embeds, token_count as i64)))
+    }
+}
+
+#[derive(Clone)]
+struct OnlineDecoderCache {
+    input_name: String,
+    output_name: String,
+    channels: usize,
+    width: usize,
+    data: Vec<f32>,
+}
+
+impl OnlineDecoderCache {
+    fn zeroed(input_name: String, output_name: String, channels: usize, width: usize) -> Self {
+        Self {
+            input_name,
+            output_name,
+            channels,
+            width,
+            data: vec![0.0; channels * width],
+        }
+    }
+
+    fn from_decoder_session(session: &Session) -> Result<Vec<Self>> {
+        let mut entries = session
+            .inputs()
+            .iter()
+            .filter_map(|input| {
+                let name = input.name().to_string();
+                let suffix = name.strip_prefix("in_cache_")?.parse::<usize>().ok()?;
+                let dims = match input.dtype() {
+                    ort::value::ValueType::Tensor { shape, .. } => shape.clone(),
+                    _ => return None,
+                };
+                let channels = dims.get(1).copied().unwrap_or(512).max(1) as usize;
+                let width = dims.get(2).copied().unwrap_or(10).max(1) as usize;
+                Some((
+                    suffix,
+                    Self::zeroed(
+                        name,
+                        format!("out_cache_{}", suffix),
+                        channels,
+                        width,
+                    ),
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        entries.sort_by_key(|(suffix, _)| *suffix);
+        if entries.is_empty() {
+            return Err(AppError::Asr(
+                "Streaming decoder cache inputs not found".to_string(),
+            ));
+        }
+
+        Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+    }
+
+    fn tensor(&self) -> Result<DynTensor> {
+        Tensor::from_array(
+            ([1usize, self.channels, self.width], self.data.clone().into_boxed_slice()),
+        )
+        .map(|tensor| tensor.upcast())
+        .map_err(|e| AppError::Asr(format!("Failed to create decoder cache tensor: {}", e)))
+    }
+
+    fn update_from_outputs(&mut self, outputs: &ort::session::SessionOutputs<'_>) -> Result<()> {
+        let (shape, data) = outputs[self.output_name.as_str()]
+            .try_extract_tensor::<f32>()
+            .map_err(|e| {
+                AppError::Asr(format!(
+                    "Failed to extract decoder cache {}: {}",
+                    self.output_name, e
+                ))
+            })?;
+
+        self.channels = shape.get(1).copied().unwrap_or(self.channels as i64) as usize;
+        self.width = shape.get(2).copied().unwrap_or(self.width as i64) as usize;
+        self.data = data.to_vec();
+        Ok(())
+    }
+}
+
+enum StreamingRuntime {
+    Legacy {
+        encoder: ParaformerEncoder,
+        decoder: Option<ParaformerDecoder>,
+    },
+    Online {
+        encoder: Session,
+        decoder: Session,
+        cif_state: OnlineCifState,
+        decoder_caches: Vec<OnlineDecoderCache>,
+        last_encoder_out: Option<Array3<f32>>,
+        last_encoder_len: Vec<i64>,
+    },
 }
 
 impl ParaformerEncoder {
@@ -51,19 +248,21 @@ impl ParaformerEncoder {
     ) -> Result<(Array3<f32>, Vec<i64>)> {
         let batch_size = 1;
         let num_frames = features.len();
-        let num_mels = 80;
+        let num_mels = features.first().map(|frame| frame.len()).unwrap_or(80);
 
         if num_frames == 0 {
             return Ok((Array3::zeros((batch_size, 0, 256)), vec![0]));
         }
 
-        // Prepare input tensor [batch, frames, 80]
+        // Prepare input tensor [batch, frames, feat_dim].
+        // Streaming Paraformer encoders may expect either raw 80-dim FBanks or
+        // 560-dim LFR features, so we must preserve the actual feature width.
         let mut speech_data = Vec::with_capacity(batch_size * num_frames * num_mels);
         for frame in features {
             for &val in frame.iter().take(num_mels) {
                 speech_data.push(val);
             }
-            // Pad if frame is shorter than 80
+            // Pad if frame is shorter than the expected feature width.
             for _ in frame.len()..num_mels {
                 speech_data.push(0.0);
             }
@@ -79,20 +278,21 @@ impl ParaformerEncoder {
                 speech_data.into_boxed_slice(),
             ))
             .map_err(|e| AppError::Asr(format!("Failed to create speech tensor: {}", e)))?;
-            let lengths_tensor =
-                Tensor::from_array(([batch_size], vec![num_frames as i64].into_boxed_slice()))
-                    .map_err(|e| {
-                        AppError::Asr(format!("Failed to create lengths tensor: {}", e))
-                    })?;
+            let lengths_tensor = create_length_tensor_for_input(
+                &self.session,
+                "speech_lengths",
+                &[num_frames as i64],
+            )?;
             let cache_tensor = Tensor::from_array((
                 [1usize, cache.hidden.shape()[1], cache.hidden.shape()[2]],
                 cache.hidden.clone().into_raw_vec().into_boxed_slice(),
             ))
             .map_err(|e| AppError::Asr(format!("Failed to create cache tensor: {}", e)))?;
             let cache_lengths_tensor =
-                Tensor::from_array(([1usize], vec![cache.pos[0]].into_boxed_slice())).map_err(
-                    |e| AppError::Asr(format!("Failed to create cache lengths tensor: {}", e)),
-                )?;
+                create_length_tensor_for_input(&self.session, "cache_lengths", &[cache.pos[0]])
+                    .map_err(|e| {
+                        AppError::Asr(format!("Failed to create cache lengths tensor: {}", e))
+                    })?;
 
             self.session
                 .run(ort::inputs! {
@@ -109,11 +309,11 @@ impl ParaformerEncoder {
                 speech_data.into_boxed_slice(),
             ))
             .map_err(|e| AppError::Asr(format!("Failed to create speech tensor: {}", e)))?;
-            let lengths_tensor =
-                Tensor::from_array(([batch_size], vec![num_frames as i64].into_boxed_slice()))
-                    .map_err(|e| {
-                        AppError::Asr(format!("Failed to create lengths tensor: {}", e))
-                    })?;
+            let lengths_tensor = create_length_tensor_for_input(
+                &self.session,
+                "speech_lengths",
+                &[num_frames as i64],
+            )?;
 
             self.session
                 .run(ort::inputs! {
@@ -138,11 +338,8 @@ impl ParaformerEncoder {
         )
         .map_err(|e| AppError::Asr(format!("Invalid encoder output shape: {}", e)))?;
 
-        let (_, encoder_out_lens_data) = outputs["encoder_out_lens"]
-            .try_extract_tensor::<i64>()
+        let encoder_out_lens = extract_i64_tensor(&outputs["encoder_out_lens"])
             .map_err(|e| AppError::Asr(format!("Failed to extract encoder lengths: {}", e)))?;
-
-        let encoder_out_lens: Vec<i64> = encoder_out_lens_data.to_vec();
 
         // Update cache if streaming
         if is_streaming {
@@ -158,10 +355,9 @@ impl ParaformerEncoder {
                 )
                 .unwrap_or_else(|_| Array3::zeros((1, 0, 256)));
 
-                let pos = outputs["cache_lengths_out"]
-                    .try_extract_tensor::<i64>()
+                let pos = extract_i64_tensor(&outputs["cache_lengths_out"])
                     .ok()
-                    .and_then(|(_, data)| data.first().copied())
+                    .and_then(|data| data.first().copied())
                     .map(|p| ndarray::array![p])
                     .unwrap_or_else(|| ndarray::array![0i64]);
 
@@ -210,7 +406,7 @@ impl ParaformerDecoder {
         ))
         .map_err(|e| AppError::Asr(format!("Failed to create encoder tensor: {}", e)))?;
         let lengths_tensor =
-            Tensor::from_array(([shape[0]], encoder_out_lens.to_vec().into_boxed_slice()))
+            create_length_tensor_for_input(&self.session, "encoder_out_lens", encoder_out_lens)
                 .map_err(|e| AppError::Asr(format!("Failed to create lengths tensor: {}", e)))?;
 
         let outputs = self
@@ -253,6 +449,22 @@ impl WholeModelParaformer {
         Self { session }
     }
 
+    /// Returns the feature dimension the model expects for its "speech" input.
+    /// 560 means LFR(7,6) is required; 80 means raw FBank; defaults to 560.
+    pub fn expected_feat_dim(&self) -> usize {
+        use ort::value::ValueType;
+        self.session
+            .inputs()
+            .iter()
+            .find(|i| i.name() == "speech")
+            .and_then(|i| match i.dtype() {
+                ValueType::Tensor { shape, .. } => shape.as_ref().last().map(|&d| d as usize),
+                _ => None,
+            })
+            .filter(|&d| d > 0)
+            .unwrap_or(560)
+    }
+
     pub fn infer(&mut self, features: &[Vec<f32>]) -> Result<Vec<i32>> {
         let batch_size = 1usize;
         let num_frames = features.len();
@@ -284,7 +496,7 @@ impl WholeModelParaformer {
         ))
         .map_err(|e| AppError::Asr(format!("Failed to create speech tensor: {}", e)))?;
         let lengths_tensor =
-            Tensor::from_array(([batch_size], vec![num_frames as i32].into_boxed_slice()))
+            Tensor::from_array(([batch_size], vec![num_frames as i64].into_boxed_slice()))
                 .map_err(|e| AppError::Asr(format!("Failed to create lengths tensor: {}", e)))?;
 
         let outputs = self
@@ -295,9 +507,18 @@ impl WholeModelParaformer {
             })
             .map_err(|e| AppError::Asr(format!("Model inference failed: {}", e)))?;
 
-        let (logits_shape, logits_data) = outputs["logits"]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| AppError::Asr(format!("Failed to extract logits: {}", e)))?;
+        // Try "am_scores" first (FunASR standard export), then fall back to "logits"
+        let (logits_shape, logits_data) =
+            if let Ok(v) = outputs["am_scores"].try_extract_tensor::<f32>() {
+                v
+            } else {
+                outputs["logits"].try_extract_tensor::<f32>().map_err(|e| {
+                    AppError::Asr(format!(
+                        "Failed to extract model output (tried am_scores and logits): {}",
+                        e
+                    ))
+                })?
+            };
 
         let logits = Array3::from_shape_vec(
             (
@@ -311,6 +532,175 @@ impl WholeModelParaformer {
 
         Ok(greedy_decode_logits(&logits, 0))
     }
+}
+
+fn create_length_tensor_for_input(
+    session: &Session,
+    input_name: &str,
+    values: &[i64],
+) -> Result<DynTensor> {
+    let tensor_type = session
+        .inputs()
+        .iter()
+        .find(|input| input.name() == input_name)
+        .and_then(|input| input.dtype().tensor_type());
+
+    match tensor_type {
+        Some(TensorElementType::Int32) => Tensor::from_array((
+            [values.len()],
+            values
+                .iter()
+                .map(|value| *value as i32)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ))
+        .map(|tensor| tensor.upcast())
+        .map_err(|e| AppError::Asr(format!("Failed to create int32 tensor: {}", e))),
+        _ => Tensor::from_array(([values.len()], values.to_vec().into_boxed_slice()))
+            .map(|tensor| tensor.upcast())
+            .map_err(|e| AppError::Asr(format!("Failed to create int64 tensor: {}", e))),
+    }
+}
+
+fn extract_i64_tensor(value: &ort::value::DynValue) -> Result<Vec<i64>> {
+    if let Ok((_, data)) = value.try_extract_tensor::<i64>() {
+        return Ok(data.to_vec());
+    }
+    if let Ok((_, data)) = value.try_extract_tensor::<i32>() {
+        return Ok(data.iter().map(|value| *value as i64).collect());
+    }
+
+    Err(AppError::Asr(
+        "Unsupported integer tensor type; expected int32 or int64".to_string(),
+    ))
+}
+
+fn uses_online_streaming_interface(encoder: &Session, decoder: Option<&Session>) -> bool {
+    let encoder_outputs = encoder
+        .outputs()
+        .iter()
+        .map(|output| output.name())
+        .collect::<Vec<_>>();
+    let decoder_inputs = decoder
+        .map(|session| session.inputs().iter().map(|input| input.name()).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    encoder_outputs.contains(&"enc")
+        && encoder_outputs.contains(&"alphas")
+        && decoder_inputs.contains(&"acoustic_embeds")
+}
+
+fn run_online_encoder(
+    session: &mut Session,
+    features: &[Vec<f32>],
+) -> Result<(Array3<f32>, Vec<i64>, Vec<f32>)> {
+    let batch_size = 1usize;
+    let num_frames = features.len();
+    let feat_dim = features.first().map(|frame| frame.len()).unwrap_or(0);
+    if num_frames == 0 || feat_dim == 0 {
+        return Err(AppError::Asr(
+            "Streaming online encoder received empty features".to_string(),
+        ));
+    }
+
+    let mut speech_data = Vec::with_capacity(batch_size * num_frames * feat_dim);
+    for frame in features {
+        speech_data.extend_from_slice(frame);
+    }
+
+    let speech_tensor = Tensor::from_array((
+        [batch_size, num_frames, feat_dim],
+        speech_data.into_boxed_slice(),
+    ))
+    .map_err(|e| AppError::Asr(format!("Failed to create online speech tensor: {}", e)))?;
+    let lengths_tensor =
+        create_length_tensor_for_input(session, "speech_lengths", &[num_frames as i64])?;
+
+    let outputs = session
+        .run(ort::inputs! {
+            "speech" => speech_tensor,
+            "speech_lengths" => lengths_tensor,
+        })
+        .map_err(|e| AppError::Asr(format!("Online encoder inference failed: {}", e)))?;
+
+    let encoder_out = extract_array3_f32(&outputs["enc"], "enc")?;
+    let encoder_out_lens = extract_i64_tensor(&outputs["enc_len"])
+        .map_err(|e| AppError::Asr(format!("Failed to extract enc_len: {}", e)))?;
+    let (_, alphas_data) = outputs["alphas"]
+        .try_extract_tensor::<f32>()
+        .map_err(|e| AppError::Asr(format!("Failed to extract alphas: {}", e)))?;
+
+    Ok((encoder_out, encoder_out_lens, alphas_data.to_vec()))
+}
+
+fn run_online_decoder(
+    session: &mut Session,
+    encoder_out: &Array3<f32>,
+    encoder_out_lens: &[i64],
+    acoustic_embeds: &Array3<f32>,
+    acoustic_embeds_len: i64,
+    decoder_caches: &mut [OnlineDecoderCache],
+) -> Result<Vec<i32>> {
+    let encoder_shape = encoder_out.shape();
+    let acoustic_shape = acoustic_embeds.shape();
+
+    let encoder_tensor = Tensor::from_array((
+        [encoder_shape[0], encoder_shape[1], encoder_shape[2]],
+        encoder_out.clone().into_raw_vec().into_boxed_slice(),
+    ))
+    .map_err(|e| AppError::Asr(format!("Failed to create online enc tensor: {}", e)))?;
+    let encoder_lengths_tensor =
+        create_length_tensor_for_input(session, "enc_len", encoder_out_lens)?;
+    let acoustic_tensor = Tensor::from_array((
+        [acoustic_shape[0], acoustic_shape[1], acoustic_shape[2]],
+        acoustic_embeds.clone().into_raw_vec().into_boxed_slice(),
+    ))
+    .map_err(|e| AppError::Asr(format!("Failed to create acoustic embeds tensor: {}", e)))?;
+    let acoustic_lengths_tensor =
+        create_length_tensor_for_input(session, "acoustic_embeds_len", &[acoustic_embeds_len])?;
+
+    let mut inputs = vec![
+        ("enc".to_string(), encoder_tensor.upcast()),
+        ("enc_len".to_string(), encoder_lengths_tensor),
+        ("acoustic_embeds".to_string(), acoustic_tensor.upcast()),
+        ("acoustic_embeds_len".to_string(), acoustic_lengths_tensor),
+    ];
+    for cache in decoder_caches.iter() {
+        inputs.push((cache.input_name.clone(), cache.tensor()?));
+    }
+
+    let outputs = session
+        .run(inputs)
+        .map_err(|e| AppError::Asr(format!("Online decoder inference failed: {}", e)))?;
+
+    for cache in decoder_caches.iter_mut() {
+        cache.update_from_outputs(&outputs)?;
+    }
+
+    let mut sample_ids = extract_i64_tensor(&outputs["sample_ids"])
+        .map_err(|e| AppError::Asr(format!("Failed to extract sample_ids: {}", e)))?;
+    sample_ids.truncate(acoustic_embeds_len.max(0) as usize);
+
+    Ok(sample_ids.into_iter().map(|id| id as i32).collect())
+}
+
+fn extract_array3_f32(value: &ort::value::DynValue, output_name: &str) -> Result<Array3<f32>> {
+    let (shape, data) = value
+        .try_extract_tensor::<f32>()
+        .map_err(|e| AppError::Asr(format!("Failed to extract {} tensor: {}", output_name, e)))?;
+    if shape.len() != 3 {
+        return Err(AppError::Asr(format!(
+            "Unexpected {} tensor rank {}; expected 3",
+            output_name,
+            shape.len()
+        )));
+    }
+
+    Array3::from_shape_vec(
+        (shape[0] as usize, shape[1] as usize, shape[2] as usize),
+        data.to_vec(),
+    )
+    .map_err(|e| AppError::Asr(format!("Invalid {} tensor shape: {}", output_name, e)))
 }
 
 fn greedy_decode_logits(ctc_logits: &Array3<f32>, blank_id: i32) -> Vec<i32> {
@@ -364,8 +754,7 @@ impl ParaformerDecoder {
 
 /// Streaming Paraformer ASR
 pub struct StreamingParaformer {
-    encoder: ParaformerEncoder,
-    decoder: Option<ParaformerDecoder>,
+    runtime: StreamingRuntime,
     /// Feature buffer for accumulating frames
     feature_buffer: VecDeque<Vec<f32>>,
     /// Chunk size in frames (default 67 frames ~ 1 second)
@@ -373,13 +762,51 @@ pub struct StreamingParaformer {
 }
 
 impl StreamingParaformer {
-    pub fn new(encoder: Session, decoder: Option<Session>, chunk_size: usize) -> Self {
-        Self {
-            encoder: ParaformerEncoder::new(encoder),
-            decoder: decoder.map(ParaformerDecoder::new),
+    pub fn new(
+        encoder: Session,
+        decoder: Option<Session>,
+        chunk_size: usize,
+        tail_threshold: f32,
+    ) -> Result<Self> {
+        let runtime = if uses_online_streaming_interface(&encoder, decoder.as_ref()) {
+            let decoder = decoder.ok_or_else(|| {
+                AppError::Asr(
+                    "Official online streaming Paraformer requires a decoder model".to_string(),
+                )
+            })?;
+            let decoder_caches = OnlineDecoderCache::from_decoder_session(&decoder)?;
+            let hidden_size = decoder
+                .inputs()
+                .iter()
+                .find(|input| input.name() == "acoustic_embeds")
+                .and_then(|input| match input.dtype() {
+                    ort::value::ValueType::Tensor { shape, .. } => {
+                        shape.as_ref().get(2).copied().map(|value| value as usize)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(512);
+
+            StreamingRuntime::Online {
+                encoder,
+                decoder,
+                cif_state: OnlineCifState::new(hidden_size, tail_threshold),
+                decoder_caches,
+                last_encoder_out: None,
+                last_encoder_len: vec![0],
+            }
+        } else {
+            StreamingRuntime::Legacy {
+                encoder: ParaformerEncoder::new(encoder),
+                decoder: decoder.map(ParaformerDecoder::new),
+            }
+        };
+
+        Ok(Self {
+            runtime,
             feature_buffer: VecDeque::new(),
             chunk_size,
-        }
+        })
     }
 
     /// Process a chunk of features
@@ -394,16 +821,7 @@ impl StreamingParaformer {
         // Process if we have enough frames
         if self.feature_buffer.len() >= self.chunk_size {
             let chunk: Vec<Vec<f32>> = self.feature_buffer.drain(..self.chunk_size).collect();
-
-            // Encode
-            let (encoder_out, _lens) = self.encoder.encode(&chunk, true)?;
-
-            // Decode if decoder available
-            if let Some(ref mut decoder) = self.decoder {
-                let ctc_logits = decoder.decode(&encoder_out, &[encoder_out.shape()[1] as i64])?;
-                let tokens = decoder.greedy_decode(&ctc_logits, 0);
-                return Ok(Some(tokens));
-            }
+            return self.process_chunk_internal(&chunk, false);
         }
 
         Ok(None)
@@ -414,25 +832,106 @@ impl StreamingParaformer {
         // Process remaining frames
         let remaining: Vec<Vec<f32>> = self.feature_buffer.drain(..).collect();
 
-        if remaining.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let (encoder_out, _lens) = self.encoder.encode(&remaining, true)?;
-
-        if let Some(ref mut decoder) = self.decoder {
-            let ctc_logits = decoder.decode(&encoder_out, &[encoder_out.shape()[1] as i64])?;
-            let tokens = decoder.greedy_decode(&ctc_logits, 0);
-            Ok(tokens)
-        } else {
-            Ok(Vec::new())
-        }
+        Ok(self
+            .process_chunk_internal(&remaining, true)?
+            .unwrap_or_default())
     }
 
     /// Reset for new utterance
     pub fn reset(&mut self) {
-        self.encoder.reset();
+        match &mut self.runtime {
+            StreamingRuntime::Legacy { encoder, .. } => encoder.reset(),
+            StreamingRuntime::Online {
+                cif_state,
+                decoder_caches,
+                last_encoder_out,
+                last_encoder_len,
+                ..
+            } => {
+                cif_state.reset();
+                for cache in decoder_caches {
+                    cache.data.fill(0.0);
+                }
+                *last_encoder_out = None;
+                last_encoder_len.clear();
+                last_encoder_len.push(0);
+            }
+        }
         self.feature_buffer.clear();
+    }
+
+    fn process_chunk_internal(
+        &mut self,
+        chunk: &[Vec<f32>],
+        is_final: bool,
+    ) -> Result<Option<Vec<i32>>> {
+        match &mut self.runtime {
+            StreamingRuntime::Legacy { encoder, decoder } => {
+                if chunk.is_empty() {
+                    return Ok(None);
+                }
+
+                let (encoder_out, _lens) = encoder.encode(chunk, true)?;
+                if let Some(decoder) = decoder {
+                    let ctc_logits = decoder.decode(&encoder_out, &[encoder_out.shape()[1] as i64])?;
+                    let tokens = decoder.greedy_decode(&ctc_logits, 0);
+                    return Ok(Some(tokens));
+                }
+                Ok(None)
+            }
+            StreamingRuntime::Online {
+                encoder,
+                decoder,
+                cif_state,
+                decoder_caches,
+                last_encoder_out,
+                last_encoder_len,
+            } => {
+                let (encoder_out, encoder_out_lens, alphas) = if chunk.is_empty() {
+                    (None, last_encoder_len.clone(), Vec::new())
+                } else {
+                    let (enc, enc_len, alphas) = run_online_encoder(encoder, chunk)?;
+                    *last_encoder_out = Some(enc.clone());
+                    *last_encoder_len = enc_len.clone();
+                    (Some(enc), enc_len, alphas)
+                };
+
+                let acoustic_embeds = cif_state.build_acoustic_embeds(
+                    encoder_out.as_ref(),
+                    &alphas,
+                    is_final,
+                )?;
+
+                let Some((acoustic_embeds, acoustic_embeds_len)) = acoustic_embeds else {
+                    return Ok(None);
+                };
+
+                let memory = encoder_out
+                    .as_ref()
+                    .or(last_encoder_out.as_ref())
+                    .ok_or_else(|| {
+                        AppError::Asr(
+                            "Streaming online decoder requires encoder memory for decoding"
+                                .to_string(),
+                        )
+                    })?;
+
+                let tokens = run_online_decoder(
+                    decoder,
+                    memory,
+                    &encoder_out_lens,
+                    &acoustic_embeds,
+                    acoustic_embeds_len,
+                    decoder_caches,
+                )?;
+
+                if tokens.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(tokens))
+                }
+            }
+        }
     }
 }
 
@@ -442,26 +941,20 @@ mod tests {
 
     #[test]
     fn test_ctc_greedy_decode() {
-        // Create dummy CTC logits: [1 batch, 10 frames, 5 vocab]
+        // Create dummy CTC logits: [1 batch, 4 frames, 5 vocab]
         let logits = Array3::from_shape_vec(
-            (1, 10, 5),
+            (1, 4, 5),
             vec![
                 0.1, 0.8, 0.05, 0.03, 0.02, // frame 0 -> token 1
                 0.1, 0.8, 0.05, 0.03, 0.02, // frame 1 -> token 1 (repeat, should collapse)
                 0.7, 0.1, 0.1, 0.05, 0.05, // frame 2 -> token 0 (blank)
                 0.05, 0.05, 0.8, 0.05,
                 0.05, // frame 3 -> token 2
-                      // ... more frames
             ],
         )
         .unwrap();
 
-        let decoder = ParaformerDecoder::new(
-            // Mock session - would need actual ONNX in real test
-            panic!("Mock session not implemented in test"),
-        );
-
-        let tokens = decoder.greedy_decode(&logits, 0);
+        let tokens = greedy_decode_logits(&logits, 0);
         assert_eq!(tokens, vec![1, 2]);
     }
 }

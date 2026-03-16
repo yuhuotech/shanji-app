@@ -6,6 +6,7 @@ export component HistoryWindow inherits Window {
     in-out property <string> history-list-text: "No history records yet";
 
     callback refresh-requested();
+    callback play-latest-audio-requested();
     callback paste-latest-requested();
     callback copy-latest-requested();
     callback delete-latest-requested();
@@ -56,6 +57,7 @@ export component HistoryWindow inherits Window {
                     spacing: 12px;
 
                     Button { text: "Refresh"; primary: true; clicked => { root.refresh-requested(); } }
+                    Button { text: "Play Latest Audio"; clicked => { root.play-latest-audio-requested(); } }
                     Button { text: "Paste Latest"; clicked => { root.paste-latest-requested(); } }
                     Button { text: "Copy Latest"; clicked => { root.copy-latest-requested(); } }
                     Button { text: "Delete Latest"; clicked => { root.delete-latest-requested(); } }

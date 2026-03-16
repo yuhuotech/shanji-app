@@ -86,6 +86,113 @@ component InfoPill inherits Rectangle {
     }
 }
 
+component ProxySelector inherits Rectangle {
+    in property <[string]> model: ["ghfast.top", "gh-proxy.com", "不使用代理"];
+    in-out property <int> current-index: 0;
+    callback selected(int);
+
+    min-width: 148px;
+    height: 28px;
+    border-radius: 9px;
+    background: selector-touch.has-hover ? #f1f5f9 : #f7f9fc;
+    border-width: 1px;
+    border-color: selector-touch.has-hover ? #98a7bb : #d6dee8;
+
+    selector-touch := TouchArea {
+        clicked => {
+            selector-popup.show();
+        }
+    }
+
+    Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 46px;
+        text: root.model[max(0, min(root.current-index, root.model.length - 1))];
+        color: #334155;
+        font-size: 11px;
+        vertical-alignment: center;
+    }
+
+    Rectangle {
+        x: parent.width - self.width - 8px;
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        border-radius: 5px;
+        background: selector-touch.has-hover ? #dbeafe : #e7eef7;
+
+        Path {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 10px;
+            height: 6px;
+            viewbox-width: 10;
+            viewbox-height: 6;
+            commands: "M 1 1 L 5 5 L 9 1";
+            stroke: #2563eb;
+            stroke-width: 1.4px;
+            fill: transparent;
+        }
+    }
+
+    selector-popup := PopupWindow {
+        x: 0;
+        y: root.height + 6px;
+        width: root.width;
+        height: root.model.length * 36px + 10px;
+
+        Rectangle {
+            border-radius: 12px;
+            background: #ffffff;
+            border-width: 1px;
+            border-color: #d6dee8;
+
+            VerticalLayout {
+                padding: 5px;
+                spacing: 4px;
+
+                for value[index] in root.model : Rectangle {
+                    height: 36px;
+                    border-radius: 8px;
+                    background: item-touch.has-hover || index == root.current-index ? #eef4ff : #ffffff;
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 10px;
+                        spacing: 8px;
+
+                        Text {
+                            text: value;
+                            color: index == root.current-index ? #1d4ed8 : #334155;
+                            font-size: 12px;
+                            font-weight: index == root.current-index ? 600 : 500;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+
+                        if index == root.current-index : Text {
+                            text: "✓";
+                            color: #2563eb;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    item-touch := TouchArea {
+                        clicked => {
+                            root.current-index = index;
+                            root.selected(index);
+                            selector-popup.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 export component AppWindow inherits Window {
     // ── properties ──────────────────────────────────────────────────────────
     in-out property <string> app-name: "闪记";
@@ -106,8 +213,10 @@ export component AppWindow inherits Window {
     in-out property <float>  model-download-progress: 0.0;
     in-out property <string> model-download-status-text: "";
     in-out property <string> model-download-error-text: "";
+    in-out property <int>    github-proxy-current-index: 0;
 
     callback download-model-requested();
+    callback github-proxy-selected(int);
 
     in-out property <string> mic-permission-title: "麦克风权限已获取";
     in-out property <string> mic-permission-body: "已检测到 1 个可用输入设备";
@@ -351,6 +460,24 @@ export component AppWindow inherits Window {
                                     InfoPill { label: "版本"; value: model-version-text; }
                                     InfoPill { label: "大小"; value: model-size-text;    }
                                     InfoPill { label: "语言"; value: model-language-text; }
+                                }
+
+                                if !model-ready : HorizontalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: "GitHub代理";
+                                        color: #667085;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                    ProxySelector {
+                                        width: 146px;
+                                        current-index: root.github-proxy-current-index;
+                                        selected(index) => {
+                                            root.github-proxy-selected(index);
+                                        }
+                                    }
                                 }
 
                                 // install badge — installed
@@ -644,10 +771,10 @@ export component AppWindow inherits Window {
                                 HorizontalLayout {
                                     spacing: 6px;
                                     SectionIcon { label: "✎"; icon-color: #7c3aed; }
-                                    Text { text: "智能改写"; color: #6d28d9; font-size: 13px; font-weight: 700; vertical-alignment: center; }
+                                    Text { text: "LLM润色"; color: #6d28d9; font-size: 13px; font-weight: 700; vertical-alignment: center; }
                                 }
                                 Text {
-                                    text: "可在设置中开启 LLM 改写，对转写结果润色、纠错、调整风格";
+                                    text: "可在设置中开启 LLM 润色，对最终文本做纠错、书面化和风格整理";
                                     color: #5b3e8e; font-size: 12px; wrap: word-wrap;
                                 }
                             }
@@ -715,6 +842,23 @@ export component AppWindow inherits Window {
                                     InfoPill { label: "版本"; value: model-version-text; }
                                     InfoPill { label: "大小"; value: model-size-text;    }
                                     InfoPill { label: "语言"; value: model-language-text; }
+                                }
+                                if !model-ready : HorizontalLayout {
+                                    spacing: 8px;
+                                    Text {
+                                        text: "GitHub代理";
+                                        color: #667085;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                    ProxySelector {
+                                        width: 146px;
+                                        current-index: root.github-proxy-current-index;
+                                        selected(index) => {
+                                            root.github-proxy-selected(index);
+                                        }
+                                    }
                                 }
                                 if model-ready : Rectangle {
                                     border-radius: 10px; background: #dff6e8; height: 40px;

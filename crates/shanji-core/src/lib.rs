@@ -1,8 +1,7 @@
 pub mod asr;
 pub mod audio;
-pub mod denoiser;
-pub mod vad;
 pub mod config;
+pub mod denoiser;
 pub mod error;
 pub mod history;
 pub mod hotwords;
@@ -11,3 +10,5 @@ pub mod model;
 pub mod output;
 pub mod paths;
 pub mod state;
+pub mod text_processing;
+pub mod vad;

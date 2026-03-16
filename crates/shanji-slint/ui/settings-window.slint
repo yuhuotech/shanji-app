@@ -4,9 +4,10 @@ export component SettingsWindow inherits Window {
     in-out property <string> settings-status-text: "设置已同步";
     in-out property <string> theme-text: "主题: system";
     in-out property <string> model-text: "模型: paraformer-zh";
+    in-out property <string> network-text: "下载代理: 直连 GitHub";
     in-out property <string> audio-device-text: "音频输入: system default";
     in-out property <string> recording-mode-text: "录音模式: toggle";
-    in-out property <string> rewrite-text: "智能改写: disabled";
+    in-out property <string> rewrite-text: "LLM润色: disabled";
     in-out property <string> punct-style-text: "标点风格: zh";
     in-out property <string> append-content-text: "附加内容: space";
     in-out property <string> hotword-summary-text: "热词库: no libraries";
@@ -16,7 +17,12 @@ export component SettingsWindow inherits Window {
 
     callback refresh-requested();
     callback cycle-theme-requested();
-    callback cycle-model-requested();
+    callback cycle-github-proxy-requested();
+    callback cycle-live-model-requested();
+    callback cycle-refine-model-requested();
+    callback toggle-refine-asr-requested();
+    callback download-live-model-requested();
+    callback download-refine-model-requested();
     callback cycle-audio-device-requested();
     callback cycle-recording-mode-requested();
     callback toggle-rewrite-requested();
@@ -72,15 +78,25 @@ export component SettingsWindow inherits Window {
 
                     Button { text: "刷新"; primary: true; clicked => { root.refresh-requested(); } }
                     Button { text: "切换主题"; clicked => { root.cycle-theme-requested(); } }
-                    Button { text: "切换模型"; clicked => { root.cycle-model-requested(); } }
-                    Button { text: "切换设备"; clicked => { root.cycle-audio-device-requested(); } }
+                    Button { text: "切换下载代理"; clicked => { root.cycle-github-proxy-requested(); } }
+                    Button { text: "切换实时模型"; clicked => { root.cycle-live-model-requested(); } }
+                    Button { text: "切换纠正模型"; clicked => { root.cycle-refine-model-requested(); } }
                 }
 
                 HorizontalLayout {
                     spacing: 12px;
 
+                    Button { text: "切换设备"; clicked => { root.cycle-audio-device-requested(); } }
                     Button { text: "录音模式"; clicked => { root.cycle-recording-mode-requested(); } }
-                    Button { text: "智能改写"; clicked => { root.toggle-rewrite-requested(); } }
+                    Button { text: "整体纠正"; clicked => { root.toggle-refine-asr-requested(); } }
+                    Button { text: "下载实时模型"; clicked => { root.download-live-model-requested(); } }
+                    Button { text: "下载纠正模型"; clicked => { root.download-refine-model-requested(); } }
+                }
+
+                HorizontalLayout {
+                    spacing: 12px;
+
+                    Button { text: "LLM润色"; clicked => { root.toggle-rewrite-requested(); } }
                     Button { text: "标点风格"; clicked => { root.cycle-punct-style-requested(); } }
                     Button { text: "追加内容"; clicked => { root.cycle-append-content-requested(); } }
                 }
@@ -105,6 +121,7 @@ export component SettingsWindow inherits Window {
 
                         Text { text: theme-text; color: #2e261f; font-size: 15px; }
                         Text { text: model-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
+                        Text { text: network-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
                         Text { text: audio-device-text; color: #2e261f; wrap: word-wrap; font-size: 15px; }
                         Text { text: recording-mode-text; color: #2e261f; font-size: 15px; }
                         Text { text: rewrite-text; color: #2e261f; font-size: 15px; }

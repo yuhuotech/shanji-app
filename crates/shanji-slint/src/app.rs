@@ -26,6 +26,7 @@ pub struct UiSnapshot {
     pub model_download_progress: f32,
     pub model_download_status_text: String,
     pub model_download_error_text: String,
+    pub github_proxy_index: i32,
     pub mic_permission_title: String,
     pub mic_permission_body: String,
     pub mic_ready: bool,
@@ -79,6 +80,7 @@ pub struct SettingsWindowSnapshot {
     pub status_text: String,
     pub theme_text: String,
     pub model_text: String,
+    pub network_text: String,
     pub audio_device_text: String,
     pub recording_mode_text: String,
     pub rewrite_text: String,
@@ -89,6 +91,8 @@ pub struct SettingsWindowSnapshot {
     pub overlay_visibility_text: String,
     pub config_path_text: String,
 }
+
+const GITHUB_PROXY_VALUES: [&str; 3] = ["https://ghfast.top/", "https://gh-proxy.com/", ""];
 
 pub fn bootstrap_snapshot() -> UiSnapshot {
     shanji_core::state::init_state();
@@ -113,6 +117,7 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
             model_download_progress: 0.0,
             model_download_status_text: String::new(),
             model_download_error_text: String::new(),
+            github_proxy_index: 0,
             mic_permission_title: "麦克风状态不可用".to_string(),
             mic_permission_body: "当前无法读取音频输入设备".to_string(),
             mic_ready: false,
@@ -134,7 +139,7 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
             theme_text: "Unavailable".to_string(),
             audio_device_text: "Audio devices unavailable".to_string(),
             recording_mode_text: "Unavailable".to_string(),
-            rewrite_text: "Rewrite: unavailable".to_string(),
+            rewrite_text: "LLM polish: unavailable".to_string(),
             punct_style_text: "Punct style: unavailable".to_string(),
             append_content_text: "Append content: unavailable".to_string(),
             hotword_summary_text: "Hotwords unavailable".to_string(),
@@ -162,9 +167,21 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    state::set_active_model(cfg.asr.model_id.clone());
+    state::set_active_model(cfg.asr.live_model_id.clone());
     let runtime = state::get_runtime_snapshot();
-    let active_model = active_model_info(&paths, &cfg);
+    let active_model = active_live_model_info(&paths, &cfg);
+    let refine_model = refine_model_info(&paths, &cfg);
+    let live_model_downloaded = active_model
+        .as_ref()
+        .map(|m| m.is_downloaded)
+        .unwrap_or(false);
+    let refine_model_downloaded = refine_model
+        .as_ref()
+        .map(|m| m.is_downloaded)
+        .unwrap_or(false);
+    let live_model_downloading = crate::model_downloader::is_downloading(&cfg.asr.live_model_id);
+    let refine_model_downloading =
+        crate::model_downloader::is_downloading(&cfg.asr.refine_model_id);
     let audio_devices = audio::list_input_devices().unwrap_or_default();
     let selected_device = selected_audio_device_name(&cfg, &audio_devices);
     let hotkey_display = cfg.hotkeys.toggle_recording.clone();
@@ -183,11 +200,15 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         model_title_text: active_model
             .as_ref()
             .map(|model| model.name.clone())
-            .unwrap_or_else(|| cfg.asr.model_id.clone()),
-        model_desc_text: active_model
-            .as_ref()
-            .map(|model| model.description.clone())
-            .unwrap_or_else(|| "当前模型描述不可用".to_string()),
+            .unwrap_or_else(|| cfg.asr.live_model_id.clone()),
+        model_desc_text: format!(
+            "{}\n整体纠正: {}",
+            active_model
+                .as_ref()
+                .map(|model| model.description.clone())
+                .unwrap_or_else(|| "当前模型描述不可用".to_string()),
+            refine_runtime_summary(&cfg, refine_model_downloaded, refine_model_downloading)
+        ),
         model_version_text: active_model
             .as_ref()
             .map(|model| model.version.clone())
@@ -200,23 +221,32 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
             .as_ref()
             .map(|model| model.language.to_uppercase())
             .unwrap_or_else(|| "N/A".to_string()),
-        model_install_text: if active_model
-            .as_ref()
-            .map(|m| m.is_downloaded)
-            .unwrap_or(false)
-        {
-            "模型已安装".to_string()
-        } else {
-            "模型未安装".to_string()
-        },
-        model_ready: active_model
-            .as_ref()
-            .map(|m| m.is_downloaded)
-            .unwrap_or(false),
-        model_downloading: crate::model_downloader::is_downloading(),
-        model_download_progress: crate::model_downloader::get_progress(),
-        model_download_status_text: crate::model_downloader::get_status_text(),
-        model_download_error_text: crate::model_downloader::get_last_error().unwrap_or_default(),
+        model_install_text: format!(
+            "实时模型{} / 整体纠正{}",
+            if live_model_downloaded {
+                "已安装"
+            } else {
+                "未安装"
+            },
+            if cfg.asr.refine_enabled {
+                if refine_model_downloaded {
+                    "已启用"
+                } else {
+                    "未就绪"
+                }
+            } else {
+                "未启用"
+            }
+        ),
+        model_ready: live_model_downloaded,
+        model_downloading: live_model_downloading,
+        model_download_progress: crate::model_downloader::get_progress(&cfg.asr.live_model_id),
+        model_download_status_text: crate::model_downloader::get_status_text(
+            &cfg.asr.live_model_id,
+        ),
+        model_download_error_text: crate::model_downloader::get_last_error(&cfg.asr.live_model_id)
+            .unwrap_or_default(),
+        github_proxy_index: github_proxy_index(&cfg),
         mic_permission_title: {
             use shanji_core::audio::{get_mic_permission_status, MicPermissionStatus};
             match get_mic_permission_status() {
@@ -280,14 +310,14 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         },
         monitor_tip_text: "提示：日常使用无需打开此窗口，直接按快捷键即可".to_string(),
         state_text: format_state(runtime.current_state.clone()),
-        model_text: format!("Model: {}", cfg.asr.model_id),
+        model_text: format!("Live model: {}", cfg.asr.live_model_id),
         model_summary_text: load_model_summary(&paths, &cfg),
         model_inventory_text: load_model_inventory(&paths, &cfg),
         theme_text: format!("Theme: {}", cfg.general.theme),
         audio_device_text: load_audio_device_summary(&cfg),
         recording_mode_text: format!("Recording mode: {}", cfg.audio.recording_mode),
         rewrite_text: format!(
-            "Rewrite: {}",
+            "LLM polish: {}",
             if cfg.rewrite.enabled {
                 "enabled"
             } else {
@@ -334,18 +364,46 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     let runtime = state::get_runtime_snapshot();
+    let live_model = active_live_model_info(&paths, &cfg);
+    let refine_model = refine_model_info(&paths, &cfg);
+    let live_model_downloaded = live_model
+        .as_ref()
+        .map(|model| model.is_downloaded)
+        .unwrap_or(false);
+    let refine_model_downloaded = refine_model
+        .as_ref()
+        .map(|model| model.is_downloaded)
+        .unwrap_or(false);
+    let live_model_downloading = crate::model_downloader::is_downloading(&cfg.asr.live_model_id);
+    let refine_model_downloading =
+        crate::model_downloader::is_downloading(&cfg.asr.refine_model_id);
 
     Ok(SettingsWindowSnapshot {
         status_text: "原生设置窗口已同步到共享配置".to_string(),
         theme_text: format!("主题: {}", cfg.general.theme),
-        model_text: format!("模型: {}", cfg.asr.model_id),
+        model_text: format!(
+            "实时模型: {} ({})\n整体纠正: {} / {}",
+            cfg.asr.live_model_id,
+            model_install_state_text(live_model_downloaded, live_model_downloading),
+            if cfg.asr.refine_enabled {
+                "enabled"
+            } else {
+                "disabled"
+            },
+            format!(
+                "{} ({})",
+                cfg.asr.refine_model_id,
+                model_install_state_text(refine_model_downloaded, refine_model_downloading)
+            )
+        ),
+        network_text: format!("下载代理: {}", github_proxy_display(&cfg)),
         audio_device_text: format!(
             "音频输入: {}",
             selected_audio_device_name(&cfg, &audio::list_input_devices().unwrap_or_default())
         ),
         recording_mode_text: format!("录音模式: {}", cfg.audio.recording_mode),
         rewrite_text: format!(
-            "智能改写: {}",
+            "LLM润色: {}",
             if cfg.rewrite.enabled {
                 "enabled"
             } else {
@@ -456,30 +514,99 @@ pub fn cycle_audio_device() -> Result<UiSnapshot, String> {
     Ok(snapshot)
 }
 
+pub fn cycle_github_proxy() -> Result<UiSnapshot, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    cfg.network.github_proxy = next_github_proxy(&cfg.network.github_proxy).to_string();
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+
+    let mut snapshot = refresh_snapshot()?;
+    snapshot.status_text = format!("已切换下载代理为 {}", github_proxy_display(&cfg));
+    Ok(snapshot)
+}
+
+pub fn set_github_proxy_index(index: i32) -> Result<UiSnapshot, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    cfg.network.github_proxy = github_proxy_value(index).to_string();
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+
+    let mut snapshot = refresh_snapshot()?;
+    snapshot.status_text = format!("已切换下载代理为 {}", github_proxy_display(&cfg));
+    Ok(snapshot)
+}
+
 pub fn cycle_active_model() -> Result<UiSnapshot, String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     let models = model::list_models_with_paths(&paths).map_err(|e| e.to_string())?;
 
-    if models.is_empty() {
-        return Err("No models available in registry".to_string());
+    let available: Vec<_> = models
+        .into_iter()
+        .filter(|m| m.backend == shanji_core::model::ModelBackend::Streaming)
+        .collect();
+    if available.is_empty() {
+        return Err("No streaming models available in registry".to_string());
     }
 
-    let preferred: Vec<_> = models.iter().filter(|m| m.is_downloaded).collect();
+    let preferred: Vec<_> = available.iter().filter(|m| m.is_downloaded).collect();
     let source: Vec<_> = if preferred.is_empty() {
-        models.iter().collect()
+        available.iter().collect()
     } else {
         preferred
     };
 
     let current_idx = source
         .iter()
-        .position(|m| m.id == cfg.asr.model_id)
+        .position(|m| m.id == cfg.asr.live_model_id)
         .unwrap_or(0);
     let next_idx = (current_idx + 1) % source.len();
-    cfg.asr.model_id = source[next_idx].id.clone();
+    cfg.asr.live_model_id = source[next_idx].id.clone();
 
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+    refresh_snapshot()
+}
+
+pub fn cycle_refine_model() -> Result<UiSnapshot, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    let models = model::list_models_with_paths(&paths).map_err(|e| e.to_string())?;
+
+    let available: Vec<_> = models
+        .into_iter()
+        .filter(|m| m.backend == shanji_core::model::ModelBackend::Whole)
+        .collect();
+    if available.is_empty() {
+        return Err("No whole models available in registry".to_string());
+    }
+
+    let preferred: Vec<_> = available.iter().filter(|m| m.is_downloaded).collect();
+    let source: Vec<_> = if preferred.is_empty() {
+        available.iter().collect()
+    } else {
+        preferred
+    };
+
+    let current_idx = source
+        .iter()
+        .position(|m| m.id == cfg.asr.refine_model_id)
+        .unwrap_or(0);
+    let next_idx = (current_idx + 1) % source.len();
+    cfg.asr.refine_model_id = source[next_idx].id.clone();
+
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+    refresh_snapshot()
+}
+
+pub fn toggle_refine_asr() -> Result<UiSnapshot, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    cfg.asr.refine_enabled = !cfg.asr.refine_enabled;
     config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
     refresh_snapshot()
 }
@@ -538,6 +665,21 @@ pub fn paste_latest_history() -> Result<HistoryWindowSnapshot, String> {
     Ok(snapshot)
 }
 
+pub fn play_latest_history_audio() -> Result<HistoryWindowSnapshot, String> {
+    let paths = resolve_app_paths();
+    let db = HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
+    let record = latest_history_record(&db)?;
+    let audio_path = record
+        .audio_path
+        .clone()
+        .ok_or_else(|| "Latest history record has no audio file".to_string())?;
+    open_path_in_system(&audio_path)?;
+
+    let mut snapshot = refresh_history_window()?;
+    snapshot.status_text = format!("Opened latest history audio: {}", audio_path);
+    Ok(snapshot)
+}
+
 pub fn copy_latest_history() -> Result<HistoryWindowSnapshot, String> {
     let paths = resolve_app_paths();
     let db = HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
@@ -566,12 +708,26 @@ pub fn delete_latest_history() -> Result<HistoryWindowSnapshot, String> {
 }
 
 pub fn start_model_download() -> Result<UiSnapshot, String> {
+    start_live_model_download()
+}
+
+pub fn start_live_model_download() -> Result<UiSnapshot, String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    crate::model_downloader::start(paths, cfg.asr.model_id.clone())?;
+    crate::model_downloader::start(paths, cfg.asr.live_model_id.clone())?;
     let mut snapshot = refresh_snapshot()?;
-    snapshot.status_text = format!("开始下载模型 {}", cfg.asr.model_id);
+    snapshot.status_text = format!("开始下载实时模型 {}", cfg.asr.live_model_id);
+    Ok(snapshot)
+}
+
+pub fn start_refine_model_download() -> Result<UiSnapshot, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    crate::model_downloader::start(paths, cfg.asr.refine_model_id.clone())?;
+    let mut snapshot = refresh_snapshot()?;
+    snapshot.status_text = format!("开始下载整体纠正模型 {}", cfg.asr.refine_model_id);
     Ok(snapshot)
 }
 
@@ -673,14 +829,26 @@ fn format_overlay_body(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
     match runtime.current_state {
         AppState::Idle => {
             if !runtime.final_output.is_empty() {
-                truncate(&runtime.final_output, 42)
+                runtime.final_output.clone()
             } else {
-                format!("Ready with {}", cfg.asr.model_id)
+                format!("Ready with {}", cfg.asr.live_model_id)
             }
         }
-        AppState::Recording => String::new(),
-        AppState::Transcribing => truncate(&runtime.live_transcript, 40),
-        AppState::Rewriting => truncate(&runtime.rewrite_preview, 40),
+        AppState::Recording => {
+            if !runtime.live_transcript.is_empty() {
+                runtime.live_transcript.clone()
+            } else {
+                "正在聆听...".to_string()
+            }
+        }
+        AppState::Transcribing => {
+            if !runtime.live_transcript.is_empty() {
+                runtime.live_transcript.clone()
+            } else {
+                "正在识别...".to_string()
+            }
+        }
+        AppState::Rewriting => runtime.rewrite_preview.clone(),
     }
 }
 
@@ -740,7 +908,15 @@ fn load_live_asr_summary(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
             AppState::Recording | AppState::Transcribing
         )
     {
-        return format!("Live ASR: running with {}", cfg.asr.model_id);
+        return format!(
+            "Live ASR: running with {}{}",
+            cfg.asr.live_model_id,
+            if cfg.asr.refine_enabled {
+                " + whole-model refine"
+            } else {
+                ""
+            }
+        );
     }
 
     if matches!(runtime.current_state, AppState::Rewriting) {
@@ -748,7 +924,15 @@ fn load_live_asr_summary(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
     }
 
     if source.is_empty() {
-        format!("Live ASR: ready with {}", cfg.asr.model_id)
+        format!(
+            "Live ASR: ready with {}{}",
+            cfg.asr.live_model_id,
+            if cfg.asr.refine_enabled {
+                " / refine enabled"
+            } else {
+                ""
+            }
+        )
     } else {
         format!("Live ASR: last output {}", truncate(source, 26))
     }
@@ -780,14 +964,53 @@ fn load_tray_inventory(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
     .inventory_text()
 }
 
-fn active_model_info(paths: &AppPaths, cfg: &AppConfig) -> Option<shanji_core::model::ModelInfo> {
+fn active_live_model_info(
+    paths: &AppPaths,
+    cfg: &AppConfig,
+) -> Option<shanji_core::model::ModelInfo> {
     model::list_models_with_paths(paths)
         .ok()
         .and_then(|models| {
             models
                 .into_iter()
-                .find(|entry| entry.id == cfg.asr.model_id)
+                .find(|entry| entry.id == cfg.asr.live_model_id)
         })
+}
+
+fn refine_model_info(paths: &AppPaths, cfg: &AppConfig) -> Option<shanji_core::model::ModelInfo> {
+    model::list_models_with_paths(paths)
+        .ok()
+        .and_then(|models| {
+            models
+                .into_iter()
+                .find(|entry| entry.id == cfg.asr.refine_model_id)
+        })
+}
+
+fn model_install_state_text(downloaded: bool, downloading: bool) -> &'static str {
+    if downloading {
+        "downloading"
+    } else if downloaded {
+        "downloaded"
+    } else {
+        "remote"
+    }
+}
+
+fn refine_runtime_summary(cfg: &AppConfig, downloaded: bool, downloading: bool) -> String {
+    if !cfg.asr.refine_enabled {
+        return format!("未启用 · {}", cfg.asr.refine_model_id);
+    }
+
+    if downloading {
+        return format!("已启用，正在下载 {}", cfg.asr.refine_model_id);
+    }
+
+    if downloaded {
+        return format!("已启用 · {}", cfg.asr.refine_model_id);
+    }
+
+    format!("已启用但未安装 · {}", cfg.asr.refine_model_id)
 }
 
 fn selected_audio_device_name(
@@ -847,6 +1070,27 @@ fn next_append_content(current: &str) -> &'static str {
     }
 }
 
+fn next_github_proxy(current: &str) -> &'static str {
+    github_proxy_value(github_proxy_index_from_value(current) + 1)
+}
+
+fn github_proxy_index(cfg: &AppConfig) -> i32 {
+    github_proxy_index_from_value(&cfg.network.github_proxy)
+}
+
+fn github_proxy_index_from_value(value: &str) -> i32 {
+    GITHUB_PROXY_VALUES
+        .iter()
+        .position(|candidate| candidate == &value.trim())
+        .map(|index| index as i32)
+        .unwrap_or(0)
+}
+
+fn github_proxy_value(index: i32) -> &'static str {
+    let normalized = index.rem_euclid(GITHUB_PROXY_VALUES.len() as i32) as usize;
+    GITHUB_PROXY_VALUES[normalized]
+}
+
 fn load_history_preview(paths: &AppPaths) -> String {
     let Ok(db) = HistoryDb::new_with_paths(paths) else {
         return "History preview unavailable".to_string();
@@ -874,7 +1118,23 @@ fn format_history_records(records: &[shanji_core::history::HistoryRecord]) -> St
         .enumerate()
         .map(|(idx, record)| {
             let body = record_output_text(record);
-            format!("{}. {}", idx + 1, truncate(&body, 120))
+            let audio_tag = if record.audio_path.is_some() {
+                " / 含录音"
+            } else {
+                ""
+            };
+            let refine_tag = if record.refine_enabled {
+                " / 已纠正"
+            } else {
+                ""
+            };
+            format!(
+                "{}. {}{}{}",
+                idx + 1,
+                truncate(&body, 120),
+                audio_tag,
+                refine_tag
+            )
         })
         .collect::<Vec<_>>()
         .join("\n\n")
@@ -912,12 +1172,45 @@ fn load_history_stats(paths: &AppPaths) -> String {
 
     match latest {
         Some(record) => format!(
-            "History: {} total / latest {}",
+            "History: {} total / latest {}{}",
             total,
-            truncate(&record.transcribed, 28)
+            truncate(&record.transcribed, 28),
+            if record.audio_path.is_some() {
+                " / audio"
+            } else {
+                ""
+            }
         ),
         None => format!("History: {} total / no entries yet", total),
     }
+}
+
+fn open_path_in_system(path: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("open");
+        cmd.arg(path);
+        cmd
+    };
+
+    #[cfg(target_os = "linux")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(path);
+        cmd
+    };
+
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "start", "", path]);
+        cmd
+    };
+
+    command
+        .spawn()
+        .map_err(|e| format!("Failed to open {}: {}", path, e))?;
+    Ok(())
 }
 
 fn load_hotword_summary(paths: &AppPaths) -> String {
@@ -983,19 +1276,43 @@ fn load_hotword_inventory(paths: &AppPaths) -> String {
         .join("\n")
 }
 
+fn github_proxy_display(cfg: &AppConfig) -> &str {
+    let value = cfg.network.github_proxy.trim();
+    if value.is_empty() {
+        "直连 GitHub"
+    } else {
+        value
+    }
+}
+
 fn load_model_summary(paths: &AppPaths, cfg: &AppConfig) -> String {
     let Ok(models) = model::list_models_with_paths(paths) else {
         return "Models unavailable".to_string();
     };
 
     let downloaded = models.iter().filter(|m| m.is_downloaded).count();
-    let active_name = models
+    let live_name = models
         .iter()
-        .find(|m| m.id == cfg.asr.model_id)
+        .find(|m| m.id == cfg.asr.live_model_id)
         .map(|m| m.name.clone())
-        .unwrap_or_else(|| cfg.asr.model_id.clone());
+        .unwrap_or_else(|| cfg.asr.live_model_id.clone());
+    let refine_name = models
+        .iter()
+        .find(|m| m.id == cfg.asr.refine_model_id)
+        .map(|m| m.name.clone())
+        .unwrap_or_else(|| cfg.asr.refine_model_id.clone());
 
-    format!("Models: {} downloaded / active {}", downloaded, active_name)
+    format!(
+        "Models: {} downloaded / live {} / refine {} ({})",
+        downloaded,
+        live_name,
+        refine_name,
+        if cfg.asr.refine_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    )
 }
 
 fn load_model_inventory(paths: &AppPaths, cfg: &AppConfig) -> String {
@@ -1011,8 +1328,10 @@ fn load_model_inventory(paths: &AppPaths, cfg: &AppConfig) -> String {
         .into_iter()
         .take(5)
         .map(|entry| {
-            let active = if entry.id == cfg.asr.model_id {
-                "active"
+            let role = if entry.id == cfg.asr.live_model_id {
+                "live"
+            } else if entry.id == cfg.asr.refine_model_id {
+                "refine"
             } else {
                 "idle"
             };
@@ -1021,7 +1340,7 @@ fn load_model_inventory(paths: &AppPaths, cfg: &AppConfig) -> String {
             } else {
                 "remote"
             };
-            format!("{} · {} · {}", entry.name, active, installed)
+            format!("{} · {} · {}", entry.name, role, installed)
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -1087,6 +1406,7 @@ fn truncate(text: &str, max_chars: usize) -> String {
         truncated
     }
 }
+
 
 #[allow(dead_code)]
 fn _config_for_future_use(paths: &AppPaths) -> Result<AppConfig, String> {

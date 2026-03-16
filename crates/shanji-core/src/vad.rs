@@ -33,8 +33,8 @@ pub fn ensure_vad_model(target_path: &Path) -> Result<()> {
 }
 
 const FRAME_SIZE: usize = 512;
-const PRE_BUFFER_FRAMES: usize = 6;  // 200ms
-const TAIL_FRAMES: usize = 15;       // 500ms
+const PRE_BUFFER_FRAMES: usize = 6; // 200ms
+const TAIL_FRAMES: usize = 15; // 500ms
 const SAMPLE_RATE: i64 = 16000;
 
 #[derive(Debug)]
@@ -147,8 +147,9 @@ impl VadDetector {
 
     fn infer(&mut self, frame: &[f32]) -> Result<f32> {
         // input: [1, 512] f32
-        let input_tensor = Tensor::from_array(([1usize, FRAME_SIZE], frame.to_vec().into_boxed_slice()))
-            .map_err(|e| AppError::Asr(format!("VAD input tensor failed: {}", e)))?;
+        let input_tensor =
+            Tensor::from_array(([1usize, FRAME_SIZE], frame.to_vec().into_boxed_slice()))
+                .map_err(|e| AppError::Asr(format!("VAD input tensor failed: {}", e)))?;
 
         // state: [2, 1, 128] f32
         let state_data = self.rnn_state.clone().into_raw_vec();

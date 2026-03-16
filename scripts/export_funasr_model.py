@@ -3,7 +3,7 @@
 FunASR ONNX 模型导出脚本
 
 用于从 FunASR 导出 Paraformer 模型为 ONNX 格式，供闪记（Shanji）使用。
-当前默认使用 FunASR 官方导出，生成 `model.onnx` / `vocab.txt` / `config.yaml`。
+当前默认使用 FunASR 官方导出，生成 `model.onnx` / `vocab.txt` / `config.yaml` / `am.mvn`。
 仅在需要兼容旧链路时才使用 `--manual`。
 
 依赖:
@@ -26,12 +26,15 @@ from pathlib import Path
 
 def resolve_export_model_id(model_id: str) -> str:
     model_aliases = {
-        "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch": "paraformer",
         "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch": "paraformer",
-        "damo/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online": "paraformer-zh-streaming",
         "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-online": "paraformer-zh-streaming",
     }
     return model_aliases.get(model_id, model_id)
+
+
+def should_force_manual_export(model_id: str) -> bool:
+    resolved = resolve_export_model_id(model_id)
+    return resolved == "paraformer-zh-streaming"
 
 
 def copy_support_files(model, output_path: Path):
@@ -74,6 +77,13 @@ def copy_support_files(model, output_path: Path):
         import shutil
         shutil.copy2(config_src, config_dst)
         print(f"✓ 配置文件复制完成: {config_dst}")
+
+    mean_variance_src = model_root / "am.mvn"
+    mean_variance_dst = output_path / "am.mvn"
+    if mean_variance_src.exists():
+        import shutil
+        shutil.copy2(mean_variance_src, mean_variance_dst)
+        print(f"✓ 均值方差文件复制完成: {mean_variance_dst}")
 
 
 def check_dependencies():
@@ -322,7 +332,9 @@ def main():
         sys.exit(0)
 
     # 导出模型
-    if args.manual:
+    if args.manual or should_force_manual_export(args.model):
+        if not args.manual and should_force_manual_export(args.model):
+            print("\n检测到流式模型，自动启用 manual 导出模式以兼容当前 Rust 推理链路")
         success = export_model_manual(args.model, args.output, args.device)
     else:
         success = export_model(args.model, args.output, args.device)

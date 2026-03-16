@@ -64,7 +64,9 @@ impl Default for AudioConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AsrConfig {
-    pub model_id: String,
+    pub live_model_id: String,
+    pub refine_enabled: bool,
+    pub refine_model_id: String,
     pub insert_punct: bool,
     pub punct_style: String,
 }
@@ -72,7 +74,9 @@ pub struct AsrConfig {
 impl Default for AsrConfig {
     fn default() -> Self {
         Self {
-            model_id: "paraformer-zh".to_string(),
+            live_model_id: "paraformer-zh-streaming".to_string(),
+            refine_enabled: false,
+            refine_model_id: "paraformer-zh".to_string(),
             insert_punct: true,
             punct_style: "zh".to_string(),
         }
@@ -118,10 +122,8 @@ impl Default for RewriteConfig {
             active_prompt_id: "default".to_string(),
             prompts: vec![PromptPreset {
                 id: "default".to_string(),
-                name: "通用书面化".to_string(),
-                system_prompt:
-                    "请将以下口语化的语音转写文本改写为书面语，去除语气词和重复内容，保持原意："
-                        .to_string(),
+                name: "语音输入润色".to_string(),
+                system_prompt: "请将以下语音输入文本整理为适合直接输入或粘贴的最终文本：修正明显识别错误，去除语气词、口吃和重复表达，补全自然标点，保留原意，不要无端扩写。只输出整理后的文本。".to_string(),
                 is_builtin: true,
             }],
         }
@@ -213,6 +215,20 @@ impl Default for OverlayConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
+pub struct NetworkConfig {
+    pub github_proxy: String,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            github_proxy: "https://ghfast.top/".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct AppConfig {
     #[serde(default = "default_version")]
     pub version: u32,
@@ -224,6 +240,7 @@ pub struct AppConfig {
     pub hotkeys: HotkeyConfig,
     pub history: HistoryConfig,
     pub overlay: OverlayConfig,
+    pub network: NetworkConfig,
 }
 
 fn default_version() -> u32 {
@@ -242,6 +259,7 @@ impl Default for AppConfig {
             hotkeys: HotkeyConfig::default(),
             history: HistoryConfig::default(),
             overlay: OverlayConfig::default(),
+            network: NetworkConfig::default(),
         }
     }
 }
@@ -284,6 +302,14 @@ impl AppConfig {
                 self.audio.vad_threshold = 0.5;
             }
             self.version = 3;
+            modified = true;
+        }
+
+        if self.version < 4 {
+            if self.network.github_proxy.trim().is_empty() {
+                self.network.github_proxy = NetworkConfig::default().github_proxy;
+            }
+            self.version = 4;
             modified = true;
         }
 

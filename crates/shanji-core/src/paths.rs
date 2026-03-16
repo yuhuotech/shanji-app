@@ -31,12 +31,17 @@ impl AppPaths {
         self.data_dir.join("temp")
     }
 
+    pub fn recordings_dir(&self) -> PathBuf {
+        self.data_dir.join("recordings")
+    }
+
     pub fn ensure_base_dirs(&self) -> Result<()> {
         std::fs::create_dir_all(&self.config_dir)?;
         std::fs::create_dir_all(&self.data_dir)?;
         std::fs::create_dir_all(self.models_dir())?;
         std::fs::create_dir_all(self.hotwords_dir())?;
         std::fs::create_dir_all(self.temp_dir())?;
+        std::fs::create_dir_all(self.recordings_dir())?;
         Ok(())
     }
 }

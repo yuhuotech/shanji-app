@@ -8,6 +8,13 @@ slint::include_modules!();
 
 const OVERLAY_BOTTOM_OFFSET_RATIO: f32 = 0.07;
 
+fn init_logging() {
+    let env = env_logger::Env::default().default_filter_or("info,ort=warn,reqwest=warn");
+    let mut builder = env_logger::Builder::from_env(env);
+    builder.format_timestamp_millis();
+    let _ = builder.try_init();
+}
+
 #[cfg(target_os = "macos")]
 fn overlay_target_position(window: &slint::Window) -> Option<slint::LogicalPosition> {
     use objc2::MainThreadMarker;
@@ -40,6 +47,7 @@ fn position_overlay_window(overlay: &OverlayWindow) {
 }
 
 fn main() -> Result<(), slint::PlatformError> {
+    init_logging();
     let app = AppWindow::new()?;
     let history = HistoryWindow::new()?;
     let settings = SettingsWindow::new()?;
@@ -86,6 +94,14 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let weak = app.as_weak();
     let weak_overlay = overlay.as_weak();
+    app.on_github_proxy_selected(move |index| {
+        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
+            apply_result(&app, &overlay, app::set_github_proxy_index(index));
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
     app.on_toggle_mic_monitor_requested(move || {
         if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
             apply_result(&app, &overlay, app::toggle_mic_monitor());
@@ -108,6 +124,13 @@ fn main() -> Result<(), slint::PlatformError> {
     history.on_refresh_requested(move || {
         if let Some(history) = weak_history.upgrade() {
             apply_history_snapshot(&history, app::refresh_history_window());
+        }
+    });
+
+    let weak_history = history.as_weak();
+    history.on_play_latest_audio_requested(move || {
+        if let Some(history) = weak_history.upgrade() {
+            apply_history_snapshot(&history, app::play_latest_history_audio());
         }
     });
 
@@ -164,13 +187,83 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak = app.as_weak();
     let weak_overlay = overlay.as_weak();
     let weak_settings = settings.as_weak();
-    settings.on_cycle_model_requested(move || {
+    settings.on_cycle_github_proxy_requested(move || {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
+            apply_result(&app, &overlay, app::cycle_github_proxy());
+            apply_settings_snapshot(&settings, app::refresh_settings_window());
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
+    let weak_settings = settings.as_weak();
+    settings.on_cycle_live_model_requested(move || {
         if let (Some(app), Some(overlay), Some(settings)) = (
             weak.upgrade(),
             weak_overlay.upgrade(),
             weak_settings.upgrade(),
         ) {
             apply_result(&app, &overlay, app::cycle_active_model());
+            apply_settings_snapshot(&settings, app::refresh_settings_window());
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
+    let weak_settings = settings.as_weak();
+    settings.on_cycle_refine_model_requested(move || {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
+            apply_result(&app, &overlay, app::cycle_refine_model());
+            apply_settings_snapshot(&settings, app::refresh_settings_window());
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
+    let weak_settings = settings.as_weak();
+    settings.on_toggle_refine_asr_requested(move || {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
+            apply_result(&app, &overlay, app::toggle_refine_asr());
+            apply_settings_snapshot(&settings, app::refresh_settings_window());
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
+    let weak_settings = settings.as_weak();
+    settings.on_download_live_model_requested(move || {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
+            apply_result(&app, &overlay, app::start_live_model_download());
+            apply_settings_snapshot(&settings, app::refresh_settings_window());
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
+    let weak_settings = settings.as_weak();
+    settings.on_download_refine_model_requested(move || {
+        if let (Some(app), Some(overlay), Some(settings)) = (
+            weak.upgrade(),
+            weak_overlay.upgrade(),
+            weak_settings.upgrade(),
+        ) {
+            apply_result(&app, &overlay, app::start_refine_model_download());
             apply_settings_snapshot(&settings, app::refresh_settings_window());
         }
     });
@@ -473,6 +566,7 @@ fn apply_snapshot(app: &AppWindow, overlay: &OverlayWindow, snapshot: app::UiSna
     app.set_model_download_progress(snapshot.model_download_progress);
     app.set_model_download_status_text(snapshot.model_download_status_text.into());
     app.set_model_download_error_text(snapshot.model_download_error_text.into());
+    app.set_github_proxy_current_index(snapshot.github_proxy_index);
     app.set_mic_permission_title(snapshot.mic_permission_title.into());
     app.set_mic_permission_body(snapshot.mic_permission_body.into());
     app.set_mic_ready(snapshot.mic_ready);
@@ -514,6 +608,7 @@ fn apply_settings_snapshot(
             settings.set_settings_status_text(snapshot.status_text.into());
             settings.set_theme_text(snapshot.theme_text.into());
             settings.set_model_text(snapshot.model_text.into());
+            settings.set_network_text(snapshot.network_text.into());
             settings.set_audio_device_text(snapshot.audio_device_text.into());
             settings.set_recording_mode_text(snapshot.recording_mode_text.into());
             settings.set_rewrite_text(snapshot.rewrite_text.into());

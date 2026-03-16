@@ -150,25 +150,7 @@ impl FBankExtractor {
 
         // Apply LFR (Low Frame Rate) processing if configured
         if let Some((m, n)) = self.config.lfr {
-            log::info!("Applying LFR: stacking {} frames, skipping {} frames", m, n);
-            let original_frames = features.len();
             features = Self::apply_lfr(&features, m, n);
-            log::info!(
-                "LFR applied: {} frames -> {} frames, dim {} -> {}",
-                original_frames,
-                features.len(),
-                self.config.num_mel_bins,
-                if features.is_empty() {
-                    0
-                } else {
-                    features[0].len()
-                }
-            );
-        } else {
-            log::info!(
-                "LFR not configured, outputting raw {} dim features",
-                self.config.num_mel_bins
-            );
         }
 
         Ok(features)

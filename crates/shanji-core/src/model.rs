@@ -5,8 +5,57 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 const DEFAULT_REGISTRY_URL: &str =
-    "https://github.com/yuhuotech/shanji/releases/download/models/model_registry.json";
+    "https://github.com/yuhuotech/paraformer-zh/releases/download/models/model_registry.json";
 const DEV_REGISTRY_URL: &str = "http://localhost:1420/model_registry.json";
+const GITHUB_PROXY_ENV: &str = "SHANJI_GITHUB_PROXY";
+const DEFAULT_GITHUB_PROXY: &str = "https://ghfast.top/";
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelBackend {
+    Whole,
+    Streaming,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ModelArtifactRole {
+    Model,
+    ModelQuant,
+    Encoder,
+    EncoderQuant,
+    Decoder,
+    DecoderQuant,
+    Config,
+    Vocab,
+    MeanVariance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelArtifact {
+    pub role: ModelArtifactRole,
+    pub file_name: String,
+    #[serde(default)]
+    pub size_bytes: u64,
+    #[serde(default)]
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedModelLayout {
+    pub model_dir: PathBuf,
+    pub backend: ModelBackend,
+    pub model_path: Option<PathBuf>,
+    pub model_quant_path: Option<PathBuf>,
+    pub encoder_path: Option<PathBuf>,
+    pub encoder_quant_path: Option<PathBuf>,
+    pub decoder_path: Option<PathBuf>,
+    pub decoder_quant_path: Option<PathBuf>,
+    pub vocab_path: PathBuf,
+    pub config_path: Option<PathBuf>,
+    pub mean_variance_path: Option<PathBuf>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,16 +64,12 @@ pub struct ModelInfo {
     pub name: String,
     pub language: String,
     pub description: String,
+    pub backend: ModelBackend,
     pub size_bytes: u64,
     pub download_url: String,
-    #[serde(default)]
-    pub modelscope_url: Option<String>,
-    #[serde(default)]
-    pub huggingface_url: Option<String>,
     pub sha256: String,
     pub version: String,
-    #[serde(default)]
-    pub files: Vec<String>,
+    pub artifacts: Vec<ModelArtifact>,
     #[serde(default)]
     pub is_downloaded: bool,
     #[serde(skip)]
@@ -36,6 +81,12 @@ pub struct ModelRegistry {
     pub version: u32,
     pub updated_at: String,
     pub models: Vec<ModelInfo>,
+}
+
+impl ModelInfo {
+    pub fn artifact(&self, role: ModelArtifactRole) -> Option<&ModelArtifact> {
+        self.artifacts.iter().find(|artifact| artifact.role == role)
+    }
 }
 
 pub fn default_registry() -> ModelRegistry {
@@ -52,15 +103,52 @@ pub fn default_registry() -> ModelRegistry {
 }
 
 pub fn registry_url() -> String {
-    if let Ok(url) = std::env::var("SHANJI_MODEL_REGISTRY_URL") {
-        return url;
-    }
-
     if cfg!(debug_assertions) {
         DEV_REGISTRY_URL.to_string()
     } else {
         DEFAULT_REGISTRY_URL.to_string()
     }
+}
+
+fn github_proxy_prefix_with_paths(paths: Option<&AppPaths>) -> Option<String> {
+    if let Some(paths) = paths {
+        if let Ok(cfg) = config::get_config(paths) {
+            let value = cfg.network.github_proxy.trim();
+            if !value.is_empty() {
+                return Some(value.to_string());
+            }
+        }
+    }
+
+    if let Ok(raw) = std::env::var(GITHUB_PROXY_ENV) {
+        let value = raw.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+
+    Some(DEFAULT_GITHUB_PROXY.to_string())
+}
+
+fn apply_github_proxy_with_prefix(url: &str, prefix: Option<&str>) -> String {
+    let Some(prefix) = prefix else {
+        return url.to_string();
+    };
+
+    if !is_github_asset_url(url) || url.starts_with(prefix) {
+        return url.to_string();
+    }
+
+    if prefix.contains("{url}") {
+        return prefix.replace("{url}", url);
+    }
+
+    let separator = if prefix.ends_with('/') { "" } else { "/" };
+    format!("{prefix}{separator}{url}")
+}
+
+fn is_github_asset_url(url: &str) -> bool {
+    url.contains("://github.com/") || url.contains("://raw.githubusercontent.com/")
 }
 
 pub fn list_models_with_paths(paths: &AppPaths) -> Result<Vec<ModelInfo>> {
@@ -70,19 +158,47 @@ pub fn list_models_with_paths(paths: &AppPaths) -> Result<Vec<ModelInfo>> {
 }
 
 pub async fn fetch_registry_with_paths(paths: &AppPaths) -> Result<Vec<ModelInfo>> {
-    let url = registry_url();
-    let mut registry = match fetch_remote_registry(&url).await {
+    let direct_url = if let Ok(url) = std::env::var("SHANJI_MODEL_REGISTRY_URL") {
+        url
+    } else {
+        registry_url()
+    };
+    let proxy_prefix = github_proxy_prefix_with_paths(Some(paths));
+    let proxied_url = apply_github_proxy_with_prefix(&direct_url, proxy_prefix.as_deref());
+    let mut registry = match fetch_remote_registry(&proxied_url).await {
         Ok(registry) => {
-            log::info!("Loaded model registry from {}", url);
+            log::info!("Loaded model registry from {}", proxied_url);
             registry
         }
         Err(error) => {
-            log::warn!(
-                "Failed to load model registry from {}, falling back to bundled registry: {}",
-                url,
-                error
-            );
-            default_registry()
+            if proxied_url != direct_url {
+                log::warn!(
+                    "Failed to load model registry from proxy {}, retrying direct: {}",
+                    proxied_url,
+                    error
+                );
+                match fetch_remote_registry(&direct_url).await {
+                    Ok(registry) => {
+                        log::info!("Loaded model registry from {}", direct_url);
+                        registry
+                    }
+                    Err(direct_error) => {
+                        log::warn!(
+                            "Failed to load model registry from {}, falling back to bundled registry: {}",
+                            direct_url,
+                            direct_error
+                        );
+                        default_registry()
+                    }
+                }
+            } else {
+                log::warn!(
+                    "Failed to load model registry from {}, falling back to bundled registry: {}",
+                    proxied_url,
+                    error
+                );
+                default_registry()
+            }
         }
     };
 
@@ -102,6 +218,24 @@ pub async fn list_downloaded_with_paths(paths: &AppPaths) -> Result<Vec<ModelInf
         .collect())
 }
 
+pub fn get_model_info(model_id: &str) -> Result<ModelInfo> {
+    default_registry()
+        .models
+        .into_iter()
+        .find(|model| model.id == model_id)
+        .ok_or_else(|| AppError::Model(format!("Model '{}' not found in registry", model_id)))
+}
+
+pub fn resolve_model_layout_with_paths(
+    paths: &AppPaths,
+    model_id: &str,
+) -> Result<ResolvedModelLayout> {
+    let model = get_model_info(model_id)?;
+    let model_dir = get_model_dir_with_paths(paths, model_id);
+    validate_model_dir(&model_dir, &model)?;
+    build_model_layout(&model_dir, &model)
+}
+
 pub fn delete_model_with_paths(paths: &AppPaths, model_id: &str) -> Result<bool> {
     let model_dir = get_model_dir_with_paths(paths, model_id);
     if !model_dir.exists() {
@@ -113,11 +247,12 @@ pub fn delete_model_with_paths(paths: &AppPaths, model_id: &str) -> Result<bool>
 }
 
 pub fn switch_model_with_paths(paths: &AppPaths, model_id: &str) -> Result<PathBuf> {
+    let model = get_model_info(model_id)?;
     let model_dir = get_model_dir_with_paths(paths, model_id);
-    validate_model_dir(&model_dir, &[])?;
+    validate_model_dir(&model_dir, &model)?;
 
     let mut cfg = config::get_config(paths)?;
-    cfg.asr.model_id = model_id.to_string();
+    cfg.asr.live_model_id = model_id.to_string();
     config::save_config(paths, &cfg)?;
 
     Ok(model_dir)
@@ -128,8 +263,11 @@ pub fn get_model_dir_with_paths(paths: &AppPaths, model_id: &str) -> PathBuf {
 }
 
 pub fn is_model_downloaded_with_paths(paths: &AppPaths, model_id: &str) -> bool {
+    let Ok(model) = get_model_info(model_id) else {
+        return false;
+    };
     let model_dir = get_model_dir_with_paths(paths, model_id);
-    is_model_ready(&model_dir, &[])
+    is_model_ready(&model_dir, &model)
 }
 
 pub fn import_local_model_with_paths(
@@ -168,18 +306,18 @@ pub fn import_local_model_with_paths(
     Ok(model_id)
 }
 
-pub fn validate_model_dir(model_dir: &Path, files: &[String]) -> Result<()> {
-    let missing: Vec<String> = required_files(files)
-        .into_iter()
-        .filter(|file| {
-            let path = model_dir.join(file);
-            if path.exists() {
-                return false;
+pub fn validate_model_dir(model_dir: &Path, model: &ModelInfo) -> Result<()> {
+    validate_model_metadata(model)?;
+
+    let missing: Vec<String> = model
+        .artifacts
+        .iter()
+        .filter_map(|artifact| {
+            if model_dir.join(&artifact.file_name).exists() {
+                None
+            } else {
+                Some(artifact.file_name.clone())
             }
-            if file == "tokens.txt" {
-                return !model_dir.join("vocab.txt").exists();
-            }
-            true
         })
         .collect();
 
@@ -193,8 +331,77 @@ pub fn validate_model_dir(model_dir: &Path, files: &[String]) -> Result<()> {
     )))
 }
 
+fn validate_model_metadata(model: &ModelInfo) -> Result<()> {
+    let has_role = |role| model.artifact(role).is_some();
+
+    match model.backend {
+        ModelBackend::Whole => {
+            for role in [
+                ModelArtifactRole::Config,
+                ModelArtifactRole::Vocab,
+                ModelArtifactRole::MeanVariance,
+            ] {
+                if !has_role(role) {
+                    return Err(AppError::Model(format!(
+                        "Model '{}' must define a {:?} artifact",
+                        model.id, role
+                    )));
+                }
+            }
+            if !has_role(ModelArtifactRole::Model) && !has_role(ModelArtifactRole::ModelQuant) {
+                return Err(AppError::Model(format!(
+                    "Model '{}' must define a model or modelQuant artifact",
+                    model.id
+                )));
+            }
+        }
+        ModelBackend::Streaming => {
+            for role in [
+                ModelArtifactRole::Encoder,
+                ModelArtifactRole::Decoder,
+                ModelArtifactRole::Config,
+                ModelArtifactRole::Vocab,
+                ModelArtifactRole::MeanVariance,
+            ] {
+                if !has_role(role) {
+                    return Err(AppError::Model(format!(
+                        "Model '{}' must define a {:?} artifact",
+                        model.id, role
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn build_model_layout(model_dir: &Path, model: &ModelInfo) -> Result<ResolvedModelLayout> {
+    let artifact_path = |role| {
+        model
+            .artifact(role)
+            .map(|artifact| model_dir.join(&artifact.file_name))
+    };
+
+    Ok(ResolvedModelLayout {
+        model_dir: model_dir.to_path_buf(),
+        backend: model.backend,
+        model_path: artifact_path(ModelArtifactRole::Model),
+        model_quant_path: artifact_path(ModelArtifactRole::ModelQuant),
+        encoder_path: artifact_path(ModelArtifactRole::Encoder),
+        encoder_quant_path: artifact_path(ModelArtifactRole::EncoderQuant),
+        decoder_path: artifact_path(ModelArtifactRole::Decoder),
+        decoder_quant_path: artifact_path(ModelArtifactRole::DecoderQuant),
+        vocab_path: artifact_path(ModelArtifactRole::Vocab).ok_or_else(|| {
+            AppError::Model(format!("Model '{}' is missing a vocab artifact", model.id))
+        })?,
+        config_path: artifact_path(ModelArtifactRole::Config),
+        mean_variance_path: artifact_path(ModelArtifactRole::MeanVariance),
+    })
+}
+
 /// Download and install the model, calling `progress_fn(downloaded_bytes, total_bytes)`.
-/// Tries multiple sources: modelscope → huggingface (individual files) → github (tar.gz).
+/// Downloads individual files from the configured GitHub release base URL.
 /// Blocks the calling thread; run from a background thread.
 pub fn download_model_with_progress<F>(
     paths: &AppPaths,
@@ -210,11 +417,10 @@ where
         .iter()
         .find(|m| m.id == model_id)
         .ok_or_else(|| AppError::Model(format!("Model '{}' not found in registry", model_id)))?;
-
-    let urls = collect_download_urls(model);
-    if urls.is_empty() {
+    validate_model_metadata(model)?;
+    if model.download_url.is_empty() {
         return Err(AppError::Model(format!(
-            "No download URLs configured for model '{}'",
+            "No download URL configured for model '{}'",
             model_id
         )));
     }
@@ -224,91 +430,21 @@ where
     std::fs::create_dir_all(&models_dir)?;
     let model_dir = get_model_dir_with_paths(paths, model_id);
     std::fs::create_dir_all(&model_dir)?;
-    let temp_archive = models_dir.join(format!(".{}.downloading.tar.gz", model_id));
 
-    let mut last_error: Option<String> = None;
-    let mut used_archive = false;
+    let proxy_prefix = github_proxy_prefix_with_paths(Some(paths));
+    download_individual_files(
+        &client,
+        &model.download_url,
+        proxy_prefix.as_deref(),
+        &model_dir,
+        model_id,
+        model.size_bytes,
+        &model.artifacts,
+        &progress_fn,
+    )?;
 
-    for url in &urls {
-        let is_archive = url.ends_with(".tar.gz");
-        used_archive = is_archive;
-
-        // For archive downloads: keep any partial temp file for resume — do NOT delete it here.
-        // For individual-file downloads: restart each file from scratch on retry.
-
-        let result = if is_archive {
-            download_archive(&client, url, &temp_archive, model.size_bytes, &progress_fn)
-        } else {
-            download_individual_files(
-                &client,
-                url,
-                &model_dir,
-                model_id,
-                model.size_bytes,
-                &model.files,
-                &progress_fn,
-            )
-        };
-
-        match result {
-            Ok(()) => {
-                last_error = None;
-                break;
-            }
-            Err(e) => {
-                eprintln!("[shanji] Download from {} failed: {}", url, e);
-                last_error = Some(e.to_string());
-            }
-        }
-    }
-
-    if let Some(e) = last_error {
-        return Err(AppError::Network(format!(
-            "All download sources failed. Last error: {}",
-            e
-        )));
-    }
-
-    // Extract archive if we downloaded a tar.gz
-    if used_archive && temp_archive.exists() {
-        extract_tar_gz(&temp_archive, &model_dir)?;
-        let _ = std::fs::remove_file(&temp_archive);
-
-        // Flatten if archive extracted into a subdirectory
-        if !is_model_ready(&model_dir, &model.files) {
-            flatten_single_subdirectory(&model_dir)?;
-        }
-    }
-
-    // tokens.txt → vocab.txt alias (for tokenizer compatibility)
-    let tokens_path = model_dir.join("tokens.txt");
-    let vocab_path = model_dir.join("vocab.txt");
-    if tokens_path.exists() && !vocab_path.exists() {
-        std::fs::rename(&tokens_path, &vocab_path)
-            .map_err(|e| AppError::Io(format!("Failed to rename tokens.txt: {}", e)))?;
-    }
-
-    validate_model_dir(&model_dir, &model.files)?;
+    validate_model_dir(&model_dir, model)?;
     Ok(())
-}
-
-/// Build list of download URLs to try in priority order: modelscope → huggingface → primary.
-fn collect_download_urls(model: &ModelInfo) -> Vec<String> {
-    let mut urls = Vec::new();
-    if let Some(ref u) = model.modelscope_url {
-        if !u.is_empty() {
-            urls.push(u.clone());
-        }
-    }
-    if let Some(ref u) = model.huggingface_url {
-        if !u.is_empty() {
-            urls.push(u.clone());
-        }
-    }
-    if !model.download_url.is_empty() {
-        urls.push(model.download_url.clone());
-    }
-    urls
 }
 
 fn build_blocking_client() -> Result<reqwest::blocking::Client> {
@@ -320,15 +456,81 @@ fn build_blocking_client() -> Result<reqwest::blocking::Client> {
         .map_err(|e| AppError::Network(format!("Failed to build HTTP client: {}", e)))
 }
 
-/// Download a tar.gz archive to `dest` with:
-/// - **Resume support**: if `dest` already exists, sends a `Range` header to continue.
-/// - **Stall detection**: if no bytes arrive for `STALL_TIMEOUT_SECS`, returns an error
-///   immediately while keeping the partial file so the next call can resume.
-fn download_archive<F>(
+/// Download individual model files from a GitHub release base URL.
+/// Files are fetched as `{base_url}/{artifact.file_name}` and saved using the same
+/// standardized file name inside the local model directory.
+fn download_individual_files<F>(
+    client: &reqwest::blocking::Client,
+    base_url: &str,
+    proxy_prefix: Option<&str>,
+    model_dir: &Path,
+    model_id: &str,
+    total_size_hint: u64,
+    artifacts: &[ModelArtifact],
+    progress_fn: &F,
+) -> Result<()>
+where
+    F: Fn(u64, u64),
+{
+    let base = if base_url.ends_with('/') {
+        base_url.to_string()
+    } else {
+        format!("{}/", base_url)
+    };
+
+    let total: u64 = artifacts.iter().map(|artifact| artifact.size_bytes).sum();
+    let total = total.max(total_size_hint);
+    let mut downloaded_total = 0u64;
+
+    for artifact in artifacts {
+        let direct_url = format!("{}{}", base, artifact.file_name);
+        let file_url = apply_github_proxy_with_prefix(&direct_url, proxy_prefix);
+        let dest = model_dir.join(&artifact.file_name);
+
+        eprintln!(
+            "[shanji] Downloading {} from {}",
+            artifact.file_name, file_url
+        );
+        match download_single_file(
+            client,
+            &file_url,
+            &dest,
+            &artifact.file_name,
+            &mut downloaded_total,
+            total,
+            progress_fn,
+        ) {
+            Ok(()) => {}
+            Err(proxy_error) if file_url != direct_url => {
+                eprintln!(
+                    "[shanji] Proxy download failed for {}, retrying direct: {}",
+                    artifact.file_name, proxy_error
+                );
+                download_single_file(
+                    client,
+                    &direct_url,
+                    &dest,
+                    &artifact.file_name,
+                    &mut downloaded_total,
+                    total,
+                    progress_fn,
+                )?;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    let _ = model_id;
+    Ok(())
+}
+
+fn download_single_file<F>(
     client: &reqwest::blocking::Client,
     url: &str,
     dest: &Path,
-    expected_size: u64,
+    file_name: &str,
+    downloaded_total: &mut u64,
+    total: u64,
     progress_fn: &F,
 ) -> Result<()>
 where
@@ -337,58 +539,25 @@ where
     use std::io::Write;
     use std::sync::mpsc;
 
-    const STALL_TIMEOUT_SECS: u64 = 60;
-
-    // Resume: check how many bytes we already have
-    let start_byte = if dest.exists() {
-        std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0)
-    } else {
-        0
-    };
-
-    let mut request = client.get(url);
-    if start_byte > 0 {
-        eprintln!(
-            "[shanji] Resuming archive download from byte {}",
-            start_byte
-        );
-        request = request.header("Range", format!("bytes={}-", start_byte));
-    }
-
-    let response = request
+    let response = client
+        .get(url)
         .send()
-        .map_err(|e| AppError::Network(format!("Request failed: {}", e)))?;
+        .map_err(|e| AppError::Network(format!("Request failed for {}: {}", file_name, e)))?;
 
-    let status = response.status();
-    let resuming = start_byte > 0 && status == reqwest::StatusCode::PARTIAL_CONTENT;
-
-    if !status.is_success() && !resuming {
-        return Err(AppError::Network(format!("HTTP {} from {}", status, url)));
+    if !response.status().is_success() {
+        return Err(AppError::Network(format!(
+            "HTTP {} when downloading {} from {}",
+            response.status(),
+            file_name,
+            url
+        )));
     }
 
-    let content_len = response.content_length().unwrap_or(0);
-    let total = if resuming {
-        start_byte + content_len
-    } else {
-        content_len.max(expected_size)
-    };
-
-    // Open file: append if resuming, truncate if fresh start
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(resuming)
-        .truncate(!resuming)
-        .write(true)
-        .open(dest)
-        .map_err(|e| AppError::Io(format!("Cannot open temp file: {}", e)))?;
-
-    // Spawn a dedicated reader thread so we can apply a recv_timeout (stall detection)
-    // without the blocking read() hanging the whole download thread forever.
-    let (tx, rx) = mpsc::channel::<Result<Vec<u8>>>();
+    let (tx, rx) = mpsc::channel::<std::result::Result<Vec<u8>, String>>();
     let mut body = response;
     std::thread::spawn(move || {
         use std::io::Read;
-        let mut buf = vec![0u8; 16_384]; // 16 KB — frequent progress updates
+        let mut buf = vec![0u8; 16_384];
         loop {
             match body.read(&mut buf) {
                 Ok(0) => {
@@ -401,232 +570,38 @@ where
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(AppError::Io(format!("Read error: {}", e))));
+                    let _ = tx.send(Err(e.to_string()));
                     break;
                 }
             }
         }
     });
 
-    let timeout = std::time::Duration::from_secs(STALL_TIMEOUT_SECS);
-    let mut downloaded = if resuming { start_byte } else { 0 };
-
+    let mut file = std::fs::File::create(dest)
+        .map_err(|e| AppError::Io(format!("Cannot create {}: {}", file_name, e)))?;
+    let timeout = std::time::Duration::from_secs(60);
     loop {
         match rx.recv_timeout(timeout) {
-            Ok(Ok(chunk)) if chunk.is_empty() => break, // EOF — done
+            Ok(Ok(chunk)) if chunk.is_empty() => break,
             Ok(Ok(chunk)) => {
                 file.write_all(&chunk)
-                    .map_err(|e| AppError::Io(format!("Write error: {}", e)))?;
-                downloaded += chunk.len() as u64;
-                progress_fn(downloaded, total);
+                    .map_err(|e| AppError::Io(format!("Write error for {}: {}", file_name, e)))?;
+                *downloaded_total += chunk.len() as u64;
+                progress_fn((*downloaded_total).min(total), total);
             }
-            Ok(Err(e)) => return Err(e),
+            Ok(Err(e)) => {
+                return Err(AppError::Io(format!("Read error for {}: {}", file_name, e)));
+            }
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                // Partial file is preserved on disk — caller can retry and resume
                 return Err(AppError::Network(format!(
-                    "Download stalled: no data for {} seconds (downloaded {} / {} bytes)",
-                    STALL_TIMEOUT_SECS, downloaded, total
+                    "Stalled while downloading {}: no data for 60 seconds",
+                    file_name
                 )));
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
 
-    Ok(())
-}
-
-/// Download individual model files from a HuggingFace-style base URL.
-/// Files listed in `file_names` (e.g. `model_quant.onnx`, `asr.yaml`, …) are fetched as
-/// `{base_url}{filename}`.  Missing config files get a generated default so the download
-/// can still succeed.
-fn download_individual_files<F>(
-    client: &reqwest::blocking::Client,
-    base_url: &str,
-    model_dir: &Path,
-    model_id: &str,
-    total_size_hint: u64,
-    file_names: &[String],
-    progress_fn: &F,
-) -> Result<()>
-where
-    F: Fn(u64, u64),
-{
-    use std::io::Write;
-
-    let base = if base_url.ends_with('/') {
-        base_url.to_string()
-    } else {
-        format!("{}/", base_url)
-    };
-
-    // Determine which files to fetch and their approximate sizes
-    let default_files: Vec<(&str, u64)> = vec![
-        ("model.onnx", 880_000_000),
-        ("asr.yaml", 10_000),
-        ("am.mvn", 12_000),
-        ("tokens.txt", 35_000),
-    ];
-
-    let files: Vec<(String, u64)> = if file_names.is_empty() {
-        default_files
-            .iter()
-            .map(|(n, s)| (n.to_string(), *s))
-            .collect()
-    } else {
-        file_names
-            .iter()
-            .map(|n| {
-                let size = default_files
-                    .iter()
-                    .find(|(dn, _)| *dn == n.as_str())
-                    .map(|(_, s)| *s)
-                    .unwrap_or(50_000);
-                (n.clone(), size)
-            })
-            .collect()
-    };
-
-    let total: u64 = files.iter().map(|(_, s)| s).sum();
-    let total = total.max(total_size_hint);
-    let mut downloaded_total = 0u64;
-
-    for (filename, expected_size) in &files {
-        let file_url = format!("{}{}", base, filename);
-        let dest = model_dir.join(filename);
-
-        eprintln!("[shanji] Downloading {} from {}", filename, file_url);
-
-        let response_result = client.get(&file_url).send();
-        match response_result {
-            Ok(response) if response.status().is_success() => {
-                use std::sync::mpsc;
-                let (tx, rx) = mpsc::channel::<std::result::Result<Vec<u8>, String>>();
-                let mut body = response;
-                std::thread::spawn(move || {
-                    use std::io::Read;
-                    let mut buf = vec![0u8; 16_384];
-                    loop {
-                        match body.read(&mut buf) {
-                            Ok(0) => {
-                                let _ = tx.send(Ok(vec![]));
-                                break;
-                            }
-                            Ok(n) => {
-                                if tx.send(Ok(buf[..n].to_vec())).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                let _ = tx.send(Err(e.to_string()));
-                                break;
-                            }
-                        }
-                    }
-                });
-                let mut file = std::fs::File::create(&dest)
-                    .map_err(|e| AppError::Io(format!("Cannot create {}: {}", filename, e)))?;
-                let timeout = std::time::Duration::from_secs(60);
-                loop {
-                    match rx.recv_timeout(timeout) {
-                        Ok(Ok(chunk)) if chunk.is_empty() => break,
-                        Ok(Ok(chunk)) => {
-                            file.write_all(&chunk).map_err(|e| {
-                                AppError::Io(format!("Write error for {}: {}", filename, e))
-                            })?;
-                            downloaded_total += chunk.len() as u64;
-                            progress_fn(downloaded_total.min(total), total);
-                        }
-                        Ok(Err(e)) => {
-                            return Err(AppError::Io(format!("Read error for {}: {}", filename, e)))
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => {
-                            return Err(AppError::Network(format!(
-                                "Stalled while downloading {}: no data for 60 seconds",
-                                filename
-                            )))
-                        }
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    }
-                }
-            }
-            Ok(response) => {
-                let status = response.status();
-                // Optional config file: generate a default rather than hard-failing
-                if filename == "asr.yaml" || filename == "config.yaml" {
-                    eprintln!(
-                        "[shanji] {} not found (HTTP {}), generating default",
-                        filename, status
-                    );
-                    let default_cfg = "model_type: paraformer\nmodel_file: model_quant.onnx\nsampling_rate: 16000\nlanguage: zh\n";
-                    std::fs::write(&dest, default_cfg).map_err(|e| {
-                        AppError::Io(format!("Cannot write default {}: {}", filename, e))
-                    })?;
-                    downloaded_total += expected_size;
-                    progress_fn(downloaded_total.min(total), total);
-                } else {
-                    return Err(AppError::Network(format!(
-                        "HTTP {} when downloading {} from {}",
-                        status, filename, file_url
-                    )));
-                }
-            }
-            Err(e) => {
-                if filename == "asr.yaml" || filename == "config.yaml" {
-                    eprintln!(
-                        "[shanji] {} download error ({}), generating default",
-                        filename, e
-                    );
-                    let default_cfg = "model_type: paraformer\nmodel_file: model_quant.onnx\nsampling_rate: 16000\nlanguage: zh\n";
-                    std::fs::write(&dest, default_cfg).map_err(|e2| {
-                        AppError::Io(format!("Cannot write default {}: {}", filename, e2))
-                    })?;
-                    downloaded_total += expected_size;
-                    progress_fn(downloaded_total.min(total), total);
-                } else {
-                    return Err(AppError::Network(format!(
-                        "Request failed for {}: {}",
-                        filename, e
-                    )));
-                }
-            }
-        }
-    }
-
-    let _ = model_id;
-    Ok(())
-}
-
-/// Extract a tar.gz archive into `dest_dir`.
-fn extract_tar_gz(archive_path: &Path, dest_dir: &Path) -> Result<()> {
-    let file = std::fs::File::open(archive_path)
-        .map_err(|e| AppError::Io(format!("Cannot open archive: {}", e)))?;
-    let gz = flate2::read::GzDecoder::new(file);
-    let mut archive = tar::Archive::new(gz);
-    archive
-        .unpack(dest_dir)
-        .map_err(|e| AppError::Io(format!("Extraction failed: {}", e)))?;
-    Ok(())
-}
-
-/// Move all files from the only immediate subdirectory of `dir` up into `dir` itself.
-fn flatten_single_subdirectory(dir: &Path) -> Result<()> {
-    let subdirs: Vec<_> = std::fs::read_dir(dir)
-        .map_err(|e| AppError::Io(e.to_string()))?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().is_dir())
-        .collect();
-
-    if subdirs.len() != 1 {
-        return Ok(());
-    }
-
-    let sub = subdirs[0].path();
-    for entry in std::fs::read_dir(&sub).map_err(|e| AppError::Io(e.to_string()))? {
-        let entry = entry.map_err(|e| AppError::Io(e.to_string()))?;
-        let dest = dir.join(entry.file_name());
-        std::fs::rename(entry.path(), dest).map_err(|e| AppError::Io(e.to_string()))?;
-    }
-    let _ = std::fs::remove_dir_all(&sub);
     Ok(())
 }
 
@@ -660,7 +635,7 @@ fn apply_download_status_with_paths(paths: &AppPaths, registry: &mut ModelRegist
 
     for model in &mut registry.models {
         let model_dir = models_dir.join(&model.id);
-        model.is_downloaded = is_model_ready(&model_dir, &model.files);
+        model.is_downloaded = is_model_ready(&model_dir, model);
         model.download_path = if model.is_downloaded {
             Some(model_dir)
         } else {
@@ -669,42 +644,13 @@ fn apply_download_status_with_paths(paths: &AppPaths, registry: &mut ModelRegist
     }
 }
 
-fn required_files(files: &[String]) -> Vec<String> {
-    if files.is_empty() {
-        return vec!["model.onnx".to_string(), "vocab.txt".to_string()];
-    }
-
-    files.to_vec()
-}
-
-fn has_model_file(model_dir: &Path) -> bool {
-    model_dir.join("model.onnx").exists()
-        || model_dir.join("model_quant.onnx").exists()
-        || model_dir.join("encoder.onnx").exists()
-}
-
-fn has_vocab_file(model_dir: &Path) -> bool {
-    model_dir.join("vocab.txt").exists() || model_dir.join("vocab.json").exists()
-}
-
-fn is_model_ready(model_dir: &Path, files: &[String]) -> bool {
-    if !model_dir.exists() {
+fn is_model_ready(model_dir: &Path, model: &ModelInfo) -> bool {
+    if !model_dir.exists() || validate_model_metadata(model).is_err() {
         return false;
     }
 
-    if files.is_empty() {
-        return has_model_file(model_dir) && has_vocab_file(model_dir);
-    }
-
-    required_files(files).iter().all(|file| {
-        if model_dir.join(file).exists() {
-            return true;
-        }
-
-        if file == "tokens.txt" {
-            return model_dir.join("vocab.txt").exists();
-        }
-
-        false
-    })
+    model
+        .artifacts
+        .iter()
+        .all(|artifact| model_dir.join(&artifact.file_name).exists())
 }
