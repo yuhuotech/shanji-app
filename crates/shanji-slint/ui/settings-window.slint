@@ -61,7 +61,7 @@ component NavItem inherits Rectangle {
 }
 
 // ── 可复用：设置分组标题 ──────────────────────────────────────────────────
-component SectionLabel inherits Text {
+export component SectionLabel inherits Text {
     in property <string> label;
     text: root.label;
     color: Palette.text-muted;
@@ -71,7 +71,7 @@ component SectionLabel inherits Text {
 }
 
 // ── 可复用：开关控件 ───────────────────────────────────────────────────────
-component ToggleSwitch inherits Rectangle {
+export component ToggleSwitch inherits Rectangle {
     in-out property <bool> checked: false;
     in property <bool> enabled: true;
     callback toggled(bool);
@@ -234,67 +234,67 @@ export component SettingsWindow inherits Window {
                     // 菜单项
                     Rectangle { height: 6px; }  // 顶部间距
 
-                    Rectangle {
+                    HorizontalLayout {
                         height: 34px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
-                            width: 100%;
+                            horizontal-stretch: 1;
                             label: "🎙 语音识别";
                             active: root.active-section == SettingsSection.Asr;
                             clicked => { root.active-section = SettingsSection.Asr; }
                         }
                     }
-                    Rectangle {
+                    HorizontalLayout {
                         height: 34px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
-                            width: 100%;
+                            horizontal-stretch: 1;
                             label: "✨ LLM 润色";
                             active: root.active-section == SettingsSection.Llm;
                             clicked => { root.active-section = SettingsSection.Llm; }
                         }
                     }
-                    Rectangle {
+                    HorizontalLayout {
                         height: 34px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
-                            width: 100%;
+                            horizontal-stretch: 1;
                             label: "⌨️ 输出";
                             active: root.active-section == SettingsSection.Output;
                             clicked => { root.active-section = SettingsSection.Output; }
                         }
                     }
-                    Rectangle {
+                    HorizontalLayout {
                         height: 34px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
-                            width: 100%;
+                            horizontal-stretch: 1;
                             label: "🔑 快捷键";
                             active: root.active-section == SettingsSection.Hotkeys;
                             clicked => { root.active-section = SettingsSection.Hotkeys; }
                         }
                     }
-                    Rectangle {
+                    HorizontalLayout {
                         height: 34px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
-                            width: 100%;
+                            horizontal-stretch: 1;
                             label: "🌐 网络";
                             active: root.active-section == SettingsSection.Network;
                             clicked => { root.active-section = SettingsSection.Network; }
                         }
                     }
-                    Rectangle {
+                    HorizontalLayout {
                         height: 34px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
-                            width: 100%;
+                            horizontal-stretch: 1;
                             label: "🕑 历史记录";
                             active: root.active-section == SettingsSection.History;
                             clicked => { root.active-section = SettingsSection.History; }
@@ -309,12 +309,12 @@ export component SettingsWindow inherits Window {
                         height: 1px;
                         background: Palette.border;
                     }
-                    Rectangle {
+                    HorizontalLayout {
                         height: 34px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
-                            width: 100%;
+                            horizontal-stretch: 1;
                             label: "ℹ️ 关于";
                             active: root.active-section == SettingsSection.About;
                             clicked => { root.active-section = SettingsSection.About; }
