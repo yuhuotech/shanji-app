@@ -95,6 +95,8 @@ pub struct AsrConfig {
     pub refine_model_id: String,
     pub insert_punct: bool,
     pub punct_style: String,
+    pub comma_pause_ms: u32,
+    pub sentence_pause_ms: u32,
 }
 
 impl Default for AsrConfig {
@@ -105,6 +107,8 @@ impl Default for AsrConfig {
             refine_model_id: "paraformer-zh".to_string(),
             insert_punct: true,
             punct_style: "zh".to_string(),
+            comma_pause_ms: 1_200,
+            sentence_pause_ms: 2_800,
         }
     }
 }
@@ -276,7 +280,7 @@ fn default_version() -> u32 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: 6,
+            version: 7,
             general: GeneralConfig::default(),
             audio: AudioConfig::default(),
             asr: AsrConfig::default(),
@@ -363,6 +367,35 @@ impl AppConfig {
                 self.audio.min_speech_frames = 2;
             }
             self.version = 6;
+            modified = true;
+        }
+
+        if self.version < 7 {
+            let default_asr = AsrConfig::default();
+            if self.asr.comma_pause_ms == 0 {
+                self.asr.comma_pause_ms = default_asr.comma_pause_ms;
+            }
+            if self.asr.sentence_pause_ms == 0 {
+                self.asr.sentence_pause_ms = default_asr.sentence_pause_ms;
+            }
+            if self.asr.sentence_pause_ms <= self.asr.comma_pause_ms {
+                self.asr.sentence_pause_ms = self
+                    .asr
+                    .comma_pause_ms
+                    .saturating_add(1_000)
+                    .max(default_asr.sentence_pause_ms);
+            }
+
+            let uses_legacy_one_frame_vad = approx_eq(self.audio.vad_threshold, 0.5)
+                && approx_eq(self.audio.vad_end_threshold, 0.35)
+                && self.audio.min_speech_frames == 1;
+            if uses_legacy_one_frame_vad {
+                self.audio.vad_threshold = 0.45;
+                self.audio.vad_end_threshold = 0.3;
+                self.audio.min_speech_frames = 2;
+            }
+
+            self.version = 7;
             modified = true;
         }
 
@@ -456,10 +489,12 @@ mod tests {
         config.audio.min_speech_frames = 3;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 6);
+        assert_eq!(config.version, 7);
         assert!(approx_eq(config.audio.vad_threshold, 0.45));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
         assert_eq!(config.audio.min_speech_frames, 2);
+        assert_eq!(config.asr.comma_pause_ms, 1_200);
+        assert_eq!(config.asr.sentence_pause_ms, 2_800);
     }
 
     #[test]
@@ -469,11 +504,42 @@ mod tests {
         config.audio.vad_threshold = 0.55;
         config.audio.vad_end_threshold = 0.25;
         config.audio.min_speech_frames = 4;
+        config.asr.comma_pause_ms = 900;
+        config.asr.sentence_pause_ms = 2_400;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 6);
+        assert_eq!(config.version, 7);
         assert!(approx_eq(config.audio.vad_threshold, 0.55));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.25));
         assert_eq!(config.audio.min_speech_frames, 4);
+        assert_eq!(config.asr.comma_pause_ms, 900);
+        assert_eq!(config.asr.sentence_pause_ms, 2_400);
+    }
+
+    #[test]
+    fn migrate_updates_legacy_one_frame_vad_profile() {
+        let mut config = AppConfig::default();
+        config.version = 6;
+        config.audio.vad_threshold = 0.5;
+        config.audio.vad_end_threshold = 0.35;
+        config.audio.min_speech_frames = 1;
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 7);
+        assert!(approx_eq(config.audio.vad_threshold, 0.45));
+        assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
+        assert_eq!(config.audio.min_speech_frames, 2);
+    }
+
+    #[test]
+    fn migrate_normalizes_invalid_pause_threshold_order() {
+        let mut config = AppConfig::default();
+        config.version = 6;
+        config.asr.comma_pause_ms = 1_800;
+        config.asr.sentence_pause_ms = 1_000;
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 7);
+        assert!(config.asr.sentence_pause_ms > config.asr.comma_pause_ms);
     }
 }

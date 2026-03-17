@@ -25,6 +25,11 @@ weight: 88
 - FunASR
 - ModelScope
 - Hugging Face
+- 流式
+- 流式语音识别
+- 中文流式语音识别
+- 实时转写
+- 低延迟实时转写
 - API
 - SDK
 - LLM

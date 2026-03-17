@@ -93,15 +93,18 @@ struct MarkdownMeta {
 pub fn ensure_default_libraries_with_paths(paths: &AppPaths) -> Result<()> {
     for (relative_path, content) in BUILTIN_LIBRARIES {
         let path = paths.hotwords_dir().join(relative_path);
-        if path.exists() {
-            continue;
-        }
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| AppError::Io(format!("Failed to create hotword dir: {}", e)))?;
         }
-        std::fs::write(&path, content)
-            .map_err(|e| AppError::Io(format!("Failed to write built-in hotwords: {}", e)))?;
+        let should_write = match std::fs::read_to_string(&path) {
+            Ok(existing) => existing != *content,
+            Err(_) => true,
+        };
+        if should_write {
+            std::fs::write(&path, content)
+                .map_err(|e| AppError::Io(format!("Failed to write built-in hotwords: {}", e)))?;
+        }
     }
     Ok(())
 }
@@ -724,6 +727,7 @@ pub fn parse_thuocl(content: &str) -> Vec<Hotword> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::paths::AppPaths;
 
     #[test]
     fn markdown_dictionary_parses_frontmatter_and_bullets() {
@@ -747,5 +751,22 @@ weight: 88
         assert!(words
             .iter()
             .any(|word| word.word == "ChatGPT" && word.weight == 92));
+    }
+
+    #[test]
+    fn ensure_default_libraries_refreshes_builtin_content() {
+        let root = std::env::temp_dir().join(format!("shanji-hotwords-{}", uuid::Uuid::new_v4()));
+        let paths = AppPaths::new(root.join("config"), root.join("data"));
+        paths.ensure_base_dirs().unwrap();
+
+        let builtin_path = paths.hotwords_dir().join("builtin/ai-coding.md");
+        std::fs::write(&builtin_path, "stale builtin content").unwrap();
+
+        ensure_default_libraries_with_paths(&paths).unwrap();
+
+        let refreshed = std::fs::read_to_string(&builtin_path).unwrap();
+        assert_eq!(refreshed, include_str!("../assets/hotwords/ai-coding.md"));
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

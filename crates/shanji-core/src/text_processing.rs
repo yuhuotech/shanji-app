@@ -46,11 +46,66 @@ const CONNECTIVE_MARKERS: &[&str] = &[
     "不过如果",
 ];
 
-#[derive(Clone, Debug, Default)]
+const PREDICATE_CLAUSE_MARKERS: &[&str] = &[
+    "适合",
+    "更适合",
+    "适用于",
+    "用于",
+    "支持",
+    "可以",
+    "能够",
+    "需要",
+    "值得",
+    "便于",
+];
+
+const PREDICATE_HEAD_SUFFIXES: &[&str] = &[
+    "模型", "方案", "系统", "工具", "服务", "接口", "能力", "引擎", "框架", "架构", "模块", "组件",
+    "平台", "设备", "产品", "功能", "方法", "技术",
+];
+
+const OPEN_ENDED_SUFFIXES: &[&str] = &[
+    "低延迟",
+    "高延迟",
+    "高并发",
+    "高精度",
+    "高性能",
+    "多语言",
+    "多模态",
+    "端到端",
+    "实时",
+    "流式",
+];
+
+const TIGHT_BOUNDARY_PHRASES: &[&str] = &[
+    "低延迟实时转写",
+    "低延迟语音转写",
+    "低延迟实时识别",
+    "实时语音识别",
+    "实时语音转写",
+    "流式语音识别",
+    "中文流式语音识别",
+];
+
+#[derive(Clone, Debug)]
 pub struct TextProcessingConfig {
     pub punct_style: String,
     pub insert_punct: bool,
+    pub comma_pause_ms: u32,
+    pub sentence_pause_ms: u32,
     pub hotwords: Vec<Hotword>,
+}
+
+impl Default for TextProcessingConfig {
+    fn default() -> Self {
+        Self {
+            punct_style: "zh".to_string(),
+            insert_punct: true,
+            comma_pause_ms: 1_200,
+            sentence_pause_ms: 2_800,
+            hotwords: Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -81,7 +136,7 @@ pub fn normalize_transcript_with_hotwords(text: &str, hotwords: &[Hotword]) -> S
 pub fn render_segmented_transcript(
     committed_segments: &[TranscriptChunk<'_>],
     pending_segment: Option<TranscriptChunk<'_>>,
-    current_partial: &str,
+    current_partial: Option<TranscriptChunk<'_>>,
     config: &TextProcessingConfig,
     is_final: bool,
 ) -> String {
@@ -99,20 +154,37 @@ pub fn render_segmented_transcript(
             leading_pause_ms: chunk.leading_pause_ms,
         })
         .filter(|chunk| !chunk.text.is_empty());
-    let partial = normalize_transcript_with_hotwords(current_partial, &config.hotwords);
+    let partial = current_partial
+        .map(|chunk| RenderedChunk {
+            text: normalize_transcript_with_hotwords(chunk.text, &config.hotwords),
+            leading_pause_ms: chunk.leading_pause_ms,
+        })
+        .filter(|chunk| !chunk.text.is_empty());
 
     if !config.insert_punct {
         return join_without_punctuation(
             &committed,
             pending.as_ref(),
-            &partial,
+            partial.as_ref(),
             &config.punct_style,
         );
     }
 
     match config.punct_style.as_str() {
-        "en" => render_segmented_english(&committed, pending.as_ref(), &partial, is_final),
-        _ => render_segmented_chinese(&committed, pending.as_ref(), &partial, is_final),
+        "en" => render_segmented_english(
+            &committed,
+            pending.as_ref(),
+            partial.as_ref(),
+            config,
+            is_final,
+        ),
+        _ => render_segmented_chinese(
+            &committed,
+            pending.as_ref(),
+            partial.as_ref(),
+            config,
+            is_final,
+        ),
     }
 }
 
@@ -137,7 +209,7 @@ struct RenderedChunk {
 fn join_without_punctuation(
     committed: &[RenderedChunk],
     pending: Option<&RenderedChunk>,
-    partial: &str,
+    partial: Option<&RenderedChunk>,
     punct_style: &str,
 ) -> String {
     let mut parts = committed
@@ -148,8 +220,8 @@ fn join_without_punctuation(
     if let Some(pending) = pending {
         parts.push(pending.text.as_str());
     }
-    if !partial.is_empty() {
-        parts.push(partial);
+    if let Some(partial) = partial {
+        parts.push(partial.text.as_str());
     }
 
     match punct_style {
@@ -161,27 +233,29 @@ fn join_without_punctuation(
 fn render_segmented_chinese(
     committed: &[RenderedChunk],
     pending: Option<&RenderedChunk>,
-    current_partial: &str,
+    current_partial: Option<&RenderedChunk>,
+    config: &TextProcessingConfig,
     is_final: bool,
 ) -> String {
     let mut text = String::new();
     for chunk in committed {
-        append_chunk_with_pause(&mut text, chunk);
+        append_chunk_with_pause(&mut text, chunk, config);
     }
 
     if let Some(pending) = pending {
-        append_chunk_with_pause(&mut text, pending);
+        append_chunk_with_pause(&mut text, pending, config);
     }
 
-    if !current_partial.is_empty() {
+    if let Some(current_partial) = current_partial {
         if !text.is_empty() && !ends_with_punctuation(&text) {
-            text.push_str(if current_partial.len() > 24 {
-                "，"
-            } else {
-                ""
-            });
+            text.push_str(chinese_pause_punctuation(
+                &text,
+                &current_partial.text,
+                current_partial.leading_pause_ms,
+                config,
+            ));
         }
-        text.push_str(current_partial);
+        text.push_str(&current_partial.text);
     }
 
     let text = refine_chinese_clause(&text, is_final);
@@ -195,23 +269,27 @@ fn render_segmented_chinese(
 fn render_segmented_english(
     committed: &[RenderedChunk],
     pending: Option<&RenderedChunk>,
-    current_partial: &str,
+    current_partial: Option<&RenderedChunk>,
+    config: &TextProcessingConfig,
     is_final: bool,
 ) -> String {
     let mut text = String::new();
     for chunk in committed {
-        append_english_chunk_with_pause(&mut text, chunk);
+        append_english_chunk_with_pause(&mut text, chunk, config);
     }
 
     if let Some(pending) = pending {
-        append_english_chunk_with_pause(&mut text, pending);
+        append_english_chunk_with_pause(&mut text, pending, config);
     }
 
-    if !current_partial.is_empty() {
+    if let Some(current_partial) = current_partial {
         if !text.is_empty() && !ends_with_punctuation(&text) {
-            text.push(' ');
+            text.push_str(english_pause_punctuation(
+                current_partial.leading_pause_ms,
+                config,
+            ));
         }
-        text.push_str(current_partial);
+        text.push_str(&current_partial.text);
     }
 
     if is_final {
@@ -221,37 +299,140 @@ fn render_segmented_english(
     }
 }
 
-fn append_chunk_with_pause(out: &mut String, chunk: &RenderedChunk) {
+fn append_chunk_with_pause(out: &mut String, chunk: &RenderedChunk, config: &TextProcessingConfig) {
     if chunk.text.is_empty() {
         return;
     }
 
     if !out.is_empty() && !ends_with_punctuation(out) {
-        out.push_str(match chunk.leading_pause_ms {
-            0..=199 => "",
-            200..=799 => "，",
-            800..=1199 => "，",
-            _ => "。",
-        });
+        out.push_str(chinese_pause_punctuation(
+            out,
+            &chunk.text,
+            chunk.leading_pause_ms,
+            config,
+        ));
     }
 
     out.push_str(&chunk.text);
 }
 
-fn append_english_chunk_with_pause(out: &mut String, chunk: &RenderedChunk) {
+fn append_english_chunk_with_pause(
+    out: &mut String,
+    chunk: &RenderedChunk,
+    config: &TextProcessingConfig,
+) {
     if chunk.text.is_empty() {
         return;
     }
 
     if !out.is_empty() && !ends_with_punctuation(out) {
-        out.push_str(match chunk.leading_pause_ms {
-            0..=199 => " ",
-            200..=1599 => ", ",
-            _ => ". ",
-        });
+        out.push_str(english_pause_punctuation(chunk.leading_pause_ms, config));
     }
 
     out.push_str(&chunk.text);
+}
+
+fn chinese_pause_punctuation(
+    previous_text: &str,
+    next_text: &str,
+    leading_pause_ms: u32,
+    config: &TextProcessingConfig,
+) -> &'static str {
+    if leading_pause_ms < config.comma_pause_ms {
+        ""
+    } else {
+        choose_chinese_boundary_punctuation(previous_text, next_text, leading_pause_ms, config)
+    }
+}
+
+fn english_pause_punctuation(leading_pause_ms: u32, config: &TextProcessingConfig) -> &'static str {
+    if leading_pause_ms < config.comma_pause_ms {
+        " "
+    } else if leading_pause_ms < config.sentence_pause_ms {
+        ", "
+    } else {
+        ". "
+    }
+}
+
+fn choose_chinese_boundary_punctuation(
+    previous_text: &str,
+    next_text: &str,
+    leading_pause_ms: u32,
+    config: &TextProcessingConfig,
+) -> &'static str {
+    let previous_text = trim_boundary_edges(previous_text);
+    let next_text = trim_boundary_edges(next_text);
+    if previous_text.is_empty() || next_text.is_empty() {
+        return "";
+    }
+
+    if forms_tight_boundary_phrase(previous_text, next_text)
+        || ends_with_any(previous_text, OPEN_ENDED_SUFFIXES)
+    {
+        return "";
+    }
+
+    if leading_pause_ms >= config.sentence_pause_ms {
+        return "。";
+    }
+
+    if starts_connective_marker(next_text) || starts_predicate_clause(previous_text, next_text) {
+        return "，";
+    }
+
+    if is_likely_complete_clause(previous_text) && starts_new_sentence_candidate(next_text) {
+        return "。";
+    }
+
+    "，"
+}
+
+fn starts_connective_marker(text: &str) -> bool {
+    CONNECTIVE_MARKERS
+        .iter()
+        .any(|marker| text.starts_with(marker))
+}
+
+fn starts_predicate_clause(previous_text: &str, next_text: &str) -> bool {
+    PREDICATE_CLAUSE_MARKERS
+        .iter()
+        .any(|marker| next_text.starts_with(marker))
+        && ends_with_any(previous_text, PREDICATE_HEAD_SUFFIXES)
+}
+
+fn starts_new_sentence_candidate(text: &str) -> bool {
+    text.chars().count() >= 2 && !starts_connective_marker(text)
+}
+
+fn is_likely_complete_clause(text: &str) -> bool {
+    text.chars().count() >= 6 && !ends_with_any(text, OPEN_ENDED_SUFFIXES)
+}
+
+fn forms_tight_boundary_phrase(previous_text: &str, next_text: &str) -> bool {
+    TIGHT_BOUNDARY_PHRASES
+        .iter()
+        .any(|phrase| boundary_matches_phrase(previous_text, next_text, phrase))
+}
+
+fn trim_boundary_edges(text: &str) -> &str {
+    text.trim_matches(|ch: char| ch.is_whitespace() || is_boundary_punctuation(ch))
+}
+
+fn ends_with_any(text: &str, suffixes: &[&str]) -> bool {
+    suffixes.iter().any(|suffix| text.ends_with(suffix))
+}
+
+fn boundary_matches_phrase(previous_text: &str, next_text: &str, phrase: &str) -> bool {
+    let phrase_chars = phrase.chars().collect::<Vec<_>>();
+    for split in 1..phrase_chars.len() {
+        let left = phrase_chars[..split].iter().collect::<String>();
+        let right = phrase_chars[split..].iter().collect::<String>();
+        if previous_text.ends_with(&left) && next_text.starts_with(&right) {
+            return true;
+        }
+    }
+    false
 }
 
 fn finalize_chinese_text(text: &str) -> String {
@@ -294,10 +475,17 @@ fn refine_chinese_clause(text: &str, is_final: bool) -> String {
 
     while idx < chars.len() {
         let suffix = chars[idx..].iter().collect::<String>();
-        let starts_marker = CONNECTIVE_MARKERS
-            .iter()
-            .any(|marker| suffix.starts_with(marker));
-        if starts_marker && !out.is_empty() && !ends_with_punctuation(&out) && since_punct >= 5 {
+        let starts_connective = starts_connective_marker(&suffix);
+        let starts_predicate = starts_predicate_clause(&out, &suffix);
+        if starts_connective && !out.is_empty() && !ends_with_punctuation(&out) && since_punct >= 5
+        {
+            out.push('，');
+            since_punct = 0;
+        } else if starts_predicate
+            && !out.is_empty()
+            && !ends_with_punctuation(&out)
+            && since_punct >= 4
+        {
             out.push('，');
             since_punct = 0;
         }
@@ -816,6 +1004,9 @@ fn apply_common_corrections(text: &str) -> String {
         ("那试", "测试"),
         ("侧是", "测试"),
         ("册是", "测试"),
+        ("中文流逝语音识别", "中文流式语音识别"),
+        ("流逝语音识别", "流式语音识别"),
+        ("流失语音识别", "流式语音识别"),
         ("英特尔mi", "Intel Mac"),
         ("英特尔mac", "Intel Mac"),
         ("英特尔 ma", "Intel Mac"),
@@ -863,6 +1054,8 @@ mod tests {
         TextProcessingConfig {
             punct_style: "zh".to_string(),
             insert_punct: true,
+            comma_pause_ms: 1_200,
+            sentence_pause_ms: 2_800,
             hotwords: vec![Hotword {
                 word: "Xcode".to_string(),
                 weight: 90,
@@ -897,6 +1090,13 @@ mod tests {
     }
 
     #[test]
+    fn normalize_corrects_streaming_phrase_confusions() {
+        let text = "中文流逝语音识别模型适合低延迟实时转写";
+        let result = normalize_transcript(text);
+        assert!(result.contains("中文流式语音识别模型"));
+    }
+
+    #[test]
     fn segmented_chinese_prefers_pause_boundaries() {
         let result = render_segmented_transcript(
             &[
@@ -906,14 +1106,14 @@ mod tests {
                 },
                 TranscriptChunk {
                     text: "尤其要升级系统",
-                    leading_pause_ms: 480,
+                    leading_pause_ms: 1_500,
                 },
             ],
             Some(TranscriptChunk {
                 text: "更建议直接用 Apple 硬件",
-                leading_pause_ms: 1300,
+                leading_pause_ms: 3_200,
             }),
-            "",
+            None,
             &zh_config(),
             false,
         );
@@ -923,5 +1123,87 @@ mod tests {
 
         let final_result = finalize_transcript_text(&result, &zh_config());
         assert!(final_result.ends_with('。'));
+    }
+
+    #[test]
+    fn segmented_chinese_partial_uses_pause_boundary() {
+        let result = render_segmented_transcript(
+            &[TranscriptChunk {
+                text: "中文流逝语音识别模型",
+                leading_pause_ms: 0,
+            }],
+            None,
+            Some(TranscriptChunk {
+                text: "适合低延迟实时转写",
+                leading_pause_ms: 1_532,
+            }),
+            &zh_config(),
+            false,
+        );
+        assert!(result.contains("中文流式语音识别模型，适合低延迟实时转写"));
+    }
+
+    #[test]
+    fn segmented_chinese_sentence_pause_is_configurable() {
+        let mut config = zh_config();
+        config.sentence_pause_ms = 1_400;
+
+        let result = render_segmented_transcript(
+            &[TranscriptChunk {
+                text: "中文流逝语音识别模型",
+                leading_pause_ms: 0,
+            }],
+            None,
+            Some(TranscriptChunk {
+                text: "适合低延迟实时转写",
+                leading_pause_ms: 1_532,
+            }),
+            &config,
+            false,
+        );
+        assert!(result.contains("模型。适合"));
+    }
+
+    #[test]
+    fn segmented_chinese_suppresses_pause_punctuation_for_tight_phrase() {
+        let result = render_segmented_transcript(
+            &[TranscriptChunk {
+                text: "中文流式语音识别模型适合低延迟",
+                leading_pause_ms: 0,
+            }],
+            None,
+            Some(TranscriptChunk {
+                text: "实时转写",
+                leading_pause_ms: 1_596,
+            }),
+            &zh_config(),
+            false,
+        );
+        assert!(result.contains("低延迟实时转写"));
+        assert!(!result.contains("低延迟，实时转写"));
+    }
+
+    #[test]
+    fn segmented_chinese_medium_pause_can_start_new_sentence() {
+        let result = render_segmented_transcript(
+            &[
+                TranscriptChunk {
+                    text: "中文流逝语音识别模型适合低延迟实时转写",
+                    leading_pause_ms: 0,
+                },
+                TranscriptChunk {
+                    text: "中文流逝语音识别模型适合低延迟实时转写",
+                    leading_pause_ms: 1_596,
+                },
+            ],
+            None,
+            None,
+            &zh_config(),
+            true,
+        );
+        assert_eq!(
+            result,
+            "中文流式语音识别模型，适合低延迟实时转写。中文流式语音识别模型，适合低延迟实时转写。"
+        );
     }
 }

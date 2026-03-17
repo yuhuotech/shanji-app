@@ -89,6 +89,7 @@ pub fn start(paths: AppPaths) -> Result<(), String> {
     let mut slot = live_asr_slot()
         .lock()
         .map_err(|_| "Live ASR lock poisoned".to_string())?;
+    config::init_config(&paths).map_err(|e| e.to_string())?;
     let config = config::get_config(&paths).map_err(|e| e.to_string())?;
     if !shanji_core::model::is_model_downloaded_with_paths(&paths, &config.asr.live_model_id) {
         return Err(format!(
@@ -101,13 +102,18 @@ pub fn start(paths: AppPaths) -> Result<(), String> {
     let (stop_tx, stop_rx) = mpsc::channel::<()>();
     let selected_device = config.audio.device_name.clone();
     log::info!(
-        "Starting live ASR session: live_model={}, refine_enabled={}, refine_model={}, device={:?}, noise_reduction={}, vad_threshold={}",
+        "Starting live ASR session: live_model={}, refine_enabled={}, refine_model={}, device={:?}, noise_reduction={}, vad_threshold={}, vad_end_threshold={}, min_speech_frames={}, silence_timeout_ms={}, comma_pause_ms={}, sentence_pause_ms={}",
         config.asr.live_model_id,
         config.asr.refine_enabled,
         config.asr.refine_model_id,
         selected_device,
         config.audio.noise_reduction,
-        config.audio.vad_threshold
+        config.audio.vad_threshold,
+        config.audio.vad_end_threshold,
+        config.audio.min_speech_frames,
+        config.audio.silence_timeout_ms,
+        config.asr.comma_pause_ms,
+        config.asr.sentence_pause_ms
     );
 
     let join_handle = std::thread::spawn(move || {
@@ -195,6 +201,8 @@ fn run_live_asr(
     let text_config = TextProcessingConfig {
         punct_style: config.asr.punct_style.clone(),
         insert_punct: config.asr.insert_punct,
+        comma_pause_ms: config.asr.comma_pause_ms,
+        sentence_pause_ms: config.asr.sentence_pause_ms,
         hotwords: hotword_inventory.clone(),
     };
 
@@ -224,9 +232,15 @@ fn run_live_asr(
         None
     };
     log::info!(
-        "Live ASR runtime initialized: vad_enabled={}, refine_enabled={}",
+        "Live ASR runtime initialized: vad_enabled={}, refine_enabled={}, vad_threshold={}, vad_end_threshold={}, min_speech_frames={}, silence_timeout_ms={}, comma_pause_ms={}, sentence_pause_ms={}",
         vad_detector.is_some(),
-        config.asr.refine_enabled
+        config.asr.refine_enabled,
+        config.audio.vad_threshold,
+        config.audio.vad_end_threshold,
+        config.audio.min_speech_frames,
+        config.audio.silence_timeout_ms,
+        config.asr.comma_pause_ms,
+        config.asr.sentence_pause_ms
     );
 
     let mut live_engine = build_engine(
@@ -268,6 +282,7 @@ fn run_live_asr(
     let mut segment_overlap_audio = Vec::new();
     let mut current_segment_leading_pause_ms = 0u32;
     let mut accumulated_silence_ms = 0u32;
+    let mut pending_vad_boundary_pause_ms = 0u32;
     let mut pending_segment: Option<PendingSegment> = None;
     let mut current_partial = String::new();
     let mut segments: Vec<TranscriptSegment> = Vec::new();
@@ -285,6 +300,7 @@ fn run_live_asr(
                 &segments,
                 pending_segment.as_ref(),
                 &current_partial,
+                current_segment_leading_pause_ms,
             );
         }
 
@@ -307,6 +323,7 @@ fn run_live_asr(
                                 err
                             ));
                             vad_detector = None;
+                            pending_vad_boundary_pause_ms = 0;
                             if let Err(err) = process_live_chunk(
                                 &text_config,
                                 &mut live_engine,
@@ -314,6 +331,7 @@ fn run_live_asr(
                                 &mut current_segment_audio,
                                 &mut segment_overlap_audio,
                                 &mut current_partial,
+                                current_segment_leading_pause_ms,
                                 &segments,
                                 pending_segment.as_ref(),
                             ) {
@@ -339,7 +357,12 @@ fn run_live_asr(
                             VadEvent::Speech(chunk) => {
                                 log::debug!("VAD speech event: samples={}", chunk.len());
                                 if current_segment_audio.is_empty() {
-                                    current_segment_leading_pause_ms = accumulated_silence_ms;
+                                    current_segment_leading_pause_ms =
+                                        effective_segment_leading_pause_ms(
+                                            accumulated_silence_ms,
+                                            pending_vad_boundary_pause_ms,
+                                        );
+                                    pending_vad_boundary_pause_ms = 0;
                                 }
                                 accumulated_silence_ms = 0;
                                 if let Err(err) = process_live_chunk(
@@ -349,6 +372,7 @@ fn run_live_asr(
                                     &mut current_segment_audio,
                                     &mut segment_overlap_audio,
                                     &mut current_partial,
+                                    current_segment_leading_pause_ms,
                                     &segments,
                                     pending_segment.as_ref(),
                                 ) {
@@ -369,8 +393,9 @@ fn run_live_asr(
                             }
                             VadEvent::Silence => {
                                 accumulated_silence_ms = accumulated_silence_ms.saturating_add(32);
-                                if !current_segment_audio.is_empty() || !current_partial.is_empty()
-                                {
+                                let had_active_segment = !current_segment_audio.is_empty()
+                                    || !current_partial.is_empty();
+                                if had_active_segment {
                                     log::info!(
                                         "VAD silence event: segment_samples={}, partial_len={}",
                                         current_segment_audio.len(),
@@ -403,6 +428,8 @@ fn run_live_asr(
                                         refine_worker.as_mut(),
                                         &err,
                                     );
+                                } else if had_active_segment {
+                                    pending_vad_boundary_pause_ms = config.audio.silence_timeout_ms;
                                 }
                             }
                         }
@@ -415,6 +442,7 @@ fn run_live_asr(
                         &mut current_segment_audio,
                         &mut segment_overlap_audio,
                         &mut current_partial,
+                        current_segment_leading_pause_ms,
                         &segments,
                         pending_segment.as_ref(),
                     ) {
@@ -470,7 +498,14 @@ fn run_live_asr(
         &text_config,
     );
     let corrected_transcribed = finalize_transcript_text(
-        &compose_transcript(&text_config, &segments, pending_segment.as_ref(), "", true),
+        &compose_transcript(
+            &text_config,
+            &segments,
+            pending_segment.as_ref(),
+            "",
+            0,
+            true,
+        ),
         &text_config,
     );
     let final_transcribed = if corrected_transcribed.is_empty() {
@@ -560,6 +595,10 @@ fn build_engine(
     Ok(engine)
 }
 
+fn effective_segment_leading_pause_ms(accumulated_silence_ms: u32, boundary_pause_ms: u32) -> u32 {
+    accumulated_silence_ms.saturating_add(boundary_pause_ms)
+}
+
 fn spawn_refine_worker(paths: AppPaths, config: AppConfig) -> Result<RefineWorker, String> {
     let (task_tx, task_rx) = mpsc::channel::<RefineTask>();
     let (result_tx, result_rx) = mpsc::channel::<RefineResult>();
@@ -611,6 +650,7 @@ fn process_live_chunk(
     current_segment_audio: &mut Vec<f32>,
     segment_overlap_audio: &mut Vec<f32>,
     current_partial: &mut String,
+    current_partial_leading_pause_ms: u32,
     segments: &[TranscriptSegment],
     pending_segment: Option<&PendingSegment>,
 ) -> Result<(), String> {
@@ -630,7 +670,13 @@ fn process_live_chunk(
     {
         Some(text) if !text.is_empty() => {
             *current_partial = text;
-            sync_runtime_transcript(text_config, segments, pending_segment, current_partial);
+            sync_runtime_transcript(
+                text_config,
+                segments,
+                pending_segment,
+                current_partial,
+                current_partial_leading_pause_ms,
+            );
             state::set_state(AppState::Transcribing);
             state::set_status_message("Live ASR is producing partial text");
             log::info!(
@@ -667,7 +713,7 @@ fn finalize_segment(
     if current_segment_audio.is_empty() && current_partial.is_empty() {
         if flush_short_segments {
             commit_pending_segment(pending_segment, segments, next_segment_id, refine_worker)?;
-            sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
+            sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "", 0);
         }
         return Ok(());
     }
@@ -688,7 +734,7 @@ fn finalize_segment(
         );
         current_segment_audio.clear();
         *current_segment_leading_pause_ms = 0;
-        sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
+        sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "", 0);
         return Ok(());
     }
 
@@ -717,7 +763,7 @@ fn finalize_segment(
             live_text,
         });
         *current_segment_leading_pause_ms = 0;
-        sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
+        sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "", 0);
         return Ok(());
     }
 
@@ -739,7 +785,7 @@ fn finalize_segment(
             segment.corrected_text.is_some()
         );
     }
-    sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
+    sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "", 0);
     Ok(())
 }
 
@@ -846,7 +892,7 @@ fn compose_live_transcript(
             text: segment.live_text.as_str(),
             leading_pause_ms: segment.leading_pause_ms,
         }),
-        "",
+        None,
         text_config,
         false,
     )
@@ -857,6 +903,7 @@ fn compose_transcript(
     segments: &[TranscriptSegment],
     pending_segment: Option<&PendingSegment>,
     current_partial: &str,
+    current_partial_leading_pause_ms: u32,
     is_final: bool,
 ) -> String {
     render_segmented_transcript(
@@ -874,7 +921,10 @@ fn compose_transcript(
             text: segment.live_text.as_str(),
             leading_pause_ms: segment.leading_pause_ms,
         }),
-        current_partial,
+        (!current_partial.is_empty()).then_some(TranscriptChunk {
+            text: current_partial,
+            leading_pause_ms: current_partial_leading_pause_ms,
+        }),
         text_config,
         is_final,
     )
@@ -885,12 +935,14 @@ fn sync_runtime_transcript(
     segments: &[TranscriptSegment],
     pending_segment: Option<&PendingSegment>,
     current_partial: &str,
+    current_partial_leading_pause_ms: u32,
 ) {
     let display = compose_transcript(
         text_config,
         segments,
         pending_segment,
         current_partial,
+        current_partial_leading_pause_ms,
         false,
     );
     state::set_live_transcript(display.clone());
@@ -970,7 +1022,7 @@ fn recover_live_segment(
     }
 
     *current_segment_leading_pause_ms = 0;
-    sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
+    sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "", 0);
     state::set_state(AppState::Recording);
     state::set_status_message(format!("实时转写分段异常，已自动恢复: {}", err));
 }
@@ -1073,4 +1125,22 @@ fn save_final_history(
     };
     db.insert(&record).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_segment_leading_pause_ms;
+
+    #[test]
+    fn leading_pause_includes_vad_boundary_credit() {
+        assert_eq!(effective_segment_leading_pause_ms(32, 1500), 1532);
+    }
+
+    #[test]
+    fn leading_pause_saturates_on_overflow() {
+        assert_eq!(
+            effective_segment_leading_pause_ms(u32::MAX - 5, 32),
+            u32::MAX
+        );
+    }
 }
