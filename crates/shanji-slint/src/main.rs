@@ -22,6 +22,31 @@ fn init_logging() {
 }
 
 #[cfg(target_os = "macos")]
+fn set_dock_icon() {
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        log::warn!("set_dock_icon: not on main thread");
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    let png_bytes = include_bytes!("../assets/shanji_logo.png");
+    log::info!("set_dock_icon: {} bytes embedded", png_bytes.len());
+    let data = NSData::with_bytes(png_bytes);
+    match NSImage::initWithData(NSImage::alloc(), &data) {
+        Some(image) => {
+            unsafe { app.setApplicationIconImage(Some(&image)) };
+            log::info!("set_dock_icon: icon applied");
+        }
+        None => {
+            log::warn!("set_dock_icon: NSImage::initWithData returned None");
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
 fn overlay_target_position(window: &slint::Window) -> Option<slint::LogicalPosition> {
     use objc2::MainThreadMarker;
     use objc2_app_kit::NSScreen;
@@ -525,6 +550,17 @@ fn main() -> Result<(), slint::PlatformError> {
     );
 
     app.show()?;
+
+    // 在事件循环第一次迭代后再设置 Dock 图标，确保 NSApplication 完全初始化
+    #[cfg(target_os = "macos")]
+    let dock_icon_timer = slint::Timer::default();
+    #[cfg(target_os = "macos")]
+    dock_icon_timer.start(
+        slint::TimerMode::SingleShot,
+        std::time::Duration::from_millis(0),
+        || set_dock_icon(),
+    );
+
     slint::run_event_loop_until_quit()
 }
 
@@ -634,6 +670,16 @@ fn apply_snapshot(app: &AppWindow, overlay: &OverlayWindow, snapshot: app::UiSna
     app.set_model_download_status_text(snapshot.model_download_status_text.into());
     app.set_model_download_error_text(snapshot.model_download_error_text.into());
     app.set_github_proxy_current_index(snapshot.github_proxy_index);
+    app.set_refine_model_title_text(snapshot.refine_model_title_text.into());
+    app.set_refine_model_desc_text(snapshot.refine_model_desc_text.into());
+    app.set_refine_model_version_text(snapshot.refine_model_version_text.into());
+    app.set_refine_model_language_text(snapshot.refine_model_language_text.into());
+    app.set_refine_asr_enabled(snapshot.refine_asr_enabled);
+    app.set_refine_model_downloaded(snapshot.refine_model_ready);
+    app.set_refine_model_downloading(snapshot.refine_model_downloading);
+    app.set_refine_model_download_progress(snapshot.refine_model_download_progress);
+    app.set_refine_model_download_status_text(snapshot.refine_model_download_status_text.into());
+    app.set_refine_model_download_error_text(snapshot.refine_model_download_error_text.into());
     app.set_mic_permission_title(snapshot.mic_permission_title.into());
     app.set_mic_permission_body(snapshot.mic_permission_body.into());
     app.set_mic_ready(snapshot.mic_ready);

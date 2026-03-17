@@ -28,20 +28,26 @@ struct PendingPaste {
 #[derive(Clone)]
 struct TranscriptSegment {
     id: u64,
+    source_id: Option<u64>,
+    source_clause_index: Option<usize>,
     leading_pause_ms: u32,
     live_text: String,
     corrected_text: Option<String>,
 }
 
 struct RefineTask {
-    segment_id: u64,
+    source_id: u64,
     audio: Vec<f32>,
     fallback_text: String,
+    clause_count: usize,
+    is_final: bool,
 }
 
 struct RefineResult {
-    segment_id: u64,
+    source_id: u64,
     text: String,
+    clause_count: usize,
+    is_final: bool,
 }
 
 struct RefineWorker {
@@ -56,8 +62,49 @@ struct PendingSegment {
     live_text: String,
 }
 
+#[derive(Clone, Debug)]
+struct SourceClauseContext {
+    text: String,
+    leading_pause_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RefineAudioStats {
+    duration_ms: u32,
+    low_energy_frame_count: usize,
+    low_energy_run_count: usize,
+    longest_low_energy_ms: u32,
+    longest_internal_low_energy_ms: u32,
+    trailing_low_energy_ms: u32,
+}
+
+struct ActiveRefineContext {
+    source_id: u64,
+    leading_pause_ms: u32,
+    committed_clause_count: usize,
+    queued_clause_count: usize,
+    source_audio: Vec<f32>,
+    pending_clause_leading_pause_ms: u32,
+    dormant: bool,
+}
+
+const STRONG_CONTINUATION_MARKERS: &[&str] = &[
+    "适合",
+    "更适合",
+    "适用于",
+    "用于",
+    "支持",
+    "可以",
+    "能够",
+    "需要",
+    "值得",
+    "便于",
+];
+
 const SEGMENT_OVERLAP_SAMPLES: usize = 3_200;
 const MIN_REFINE_SEGMENT_SAMPLES: usize = 16_000;
+const REFINE_AUDIO_ANALYSIS_FRAME_SAMPLES: usize = 512;
+const REFINE_AUDIO_LOW_ENERGY_RMS_THRESHOLD: f32 = 0.01;
 
 static PENDING_PASTE: OnceLock<Mutex<Option<PendingPaste>>> = OnceLock::new();
 
@@ -269,7 +316,7 @@ fn run_live_asr(
         "Live ASR started with {}{}",
         config.asr.live_model_id,
         if refine_worker.is_some() {
-            " + whole-model refine"
+            " + incremental refine"
         } else {
             ""
         }
@@ -284,9 +331,11 @@ fn run_live_asr(
     let mut accumulated_silence_ms = 0u32;
     let mut pending_vad_boundary_pause_ms = 0u32;
     let mut pending_segment: Option<PendingSegment> = None;
+    let mut active_refine: Option<ActiveRefineContext> = None;
     let mut current_partial = String::new();
     let mut segments: Vec<TranscriptSegment> = Vec::new();
     let mut next_segment_id = 1u64;
+    let mut next_refine_source_id = 1u64;
 
     loop {
         if stop_rx.try_recv().is_ok() {
@@ -294,14 +343,30 @@ fn run_live_asr(
         }
 
         if let Some(worker) = refine_worker.as_mut() {
-            collect_refine_results(&worker.result_rx, &mut segments);
-            sync_runtime_transcript(
-                &text_config,
-                &segments,
-                pending_segment.as_ref(),
-                &current_partial,
-                current_segment_leading_pause_ms,
-            );
+            if collect_refine_results(&text_config, &worker.result_rx, &mut segments) {
+                let tail = if current_partial.is_empty() {
+                    String::new()
+                } else if let Some(active) = active_refine.as_ref() {
+                    let source_clauses = source_clause_contexts(&segments, active.source_id);
+                    let display = build_refine_display_with_source_context(
+                        &text_config,
+                        &source_clauses,
+                        active.committed_clause_count,
+                        &current_partial,
+                        false,
+                    );
+                    remaining_display_after_clause_count(&display, active.committed_clause_count)
+                } else {
+                    current_partial.clone()
+                };
+                sync_runtime_transcript(
+                    &text_config,
+                    &segments,
+                    None,
+                    &tail,
+                    tail_leading_pause_ms(active_refine.as_ref()),
+                );
+            }
         }
 
         match sample_rx.recv_timeout(Duration::from_millis(120)) {
@@ -324,30 +389,64 @@ fn run_live_asr(
                             ));
                             vad_detector = None;
                             pending_vad_boundary_pause_ms = 0;
-                            if let Err(err) = process_live_chunk(
-                                &text_config,
-                                &mut live_engine,
-                                &samples,
-                                &mut current_segment_audio,
-                                &mut segment_overlap_audio,
-                                &mut current_partial,
-                                current_segment_leading_pause_ms,
-                                &segments,
-                                pending_segment.as_ref(),
-                            ) {
-                                recover_live_segment(
+                            let result = if let Some(worker) = refine_worker.as_mut() {
+                                process_live_chunk_with_incremental_refine(
                                     &text_config,
                                     &mut live_engine,
+                                    &samples,
                                     &mut current_segment_audio,
                                     &mut segment_overlap_audio,
-                                    &mut current_segment_leading_pause_ms,
-                                    &mut pending_segment,
                                     &mut current_partial,
+                                    current_segment_leading_pause_ms,
+                                    &mut active_refine,
+                                    &mut next_refine_source_id,
                                     &mut segments,
                                     &mut next_segment_id,
-                                    refine_worker.as_mut(),
-                                    &err,
-                                );
+                                    worker,
+                                )
+                            } else {
+                                process_live_chunk(
+                                    &text_config,
+                                    &mut live_engine,
+                                    &samples,
+                                    &mut current_segment_audio,
+                                    &mut segment_overlap_audio,
+                                    &mut current_partial,
+                                    current_segment_leading_pause_ms,
+                                    &segments,
+                                    pending_segment.as_ref(),
+                                )
+                            };
+                            if let Err(err) = result {
+                                if refine_worker.is_some() {
+                                    recover_live_segment_with_incremental_refine(
+                                        &text_config,
+                                        &mut live_engine,
+                                        &mut current_segment_audio,
+                                        &mut segment_overlap_audio,
+                                        &mut current_segment_leading_pause_ms,
+                                        &mut active_refine,
+                                        &mut next_refine_source_id,
+                                        &mut current_partial,
+                                        &mut segments,
+                                        &mut next_segment_id,
+                                        &err,
+                                    );
+                                } else {
+                                    recover_live_segment(
+                                        &text_config,
+                                        &mut live_engine,
+                                        &mut current_segment_audio,
+                                        &mut segment_overlap_audio,
+                                        &mut current_segment_leading_pause_ms,
+                                        &mut pending_segment,
+                                        &mut current_partial,
+                                        &mut segments,
+                                        &mut next_segment_id,
+                                        refine_worker.as_mut(),
+                                        &err,
+                                    );
+                                }
                             }
                             continue;
                         }
@@ -365,36 +464,73 @@ fn run_live_asr(
                                     pending_vad_boundary_pause_ms = 0;
                                 }
                                 accumulated_silence_ms = 0;
-                                if let Err(err) = process_live_chunk(
-                                    &text_config,
-                                    &mut live_engine,
-                                    &chunk,
-                                    &mut current_segment_audio,
-                                    &mut segment_overlap_audio,
-                                    &mut current_partial,
-                                    current_segment_leading_pause_ms,
-                                    &segments,
-                                    pending_segment.as_ref(),
-                                ) {
-                                    recover_live_segment(
+                                let result = if let Some(worker) = refine_worker.as_mut() {
+                                    process_live_chunk_with_incremental_refine(
                                         &text_config,
                                         &mut live_engine,
+                                        &chunk,
                                         &mut current_segment_audio,
                                         &mut segment_overlap_audio,
-                                        &mut current_segment_leading_pause_ms,
-                                        &mut pending_segment,
                                         &mut current_partial,
+                                        current_segment_leading_pause_ms,
+                                        &mut active_refine,
+                                        &mut next_refine_source_id,
                                         &mut segments,
                                         &mut next_segment_id,
-                                        refine_worker.as_mut(),
-                                        &err,
-                                    );
+                                        worker,
+                                    )
+                                } else {
+                                    process_live_chunk(
+                                        &text_config,
+                                        &mut live_engine,
+                                        &chunk,
+                                        &mut current_segment_audio,
+                                        &mut segment_overlap_audio,
+                                        &mut current_partial,
+                                        current_segment_leading_pause_ms,
+                                        &segments,
+                                        pending_segment.as_ref(),
+                                    )
+                                };
+                                if let Err(err) = result {
+                                    if refine_worker.is_some() {
+                                        recover_live_segment_with_incremental_refine(
+                                            &text_config,
+                                            &mut live_engine,
+                                            &mut current_segment_audio,
+                                            &mut segment_overlap_audio,
+                                            &mut current_segment_leading_pause_ms,
+                                            &mut active_refine,
+                                            &mut next_refine_source_id,
+                                            &mut current_partial,
+                                            &mut segments,
+                                            &mut next_segment_id,
+                                            &err,
+                                        );
+                                    } else {
+                                        recover_live_segment(
+                                            &text_config,
+                                            &mut live_engine,
+                                            &mut current_segment_audio,
+                                            &mut segment_overlap_audio,
+                                            &mut current_segment_leading_pause_ms,
+                                            &mut pending_segment,
+                                            &mut current_partial,
+                                            &mut segments,
+                                            &mut next_segment_id,
+                                            refine_worker.as_mut(),
+                                            &err,
+                                        );
+                                    }
                                 }
                             }
                             VadEvent::Silence => {
                                 accumulated_silence_ms = accumulated_silence_ms.saturating_add(32);
                                 let had_active_segment = !current_segment_audio.is_empty()
                                     || !current_partial.is_empty();
+                                if !had_active_segment {
+                                    continue;
+                                }
                                 if had_active_segment {
                                     log::info!(
                                         "VAD silence event: segment_samples={}, partial_len={}",
@@ -402,20 +538,22 @@ fn run_live_asr(
                                         current_partial.len()
                                     );
                                 }
-                                if let Err(err) = finalize_segment(
-                                    &text_config,
-                                    &mut live_engine,
-                                    &mut current_segment_audio,
-                                    &mut segment_overlap_audio,
-                                    &mut current_segment_leading_pause_ms,
-                                    &mut pending_segment,
-                                    &mut current_partial,
-                                    &mut segments,
-                                    &mut next_segment_id,
-                                    refine_worker.as_mut(),
-                                    false,
-                                ) {
-                                    recover_live_segment(
+                                let result = if let Some(worker) = refine_worker.as_mut() {
+                                    finalize_segment_with_incremental_refine(
+                                        &text_config,
+                                        &mut live_engine,
+                                        &mut current_segment_audio,
+                                        &mut segment_overlap_audio,
+                                        &mut current_segment_leading_pause_ms,
+                                        &mut active_refine,
+                                        &mut next_refine_source_id,
+                                        &mut current_partial,
+                                        &mut segments,
+                                        &mut next_segment_id,
+                                        worker,
+                                    )
+                                } else {
+                                    finalize_segment(
                                         &text_config,
                                         &mut live_engine,
                                         &mut current_segment_audio,
@@ -426,8 +564,39 @@ fn run_live_asr(
                                         &mut segments,
                                         &mut next_segment_id,
                                         refine_worker.as_mut(),
-                                        &err,
-                                    );
+                                        false,
+                                    )
+                                };
+                                if let Err(err) = result {
+                                    if refine_worker.is_some() {
+                                        recover_live_segment_with_incremental_refine(
+                                            &text_config,
+                                            &mut live_engine,
+                                            &mut current_segment_audio,
+                                            &mut segment_overlap_audio,
+                                            &mut current_segment_leading_pause_ms,
+                                            &mut active_refine,
+                                            &mut next_refine_source_id,
+                                            &mut current_partial,
+                                            &mut segments,
+                                            &mut next_segment_id,
+                                            &err,
+                                        );
+                                    } else {
+                                        recover_live_segment(
+                                            &text_config,
+                                            &mut live_engine,
+                                            &mut current_segment_audio,
+                                            &mut segment_overlap_audio,
+                                            &mut current_segment_leading_pause_ms,
+                                            &mut pending_segment,
+                                            &mut current_partial,
+                                            &mut segments,
+                                            &mut next_segment_id,
+                                            refine_worker.as_mut(),
+                                            &err,
+                                        );
+                                    }
                                 } else if had_active_segment {
                                     pending_vad_boundary_pause_ms = config.audio.silence_timeout_ms;
                                 }
@@ -435,30 +604,64 @@ fn run_live_asr(
                         }
                     }
                 } else {
-                    if let Err(err) = process_live_chunk(
-                        &text_config,
-                        &mut live_engine,
-                        &samples,
-                        &mut current_segment_audio,
-                        &mut segment_overlap_audio,
-                        &mut current_partial,
-                        current_segment_leading_pause_ms,
-                        &segments,
-                        pending_segment.as_ref(),
-                    ) {
-                        recover_live_segment(
+                    let result = if let Some(worker) = refine_worker.as_mut() {
+                        process_live_chunk_with_incremental_refine(
                             &text_config,
                             &mut live_engine,
+                            &samples,
                             &mut current_segment_audio,
                             &mut segment_overlap_audio,
-                            &mut current_segment_leading_pause_ms,
-                            &mut pending_segment,
                             &mut current_partial,
+                            current_segment_leading_pause_ms,
+                            &mut active_refine,
+                            &mut next_refine_source_id,
                             &mut segments,
                             &mut next_segment_id,
-                            refine_worker.as_mut(),
-                            &err,
-                        );
+                            worker,
+                        )
+                    } else {
+                        process_live_chunk(
+                            &text_config,
+                            &mut live_engine,
+                            &samples,
+                            &mut current_segment_audio,
+                            &mut segment_overlap_audio,
+                            &mut current_partial,
+                            current_segment_leading_pause_ms,
+                            &segments,
+                            pending_segment.as_ref(),
+                        )
+                    };
+                    if let Err(err) = result {
+                        if refine_worker.is_some() {
+                            recover_live_segment_with_incremental_refine(
+                                &text_config,
+                                &mut live_engine,
+                                &mut current_segment_audio,
+                                &mut segment_overlap_audio,
+                                &mut current_segment_leading_pause_ms,
+                                &mut active_refine,
+                                &mut next_refine_source_id,
+                                &mut current_partial,
+                                &mut segments,
+                                &mut next_segment_id,
+                                &err,
+                            );
+                        } else {
+                            recover_live_segment(
+                                &text_config,
+                                &mut live_engine,
+                                &mut current_segment_audio,
+                                &mut segment_overlap_audio,
+                                &mut current_segment_leading_pause_ms,
+                                &mut pending_segment,
+                                &mut current_partial,
+                                &mut segments,
+                                &mut next_segment_id,
+                                refine_worker.as_mut(),
+                                &err,
+                            );
+                        }
                     }
                 }
             }
@@ -473,24 +676,40 @@ fn run_live_asr(
         detector.reset();
     }
 
-    finalize_segment(
-        &text_config,
-        &mut live_engine,
-        &mut current_segment_audio,
-        &mut segment_overlap_audio,
-        &mut current_segment_leading_pause_ms,
-        &mut pending_segment,
-        &mut current_partial,
-        &mut segments,
-        &mut next_segment_id,
-        refine_worker.as_mut(),
-        true,
-    )?;
+    if let Some(worker) = refine_worker.as_mut() {
+        finalize_segment_with_incremental_refine(
+            &text_config,
+            &mut live_engine,
+            &mut current_segment_audio,
+            &mut segment_overlap_audio,
+            &mut current_segment_leading_pause_ms,
+            &mut active_refine,
+            &mut next_refine_source_id,
+            &mut current_partial,
+            &mut segments,
+            &mut next_segment_id,
+            worker,
+        )?;
+    } else {
+        finalize_segment(
+            &text_config,
+            &mut live_engine,
+            &mut current_segment_audio,
+            &mut segment_overlap_audio,
+            &mut current_segment_leading_pause_ms,
+            &mut pending_segment,
+            &mut current_partial,
+            &mut segments,
+            &mut next_segment_id,
+            refine_worker.as_mut(),
+            true,
+        )?;
+    }
 
     if let Some(worker) = refine_worker {
         drop(worker.task_tx);
         let _ = worker.join_handle.join();
-        collect_refine_results_blocking(&worker.result_rx, &mut segments);
+        collect_refine_results_blocking(&text_config, &worker.result_rx, &mut segments);
     }
 
     let live_transcribed = finalize_transcript_text(
@@ -614,15 +833,45 @@ fn spawn_refine_worker(paths: AppPaths, config: AppConfig) -> Result<RefineWorke
         };
 
         while let Ok(task) = task_rx.recv() {
-            let result_text = match refine_segment(&mut engine, &task.audio) {
-                Ok(text) if !text.is_empty() => text,
-                Ok(_) | Err(_) => task.fallback_text,
+            let RefineTask {
+                source_id,
+                audio,
+                fallback_text,
+                clause_count,
+                is_final,
+            } = task;
+            let refine_output = refine_segment(&mut engine, &audio);
+            let (result_text, raw_output, used_fallback) = match refine_output {
+                Ok(text) if !text.is_empty() => (text.clone(), text, false),
+                Ok(text) => (fallback_text.clone(), text, true),
+                Err(err) => {
+                    log::warn!(
+                        "Refine worker failed: source_id={}, final={}, clause_count={}, error={}",
+                        source_id,
+                        is_final,
+                        clause_count,
+                        err
+                    );
+                    (fallback_text.clone(), String::new(), true)
+                }
             };
+            log::info!(
+                "Refine worker output: source_id={}, final={}, clause_count={}, fallback='{}', raw='{}', chosen='{}', used_fallback={}",
+                source_id,
+                is_final,
+                clause_count,
+                fallback_text,
+                raw_output,
+                result_text,
+                used_fallback
+            );
 
             if result_tx
                 .send(RefineResult {
-                    segment_id: task.segment_id,
+                    source_id,
                     text: result_text,
+                    clause_count,
+                    is_final,
                 })
                 .is_err()
             {
@@ -641,6 +890,522 @@ fn spawn_refine_worker(paths: AppPaths, config: AppConfig) -> Result<RefineWorke
 fn refine_segment(engine: &mut AsrEngine, audio: &[f32]) -> Result<String, String> {
     let _ = engine.process_chunk(audio).map_err(|e| e.to_string())?;
     engine.finalize().map_err(|e| e.to_string())
+}
+
+fn source_clause_contexts(
+    segments: &[TranscriptSegment],
+    source_id: u64,
+) -> Vec<SourceClauseContext> {
+    let mut clauses = segments
+        .iter()
+        .filter_map(|segment| {
+            (segment.source_id == Some(source_id))
+                .then_some(segment.source_clause_index)
+                .flatten()
+                .map(|index| {
+                    (
+                        index,
+                        SourceClauseContext {
+                            text: segment
+                                .corrected_text
+                                .clone()
+                                .unwrap_or_else(|| segment.live_text.clone()),
+                            leading_pause_ms: segment.leading_pause_ms,
+                        },
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    clauses.sort_by_key(|(index, _)| *index);
+    clauses.into_iter().map(|(_, clause)| clause).collect()
+}
+
+fn summarize_source_clause_pauses(segments: &[TranscriptSegment], source_id: u64) -> String {
+    let clauses = source_clause_contexts(segments, source_id);
+    if clauses.is_empty() {
+        return "-".to_string();
+    }
+
+    clauses
+        .iter()
+        .enumerate()
+        .map(|(index, clause)| format!("{}:{}ms", index, clause.leading_pause_ms))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn analyze_refine_audio(audio: &[f32]) -> RefineAudioStats {
+    let duration_ms = ((audio.len() as u64) * 1000 / 16_000) as u32;
+    let mut low_energy_frame_count = 0usize;
+    let mut low_energy_runs = Vec::new();
+    let mut current_low_energy_run = 0usize;
+
+    let low_energy_flags = audio
+        .chunks(REFINE_AUDIO_ANALYSIS_FRAME_SAMPLES)
+        .filter(|frame| !frame.is_empty())
+        .map(|frame| {
+            let energy =
+                frame.iter().map(|sample| sample * sample).sum::<f32>() / frame.len() as f32;
+            energy.sqrt() <= REFINE_AUDIO_LOW_ENERGY_RMS_THRESHOLD
+        })
+        .collect::<Vec<_>>();
+
+    for &is_low_energy in &low_energy_flags {
+        if is_low_energy {
+            low_energy_frame_count += 1;
+            current_low_energy_run += 1;
+        } else if current_low_energy_run != 0 {
+            low_energy_runs.push(current_low_energy_run);
+            current_low_energy_run = 0;
+        }
+    }
+
+    let trailing_low_energy_run = if current_low_energy_run != 0 {
+        low_energy_runs.push(current_low_energy_run);
+        current_low_energy_run
+    } else {
+        0
+    };
+    let longest_low_energy_run = low_energy_runs.iter().copied().max().unwrap_or(0);
+    let longest_internal_low_energy_run = if trailing_low_energy_run != 0 {
+        low_energy_runs
+            .iter()
+            .copied()
+            .take(low_energy_runs.len().saturating_sub(1))
+            .max()
+            .unwrap_or(0)
+    } else {
+        longest_low_energy_run
+    };
+
+    RefineAudioStats {
+        duration_ms,
+        low_energy_frame_count,
+        low_energy_run_count: low_energy_runs.len(),
+        longest_low_energy_ms: (longest_low_energy_run as u32) * 32,
+        longest_internal_low_energy_ms: (longest_internal_low_energy_run as u32) * 32,
+        trailing_low_energy_ms: (trailing_low_energy_run as u32) * 32,
+    }
+}
+
+fn boundaryless_clause_text(clauses: &[SourceClauseContext]) -> String {
+    let mut text = String::new();
+    for clause in clauses {
+        text.push_str(&strip_terminal_boundary_punctuation(&clause.text));
+    }
+    text
+}
+
+fn remaining_text_after_prefix(prefix: &str, text: &str) -> String {
+    if prefix.is_empty() {
+        return text.to_string();
+    }
+
+    if text.starts_with(prefix) {
+        return text.chars().skip(prefix.chars().count()).collect();
+    }
+
+    let overlap_chars = prefix
+        .chars()
+        .zip(text.chars())
+        .take_while(|(left, right)| left == right)
+        .count();
+    text.chars().skip(overlap_chars).collect()
+}
+
+fn build_refine_display_with_source_context(
+    text_config: &TextProcessingConfig,
+    source_clauses: &[SourceClauseContext],
+    anchor_clause_count: usize,
+    text: &str,
+    is_final: bool,
+) -> String {
+    let anchor_clause_count = anchor_clause_count.min(source_clauses.len());
+    let committed_clauses = &source_clauses[..anchor_clause_count];
+    let committed_prefix = boundaryless_clause_text(committed_clauses);
+    let remaining_text = remaining_text_after_prefix(&committed_prefix, text);
+    let committed_chunks = committed_clauses
+        .iter()
+        .map(|clause| TranscriptChunk {
+            text: clause.text.as_str(),
+            leading_pause_ms: clause.leading_pause_ms,
+        })
+        .collect::<Vec<_>>();
+    let next_leading_pause_ms = source_clauses
+        .get(anchor_clause_count)
+        .map(|clause| clause.leading_pause_ms)
+        .unwrap_or(0);
+
+    render_segmented_transcript(
+        &committed_chunks,
+        None,
+        (!remaining_text.is_empty()).then_some(TranscriptChunk {
+            text: remaining_text.as_str(),
+            leading_pause_ms: next_leading_pause_ms,
+        }),
+        text_config,
+        is_final,
+    )
+}
+
+fn split_stable_clauses(display: &str) -> (Vec<String>, String) {
+    let mut clauses = Vec::new();
+    let mut current = String::new();
+
+    for ch in display.chars() {
+        current.push(ch);
+        if matches!(ch, '，' | '。' | '！' | '？' | '；') {
+            let clause = current.trim().to_string();
+            if !clause.is_empty() {
+                clauses.push(clause);
+            }
+            current.clear();
+        }
+    }
+
+    (clauses, current.trim().to_string())
+}
+
+fn is_boundary_punctuation(ch: char) -> bool {
+    matches!(
+        ch,
+        '，' | '。' | '！' | '？' | '；' | ',' | '.' | '!' | '?' | ';'
+    )
+}
+
+fn strip_terminal_boundary_punctuation(text: &str) -> String {
+    text.trim_end_matches(is_boundary_punctuation).to_string()
+}
+
+fn remaining_display_after_clause_count(display: &str, clause_count: usize) -> String {
+    let (clauses, tail) = split_stable_clauses(display);
+    let mut remaining = clauses.into_iter().skip(clause_count).collect::<String>();
+    remaining.push_str(&tail);
+    remaining
+}
+
+fn tail_leading_pause_ms(active_refine: Option<&ActiveRefineContext>) -> u32 {
+    active_refine
+        .map(|context| {
+            if context.committed_clause_count > 0 {
+                0
+            } else {
+                context.leading_pause_ms
+            }
+        })
+        .unwrap_or(0)
+}
+
+fn activate_refine_context<'a>(
+    active_refine: &'a mut Option<ActiveRefineContext>,
+    next_refine_source_id: &mut u64,
+    leading_pause_ms: u32,
+    _sentence_pause_ms: u32,
+    _segments: &mut [TranscriptSegment],
+) -> &'a mut ActiveRefineContext {
+    if matches!(active_refine.as_ref(), Some(context) if !context.dormant) {
+        return active_refine
+            .as_mut()
+            .expect("active refine context must exist");
+    }
+
+    let source_id = *next_refine_source_id;
+    *next_refine_source_id += 1;
+    *active_refine = Some(ActiveRefineContext {
+        source_id,
+        leading_pause_ms,
+        committed_clause_count: 0,
+        queued_clause_count: 0,
+        source_audio: Vec::new(),
+        pending_clause_leading_pause_ms: 0,
+        dormant: false,
+    });
+    active_refine
+        .as_mut()
+        .expect("active refine context must exist")
+}
+
+fn ensure_active_refine_context_for_partial(
+    active_refine: &mut Option<ActiveRefineContext>,
+    next_refine_source_id: &mut u64,
+    leading_pause_ms: u32,
+    sentence_pause_ms: u32,
+    partial_text: &str,
+    segments: &mut [TranscriptSegment],
+) -> bool {
+    if matches!(active_refine.as_ref(), Some(context) if !context.dormant) {
+        return false;
+    }
+
+    let should_reopen = active_refine
+        .as_ref()
+        .map(|context| {
+            should_reopen_dormant_source(
+                context,
+                leading_pause_ms,
+                sentence_pause_ms,
+                partial_text,
+                segments,
+            )
+        })
+        .unwrap_or(false);
+
+    if should_reopen {
+        let source_id = active_refine
+            .as_ref()
+            .expect("dormant refine context must exist")
+            .source_id;
+        reopen_source_tail(segments, source_id);
+        let context = active_refine
+            .as_mut()
+            .expect("dormant refine context must exist");
+        context.pending_clause_leading_pause_ms = leading_pause_ms;
+        context.dormant = false;
+        return true;
+    }
+
+    *active_refine = None;
+    let _ = activate_refine_context(
+        active_refine,
+        next_refine_source_id,
+        leading_pause_ms,
+        sentence_pause_ms,
+        segments,
+    );
+    true
+}
+
+fn should_reopen_dormant_source(
+    context: &ActiveRefineContext,
+    leading_pause_ms: u32,
+    sentence_pause_ms: u32,
+    partial_text: &str,
+    segments: &[TranscriptSegment],
+) -> bool {
+    if leading_pause_ms >= sentence_pause_ms {
+        return false;
+    }
+
+    let source_text = source_text_for_matching(segments, context.source_id);
+    if source_text.is_empty() || partial_text.is_empty() {
+        return false;
+    }
+
+    if shared_prefix_chars(&source_text, partial_text) >= 2 {
+        return false;
+    }
+
+    if source_ends_with_terminal_punctuation(segments, context.source_id) {
+        return starts_with_strong_continuation(partial_text);
+    }
+
+    true
+}
+
+fn source_text_for_matching(segments: &[TranscriptSegment], source_id: u64) -> String {
+    let mut text = String::new();
+    for segment in segments
+        .iter()
+        .filter(|segment| segment.source_id == Some(source_id))
+    {
+        let segment_text = segment
+            .corrected_text
+            .as_deref()
+            .unwrap_or(segment.live_text.as_str());
+        text.push_str(&strip_terminal_boundary_punctuation(segment_text));
+    }
+    text
+}
+
+fn source_ends_with_terminal_punctuation(segments: &[TranscriptSegment], source_id: u64) -> bool {
+    segments
+        .iter()
+        .rev()
+        .find(|segment| segment.source_id == Some(source_id))
+        .and_then(|segment| {
+            segment
+                .corrected_text
+                .as_deref()
+                .or(Some(segment.live_text.as_str()))
+        })
+        .and_then(|text| text.chars().last())
+        .is_some_and(|ch| matches!(ch, '。' | '！' | '？' | '.' | '!' | '?'))
+}
+
+fn starts_with_strong_continuation(text: &str) -> bool {
+    STRONG_CONTINUATION_MARKERS
+        .iter()
+        .any(|marker| text.starts_with(marker) || marker.starts_with(text))
+}
+
+fn shared_prefix_chars(left: &str, right: &str) -> usize {
+    left.chars()
+        .zip(right.chars())
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn reopen_source_tail(segments: &mut [TranscriptSegment], source_id: u64) {
+    if let Some(segment) = segments
+        .iter_mut()
+        .rev()
+        .find(|segment| segment.source_id == Some(source_id))
+    {
+        segment.live_text = strip_terminal_boundary_punctuation(&segment.live_text);
+        if let Some(corrected_text) = segment.corrected_text.take() {
+            let corrected_text = strip_terminal_boundary_punctuation(&corrected_text);
+            if !corrected_text.is_empty() {
+                segment.corrected_text = Some(corrected_text);
+            }
+        }
+    }
+}
+
+fn compose_source_fallback_text(
+    segments: &[TranscriptSegment],
+    source_id: u64,
+    current_partial: &str,
+) -> String {
+    let mut prefix = String::new();
+    for segment in segments
+        .iter()
+        .filter(|segment| segment.source_id == Some(source_id))
+    {
+        let text = segment
+            .corrected_text
+            .as_deref()
+            .unwrap_or(segment.live_text.as_str());
+        prefix.push_str(&strip_terminal_boundary_punctuation(text));
+    }
+
+    if current_partial.is_empty() {
+        return prefix;
+    }
+
+    if prefix.is_empty() || current_partial.starts_with(&prefix) {
+        return current_partial.to_string();
+    }
+
+    let overlap_chars = prefix
+        .chars()
+        .zip(current_partial.chars())
+        .take_while(|(left, right)| left == right)
+        .count();
+    if overlap_chars > 0 {
+        let suffix = current_partial
+            .chars()
+            .skip(overlap_chars)
+            .collect::<String>();
+        return format!("{}{}", prefix, suffix);
+    }
+
+    format!("{}{}", prefix, current_partial)
+}
+
+fn push_transcript_segment(
+    segments: &mut Vec<TranscriptSegment>,
+    next_segment_id: &mut u64,
+    source_id: Option<u64>,
+    source_clause_index: Option<usize>,
+    leading_pause_ms: u32,
+    live_text: String,
+    corrected_text: Option<String>,
+) {
+    let segment_id = *next_segment_id;
+    *next_segment_id += 1;
+    segments.push(TranscriptSegment {
+        id: segment_id,
+        source_id,
+        source_clause_index,
+        leading_pause_ms,
+        live_text: live_text.clone(),
+        corrected_text,
+    });
+    log::info!(
+        "Queued transcript segment: id={}, source_id={:?}, clause_index={:?}, text='{}', corrected={}",
+        segment_id,
+        source_id,
+        source_clause_index,
+        live_text,
+        segments
+            .last()
+            .and_then(|segment| segment.corrected_text.as_ref())
+            .is_some()
+    );
+}
+
+fn push_live_clauses_from_display(
+    segments: &mut Vec<TranscriptSegment>,
+    next_segment_id: &mut u64,
+    active_refine: &mut ActiveRefineContext,
+    display: &str,
+) {
+    let (clauses, _) = split_stable_clauses(display);
+    let first_new_clause_index = active_refine.committed_clause_count;
+    for (index, clause) in clauses
+        .into_iter()
+        .enumerate()
+        .skip(active_refine.committed_clause_count)
+    {
+        push_transcript_segment(
+            segments,
+            next_segment_id,
+            Some(active_refine.source_id),
+            Some(index),
+            if index == 0 {
+                active_refine.leading_pause_ms
+            } else if index == first_new_clause_index {
+                let pause_ms = active_refine.pending_clause_leading_pause_ms;
+                active_refine.pending_clause_leading_pause_ms = 0;
+                pause_ms
+            } else {
+                0
+            },
+            clause,
+            None,
+        );
+    }
+    active_refine.committed_clause_count =
+        clauses_len(display).max(active_refine.committed_clause_count);
+}
+
+fn clauses_len(display: &str) -> usize {
+    split_stable_clauses(display).0.len()
+}
+
+fn queue_refine_task(
+    worker: &mut RefineWorker,
+    segments: &[TranscriptSegment],
+    source_id: u64,
+    audio: Vec<f32>,
+    fallback_text: String,
+    clause_count: usize,
+    is_final: bool,
+) {
+    let audio_stats = analyze_refine_audio(&audio);
+    let source_clause_pauses = summarize_source_clause_pauses(segments, source_id);
+    log::info!(
+        "Queued refine task: source_id={}, audio_samples={}, audio_ms={}, clause_count={}, final={}, source_clause_pauses='{}', low_energy_frames={}, low_energy_runs={}, longest_low_energy_ms={}, longest_internal_low_energy_ms={}, trailing_low_energy_ms={}, fallback='{}'",
+        source_id,
+        audio.len(),
+        audio_stats.duration_ms,
+        clause_count,
+        is_final,
+        source_clause_pauses,
+        audio_stats.low_energy_frame_count,
+        audio_stats.low_energy_run_count,
+        audio_stats.longest_low_energy_ms,
+        audio_stats.longest_internal_low_energy_ms,
+        audio_stats.trailing_low_energy_ms,
+        fallback_text
+    );
+    let _ = worker.task_tx.send(RefineTask {
+        source_id,
+        audio,
+        fallback_text,
+        clause_count,
+        is_final,
+    });
 }
 
 fn process_live_chunk(
@@ -695,6 +1460,244 @@ fn process_live_chunk(
     }
 
     Ok(())
+}
+
+fn process_live_chunk_with_incremental_refine(
+    text_config: &TextProcessingConfig,
+    live_engine: &mut AsrEngine,
+    samples: &[f32],
+    current_segment_audio: &mut Vec<f32>,
+    segment_overlap_audio: &mut Vec<f32>,
+    current_partial: &mut String,
+    current_partial_leading_pause_ms: u32,
+    active_refine: &mut Option<ActiveRefineContext>,
+    next_refine_source_id: &mut u64,
+    segments: &mut Vec<TranscriptSegment>,
+    next_segment_id: &mut u64,
+    refine_worker: &mut RefineWorker,
+) -> Result<(), String> {
+    if samples.is_empty() {
+        return Ok(());
+    }
+
+    if let Some(active) = active_refine.as_mut().filter(|active| !active.dormant) {
+        active.source_audio.extend_from_slice(samples);
+    }
+
+    if current_segment_audio.is_empty() && !segment_overlap_audio.is_empty() {
+        current_segment_audio.extend_from_slice(segment_overlap_audio);
+        segment_overlap_audio.clear();
+    }
+
+    current_segment_audio.extend_from_slice(samples);
+    match live_engine
+        .process_chunk(samples)
+        .map_err(|e| e.to_string())?
+    {
+        Some(text) if !text.is_empty() => {
+            *current_partial = text;
+            let (tail, tail_leading_pause_ms) = {
+                let activated_now = ensure_active_refine_context_for_partial(
+                    active_refine,
+                    next_refine_source_id,
+                    current_partial_leading_pause_ms,
+                    text_config.sentence_pause_ms,
+                    current_partial,
+                    segments.as_mut_slice(),
+                );
+                let active = active_refine
+                    .as_mut()
+                    .expect("active refine context must exist after activation");
+                if activated_now {
+                    active.source_audio.extend_from_slice(current_segment_audio);
+                }
+                let source_clauses = source_clause_contexts(segments, active.source_id);
+                let display = build_refine_display_with_source_context(
+                    text_config,
+                    &source_clauses,
+                    active.committed_clause_count,
+                    current_partial,
+                    false,
+                );
+                push_live_clauses_from_display(segments, next_segment_id, active, &display);
+                let clause_count = split_stable_clauses(&display).0.len();
+                if clause_count > active.queued_clause_count
+                    && active.source_audio.len() >= MIN_REFINE_SEGMENT_SAMPLES
+                {
+                    queue_refine_task(
+                        refine_worker,
+                        segments,
+                        active.source_id,
+                        active.source_audio.clone(),
+                        compose_source_fallback_text(segments, active.source_id, current_partial),
+                        clause_count,
+                        false,
+                    );
+                    active.queued_clause_count = clause_count;
+                }
+                (
+                    remaining_display_after_clause_count(&display, active.committed_clause_count),
+                    tail_leading_pause_ms(Some(active)),
+                )
+            };
+
+            sync_runtime_transcript(text_config, segments, None, &tail, tail_leading_pause_ms);
+            state::set_state(AppState::Transcribing);
+            state::set_status_message("Live ASR is producing partial text");
+            log::info!(
+                "Live ASR incremental partial updated: samples={}, full='{}', tail='{}'",
+                samples.len(),
+                current_partial,
+                tail
+            );
+        }
+        _ => {
+            log::debug!(
+                "Live ASR chunk accepted with no partial text: samples={}, segment_samples={}",
+                samples.len(),
+                current_segment_audio.len()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn finalize_segment_with_incremental_refine(
+    text_config: &TextProcessingConfig,
+    live_engine: &mut AsrEngine,
+    current_segment_audio: &mut Vec<f32>,
+    segment_overlap_audio: &mut Vec<f32>,
+    current_segment_leading_pause_ms: &mut u32,
+    active_refine: &mut Option<ActiveRefineContext>,
+    next_refine_source_id: &mut u64,
+    current_partial: &mut String,
+    segments: &mut Vec<TranscriptSegment>,
+    next_segment_id: &mut u64,
+    refine_worker: &mut RefineWorker,
+) -> Result<(), String> {
+    if current_segment_audio.is_empty() && current_partial.is_empty() {
+        return Ok(());
+    }
+
+    let live_text = live_engine.finalize().map_err(|e| e.to_string())?;
+    let live_text = if live_text.is_empty() {
+        current_partial.clone()
+    } else {
+        live_text
+    };
+    current_partial.clear();
+
+    if live_text.is_empty() {
+        current_segment_audio.clear();
+        *current_segment_leading_pause_ms = 0;
+        *active_refine = None;
+        sync_runtime_transcript(text_config, segments, None, "", 0);
+        return Ok(());
+    }
+
+    let overlap_len = current_segment_audio.len().min(SEGMENT_OVERLAP_SAMPLES);
+    *segment_overlap_audio =
+        current_segment_audio[current_segment_audio.len() - overlap_len..].to_vec();
+
+    let final_display;
+    let clause_count;
+    {
+        let activated_now = ensure_active_refine_context_for_partial(
+            active_refine,
+            next_refine_source_id,
+            *current_segment_leading_pause_ms,
+            text_config.sentence_pause_ms,
+            &live_text,
+            segments.as_mut_slice(),
+        );
+        let active = active_refine
+            .as_mut()
+            .expect("active refine context must exist after finalize activation");
+        if activated_now {
+            active.source_audio.extend_from_slice(current_segment_audio);
+        }
+        let source_clauses = source_clause_contexts(segments, active.source_id);
+        final_display = build_refine_display_with_source_context(
+            text_config,
+            &source_clauses,
+            active.committed_clause_count,
+            &live_text,
+            true,
+        );
+        clause_count = split_stable_clauses(&final_display).0.len();
+        push_live_clauses_from_display(segments, next_segment_id, active, &final_display);
+        if active.source_audio.len() >= MIN_REFINE_SEGMENT_SAMPLES {
+            queue_refine_task(
+                refine_worker,
+                segments,
+                active.source_id,
+                active.source_audio.clone(),
+                compose_source_fallback_text(segments, active.source_id, ""),
+                clause_count,
+                true,
+            );
+            active.queued_clause_count = active.queued_clause_count.max(clause_count);
+        }
+        active.dormant = true;
+        active.pending_clause_leading_pause_ms = 0;
+    }
+
+    current_segment_audio.clear();
+    *current_segment_leading_pause_ms = 0;
+    sync_runtime_transcript(text_config, segments, None, "", 0);
+    Ok(())
+}
+
+fn recover_live_segment_with_incremental_refine(
+    text_config: &TextProcessingConfig,
+    live_engine: &mut AsrEngine,
+    current_segment_audio: &mut Vec<f32>,
+    segment_overlap_audio: &mut Vec<f32>,
+    current_segment_leading_pause_ms: &mut u32,
+    active_refine: &mut Option<ActiveRefineContext>,
+    next_refine_source_id: &mut u64,
+    current_partial: &mut String,
+    segments: &mut Vec<TranscriptSegment>,
+    next_segment_id: &mut u64,
+    err: &str,
+) {
+    log::warn!("Live ASR chunk failed, resetting active segment: {}", err);
+    let fallback_text = current_partial.trim().to_string();
+
+    live_engine.reset();
+    current_segment_audio.clear();
+    segment_overlap_audio.clear();
+    current_partial.clear();
+
+    if !fallback_text.is_empty() {
+        let _ = ensure_active_refine_context_for_partial(
+            active_refine,
+            next_refine_source_id,
+            *current_segment_leading_pause_ms,
+            text_config.sentence_pause_ms,
+            &fallback_text,
+            segments.as_mut_slice(),
+        );
+        let active = active_refine
+            .as_mut()
+            .expect("active refine context must exist after recovery activation");
+        let source_clauses = source_clause_contexts(segments, active.source_id);
+        let final_display = build_refine_display_with_source_context(
+            text_config,
+            &source_clauses,
+            active.committed_clause_count,
+            &fallback_text,
+            true,
+        );
+        push_live_clauses_from_display(segments, next_segment_id, active, &final_display);
+    }
+
+    *current_segment_leading_pause_ms = 0;
+    *active_refine = None;
+    sync_runtime_transcript(text_config, segments, None, "", 0);
+    state::set_state(AppState::Recording);
+    state::set_status_message(format!("实时转写分段异常，已自动恢复: {}", err));
 }
 
 fn finalize_segment(
@@ -813,7 +1816,7 @@ fn commit_pending_segment(
 fn push_segment(
     segments: &mut Vec<TranscriptSegment>,
     next_segment_id: &mut u64,
-    refine_worker: Option<&mut RefineWorker>,
+    _refine_worker: Option<&mut RefineWorker>,
     leading_pause_ms: u32,
     segment_audio: Vec<f32>,
     live_text: String,
@@ -822,6 +1825,8 @@ fn push_segment(
     *next_segment_id += 1;
     segments.push(TranscriptSegment {
         id: segment_id,
+        source_id: None,
+        source_clause_index: None,
         leading_pause_ms,
         live_text: live_text.clone(),
         corrected_text: None,
@@ -831,48 +1836,116 @@ fn push_segment(
         segment_id,
         segment_audio.len(),
         live_text,
-        refine_worker.is_some()
+        false
     );
-
-    if let Some(worker) = refine_worker {
-        let _ = worker.task_tx.send(RefineTask {
-            segment_id,
-            audio: segment_audio,
-            fallback_text: live_text,
-        });
-    }
 }
 
 fn collect_refine_results(
+    text_config: &TextProcessingConfig,
     result_rx: &mpsc::Receiver<RefineResult>,
     segments: &mut [TranscriptSegment],
-) {
+) -> bool {
+    let mut changed = false;
     while let Ok(result) = result_rx.try_recv() {
-        apply_refine_result(segments, result);
+        changed |= apply_refine_result(text_config, segments, result);
     }
+    changed
 }
 
 fn collect_refine_results_blocking(
+    text_config: &TextProcessingConfig,
     result_rx: &mpsc::Receiver<RefineResult>,
     segments: &mut [TranscriptSegment],
 ) {
     while let Ok(result) = result_rx.recv_timeout(Duration::from_millis(20)) {
-        apply_refine_result(segments, result);
+        let _ = apply_refine_result(text_config, segments, result);
     }
 }
 
-fn apply_refine_result(segments: &mut [TranscriptSegment], result: RefineResult) {
-    if let Some(segment) = segments
-        .iter_mut()
-        .find(|segment| segment.id == result.segment_id)
-    {
-        log::info!(
-            "Refine result applied: id={}, text='{}'",
-            result.segment_id,
+fn apply_refine_result(
+    text_config: &TextProcessingConfig,
+    segments: &mut [TranscriptSegment],
+    result: RefineResult,
+) -> bool {
+    let source_clauses = source_clause_contexts(segments, result.source_id);
+    let rendered = build_refine_display_with_source_context(
+        text_config,
+        &source_clauses,
+        result.clause_count.saturating_sub(1),
+        &result.text,
+        result.is_final,
+    );
+    let (mut clauses, tail) = split_stable_clauses(&rendered);
+    if result.is_final && !tail.is_empty() {
+        clauses.push(tail);
+    }
+    if clauses.is_empty() && !rendered.is_empty() {
+        clauses.push(rendered);
+    }
+
+    let apply_count = result.clause_count.min(clauses.len());
+    log::info!(
+        "Refine result received: source_id={}, final={}, requested_clause_count={}, parsed_clause_count={}, rendered='{}'",
+        result.source_id,
+        result.is_final,
+        result.clause_count,
+        clauses.len(),
+        clauses.join("")
+    );
+    let mut applied = 0usize;
+    for segment in segments.iter_mut().filter(|segment| {
+        segment.source_id == Some(result.source_id) && segment.source_clause_index.is_some()
+    }) {
+        let Some(index) = segment.source_clause_index else {
+            continue;
+        };
+        if index >= apply_count {
+            continue;
+        }
+
+        let corrected = clauses[index].clone();
+        let before = segment
+            .corrected_text
+            .as_deref()
+            .unwrap_or(segment.live_text.as_str())
+            .to_string();
+        if segment.corrected_text.as_deref() != Some(corrected.as_str()) {
+            segment.corrected_text = Some(corrected);
+            applied += 1;
+            log::info!(
+                "Refine clause updated: source_id={}, clause_index={}, segment_id={}, before='{}', after='{}'",
+                result.source_id,
+                index,
+                segment.id,
+                before,
+                segment.corrected_text.as_deref().unwrap_or("")
+            );
+        } else {
+            log::info!(
+                "Refine clause unchanged: source_id={}, clause_index={}, segment_id={}, text='{}'",
+                result.source_id,
+                index,
+                segment.id,
+                before
+            );
+        }
+    }
+
+    log::info!(
+        "Refine result applied: source_id={}, clauses_applied={}, clause_count={}, final={}",
+        result.source_id,
+        applied,
+        apply_count,
+        result.is_final
+    );
+    if applied == 0 && apply_count == 0 {
+        log::debug!(
+            "Refine result had no stable clauses to apply: source_id={}, text='{}'",
+            result.source_id,
             result.text
         );
-        segment.corrected_text = Some(result.text);
     }
+    applied > 0
 }
 
 fn compose_live_transcript(
@@ -1129,7 +2202,14 @@ fn save_final_history(
 
 #[cfg(test)]
 mod tests {
-    use super::effective_segment_leading_pause_ms;
+    use super::{
+        activate_refine_context, analyze_refine_audio, apply_refine_result,
+        build_refine_display_with_source_context, compose_source_fallback_text,
+        effective_segment_leading_pause_ms, ensure_active_refine_context_for_partial,
+        remaining_display_after_clause_count, remaining_text_after_prefix, source_clause_contexts,
+        split_stable_clauses, ActiveRefineContext, RefineAudioStats, RefineResult,
+        TextProcessingConfig, TranscriptSegment,
+    };
 
     #[test]
     fn leading_pause_includes_vad_boundary_credit() {
@@ -1142,5 +2222,264 @@ mod tests {
             effective_segment_leading_pause_ms(u32::MAX - 5, 32),
             u32::MAX
         );
+    }
+
+    #[test]
+    fn split_stable_clauses_separates_tail() {
+        let (clauses, tail) = split_stable_clauses("中文流式语音识别模型，适合低延迟实时转");
+        assert_eq!(clauses, vec!["中文流式语音识别模型，"]);
+        assert_eq!(tail, "适合低延迟实时转");
+    }
+
+    #[test]
+    fn remaining_display_skips_committed_clauses() {
+        let tail =
+            remaining_display_after_clause_count("中文流式语音识别模型，适合低延迟实时转", 1);
+        assert_eq!(tail, "适合低延迟实时转");
+    }
+
+    #[test]
+    fn refine_result_updates_matching_source_clauses() {
+        let text_config = TextProcessingConfig::default();
+        let mut segments = vec![
+            TranscriptSegment {
+                id: 1,
+                source_id: Some(7),
+                source_clause_index: Some(0),
+                leading_pause_ms: 0,
+                live_text: "中文流式语音识别模型，".to_string(),
+                corrected_text: None,
+            },
+            TranscriptSegment {
+                id: 2,
+                source_id: Some(7),
+                source_clause_index: Some(1),
+                leading_pause_ms: 0,
+                live_text: "适合低延迟实时转写。".to_string(),
+                corrected_text: None,
+            },
+            TranscriptSegment {
+                id: 3,
+                source_id: Some(8),
+                source_clause_index: Some(0),
+                leading_pause_ms: 0,
+                live_text: "不相关。".to_string(),
+                corrected_text: None,
+            },
+        ];
+
+        apply_refine_result(
+            &text_config,
+            &mut segments,
+            RefineResult {
+                source_id: 7,
+                text: "中文流式语音识别模型适合低延迟实时转写".to_string(),
+                clause_count: 2,
+                is_final: true,
+            },
+        );
+
+        assert_eq!(
+            segments[0].corrected_text.as_deref(),
+            Some("中文流式语音识别模型，")
+        );
+        assert_eq!(
+            segments[1].corrected_text.as_deref(),
+            Some("适合低延迟实时转写。")
+        );
+        assert_eq!(segments[2].corrected_text, None);
+    }
+
+    #[test]
+    fn compose_source_fallback_text_does_not_duplicate_committed_prefix() {
+        let segments = vec![TranscriptSegment {
+            id: 1,
+            source_id: Some(7),
+            source_clause_index: Some(0),
+            leading_pause_ms: 0,
+            live_text: "中文流式语音识别模型，".to_string(),
+            corrected_text: None,
+        }];
+
+        let result =
+            compose_source_fallback_text(&segments, 7, "中文流式语音识别模型适合低延迟实时转写");
+
+        assert_eq!(result, "中文流式语音识别模型适合低延迟实时转写");
+    }
+
+    #[test]
+    fn remaining_text_after_prefix_strips_committed_source_prefix() {
+        let result = remaining_text_after_prefix(
+            "中文流式语音识别模型",
+            "中文流式语音识别模型适合低延迟实时转写",
+        );
+
+        assert_eq!(result, "适合低延迟实时转写");
+    }
+
+    #[test]
+    fn refine_display_with_source_context_preserves_committed_boundaries() {
+        let text_config = TextProcessingConfig::default();
+        let segments = vec![TranscriptSegment {
+            id: 1,
+            source_id: Some(7),
+            source_clause_index: Some(0),
+            leading_pause_ms: 0,
+            live_text: "中文流式语音识别模型，".to_string(),
+            corrected_text: None,
+        }];
+
+        let source_clauses = source_clause_contexts(&segments, 7);
+        let rendered = build_refine_display_with_source_context(
+            &text_config,
+            &source_clauses,
+            1,
+            "中文流式语音识别模型适合低延迟实时转写",
+            false,
+        );
+
+        assert_eq!(rendered, "中文流式语音识别模型，适合低延迟实时转写");
+    }
+
+    #[test]
+    fn analyze_refine_audio_reports_internal_and_trailing_low_energy_spans() {
+        let mut audio = Vec::new();
+        audio.extend(vec![0.1f32; 512 * 2]);
+        audio.extend(vec![0.0f32; 512 * 2]);
+        audio.extend(vec![0.1f32; 512]);
+        audio.extend(vec![0.0f32; 512 * 3]);
+
+        let stats = analyze_refine_audio(&audio);
+
+        assert_eq!(
+            stats,
+            RefineAudioStats {
+                duration_ms: 256,
+                low_energy_frame_count: 5,
+                low_energy_run_count: 2,
+                longest_low_energy_ms: 96,
+                longest_internal_low_energy_ms: 64,
+                trailing_low_energy_ms: 96,
+            }
+        );
+    }
+
+    #[test]
+    fn activate_refine_context_does_not_reopen_dormant_source_implicitly() {
+        let mut segments = vec![TranscriptSegment {
+            id: 1,
+            source_id: Some(1),
+            source_clause_index: Some(0),
+            leading_pause_ms: 0,
+            live_text: "中文流式语音识别模型。".to_string(),
+            corrected_text: None,
+        }];
+        let mut active_refine = Some(ActiveRefineContext {
+            source_id: 1,
+            leading_pause_ms: 0,
+            committed_clause_count: 1,
+            queued_clause_count: 1,
+            source_audio: Vec::new(),
+            pending_clause_leading_pause_ms: 0,
+            dormant: true,
+        });
+        let mut next_refine_source_id = 2;
+
+        let active = activate_refine_context(
+            &mut active_refine,
+            &mut next_refine_source_id,
+            1500,
+            2800,
+            segments.as_mut_slice(),
+        );
+
+        assert_eq!(active.source_id, 2);
+        assert_eq!(segments[0].live_text, "中文流式语音识别模型。");
+    }
+
+    #[test]
+    fn repeated_sentence_after_terminal_punctuation_starts_new_source() {
+        let mut segments = vec![
+            TranscriptSegment {
+                id: 1,
+                source_id: Some(1),
+                source_clause_index: Some(0),
+                leading_pause_ms: 0,
+                live_text: "中文流式语音识别模型，".to_string(),
+                corrected_text: None,
+            },
+            TranscriptSegment {
+                id: 2,
+                source_id: Some(1),
+                source_clause_index: Some(1),
+                leading_pause_ms: 0,
+                live_text: "适合低延迟实时转写。".to_string(),
+                corrected_text: None,
+            },
+        ];
+        let mut active_refine = Some(ActiveRefineContext {
+            source_id: 1,
+            leading_pause_ms: 0,
+            committed_clause_count: 2,
+            queued_clause_count: 2,
+            source_audio: Vec::new(),
+            pending_clause_leading_pause_ms: 0,
+            dormant: true,
+        });
+        let mut next_refine_source_id = 2;
+
+        let activated_now = ensure_active_refine_context_for_partial(
+            &mut active_refine,
+            &mut next_refine_source_id,
+            1500,
+            2800,
+            "中文",
+            segments.as_mut_slice(),
+        );
+
+        assert!(activated_now);
+        let active = active_refine.expect("new source should be created");
+        assert_eq!(active.source_id, 2);
+        assert!(!active.dormant);
+        assert_eq!(next_refine_source_id, 3);
+        assert_eq!(segments[1].live_text, "适合低延迟实时转写。");
+    }
+
+    #[test]
+    fn short_continuation_after_comma_reopens_existing_source() {
+        let mut segments = vec![TranscriptSegment {
+            id: 1,
+            source_id: Some(1),
+            source_clause_index: Some(0),
+            leading_pause_ms: 0,
+            live_text: "中文流式语音识别模型，".to_string(),
+            corrected_text: None,
+        }];
+        let mut active_refine = Some(ActiveRefineContext {
+            source_id: 1,
+            leading_pause_ms: 0,
+            committed_clause_count: 1,
+            queued_clause_count: 1,
+            source_audio: Vec::new(),
+            pending_clause_leading_pause_ms: 0,
+            dormant: true,
+        });
+        let mut next_refine_source_id = 2;
+
+        let activated_now = ensure_active_refine_context_for_partial(
+            &mut active_refine,
+            &mut next_refine_source_id,
+            1500,
+            2800,
+            "适",
+            segments.as_mut_slice(),
+        );
+
+        assert!(activated_now);
+        let active = active_refine.expect("existing source should be reopened");
+        assert_eq!(active.source_id, 1);
+        assert!(!active.dormant);
+        assert_eq!(next_refine_source_id, 2);
+        assert_eq!(segments[0].live_text, "中文流式语音识别模型");
     }
 }

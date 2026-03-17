@@ -195,6 +195,16 @@ pub struct UiSnapshot {
     pub model_download_status_text: String,
     pub model_download_error_text: String,
     pub github_proxy_index: i32,
+    pub refine_model_title_text: String,
+    pub refine_model_desc_text: String,
+    pub refine_model_version_text: String,
+    pub refine_model_language_text: String,
+    pub refine_asr_enabled: bool,
+    pub refine_model_ready: bool,
+    pub refine_model_downloading: bool,
+    pub refine_model_download_progress: f32,
+    pub refine_model_download_status_text: String,
+    pub refine_model_download_error_text: String,
     pub mic_permission_title: String,
     pub mic_permission_body: String,
     pub mic_ready: bool,
@@ -331,6 +341,16 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
             paste_permission_body: "当前无法读取输出链路状态".to_string(),
             paste_ready: false,
             default_device_text: "Unknown".to_string(),
+            refine_model_title_text: "纠正模型不可用".to_string(),
+            refine_model_desc_text: "当前无法读取纠正模型信息".to_string(),
+            refine_model_version_text: "N/A".to_string(),
+            refine_model_language_text: "N/A".to_string(),
+            refine_asr_enabled: false,
+            refine_model_ready: false,
+            refine_model_downloading: false,
+            refine_model_download_progress: 0.0,
+            refine_model_download_status_text: String::new(),
+            refine_model_download_error_text: String::new(),
             transcribe_card_title: "语音转写测试".to_string(),
             transcribe_button_text: "点击测试录音".to_string(),
             transcribe_body_text: "测试转写功能是否正常".to_string(),
@@ -407,14 +427,10 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
             .as_ref()
             .map(|model| model.name.clone())
             .unwrap_or_else(|| cfg.asr.live_model_id.clone()),
-        model_desc_text: format!(
-            "{}\n整体纠正: {}",
-            active_model
-                .as_ref()
-                .map(|model| model.description.clone())
-                .unwrap_or_else(|| "当前模型描述不可用".to_string()),
-            refine_runtime_summary(&cfg, refine_model_downloaded, refine_model_downloading)
-        ),
+        model_desc_text: active_model
+            .as_ref()
+            .map(|model| model.description.clone())
+            .unwrap_or_else(|| "当前模型描述不可用".to_string()),
         model_version_text: active_model
             .as_ref()
             .map(|model| model.version.clone())
@@ -453,6 +469,35 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         model_download_error_text: crate::model_downloader::get_last_error(&cfg.asr.live_model_id)
             .unwrap_or_default(),
         github_proxy_index: github_proxy_index(&cfg),
+        refine_model_title_text: refine_model
+            .as_ref()
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| cfg.asr.refine_model_id.clone()),
+        refine_model_desc_text: refine_model
+            .as_ref()
+            .map(|m| m.description.clone())
+            .unwrap_or_else(|| "整句离线纠正，提升识别准确度".to_string()),
+        refine_model_version_text: refine_model
+            .as_ref()
+            .map(|m| m.version.clone())
+            .unwrap_or_else(|| "N/A".to_string()),
+        refine_model_language_text: refine_model
+            .as_ref()
+            .map(|m| m.language.to_uppercase())
+            .unwrap_or_else(|| "ZH".to_string()),
+        refine_asr_enabled: cfg.asr.refine_enabled,
+        refine_model_ready: refine_model_downloaded,
+        refine_model_downloading: refine_model_downloading,
+        refine_model_download_progress: crate::model_downloader::get_progress(
+            &cfg.asr.refine_model_id,
+        ),
+        refine_model_download_status_text: crate::model_downloader::get_status_text(
+            &cfg.asr.refine_model_id,
+        ),
+        refine_model_download_error_text: crate::model_downloader::get_last_error(
+            &cfg.asr.refine_model_id,
+        )
+        .unwrap_or_default(),
         mic_permission_title: {
             use shanji_core::audio::{get_mic_permission_status, MicPermissionStatus};
             match get_mic_permission_status() {
@@ -1293,21 +1338,6 @@ fn refine_model_info(paths: &AppPaths, cfg: &AppConfig) -> Option<shanji_core::m
         })
 }
 
-fn refine_runtime_summary(cfg: &AppConfig, downloaded: bool, downloading: bool) -> String {
-    if !cfg.asr.refine_enabled {
-        return format!("未启用 · {}", cfg.asr.refine_model_id);
-    }
-
-    if downloading {
-        return format!("已启用，正在下载 {}", cfg.asr.refine_model_id);
-    }
-
-    if downloaded {
-        return format!("已启用 · {}", cfg.asr.refine_model_id);
-    }
-
-    format!("已启用但未安装 · {}", cfg.asr.refine_model_id)
-}
 
 fn selected_audio_device_name(
     cfg: &AppConfig,

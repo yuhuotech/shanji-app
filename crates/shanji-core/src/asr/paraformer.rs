@@ -492,7 +492,7 @@ impl WholeModelParaformer {
         ))
         .map_err(|e| AppError::Asr(format!("Failed to create speech tensor: {}", e)))?;
         let lengths_tensor =
-            Tensor::from_array(([batch_size], vec![num_frames as i64].into_boxed_slice()))
+            create_length_tensor_for_input(&self.session, "speech_lengths", &[num_frames as i64])
                 .map_err(|e| AppError::Asr(format!("Failed to create lengths tensor: {}", e)))?;
 
         let outputs = self
@@ -503,18 +503,23 @@ impl WholeModelParaformer {
             })
             .map_err(|e| AppError::Asr(format!("Model inference failed: {}", e)))?;
 
-        // Try "am_scores" first (FunASR standard export), then fall back to "logits"
-        let (logits_shape, logits_data) =
-            if let Ok(v) = outputs["am_scores"].try_extract_tensor::<f32>() {
-                v
-            } else {
-                outputs["logits"].try_extract_tensor::<f32>().map_err(|e| {
-                    AppError::Asr(format!(
-                        "Failed to extract model output (tried am_scores and logits): {}",
-                        e
-                    ))
-                })?
-            };
+        // Try "am_scores" first (FunASR standard export), then fall back to "logits".
+        // SessionOutputs indexing panics on a missing name, so probe safely first.
+        let (logits_shape, logits_data) = if let Some(value) = outputs.get("am_scores") {
+            value
+                .try_extract_tensor::<f32>()
+                .map_err(|e| AppError::Asr(format!("Failed to extract am_scores: {}", e)))?
+        } else if let Some(value) = outputs.get("logits") {
+            value
+                .try_extract_tensor::<f32>()
+                .map_err(|e| AppError::Asr(format!("Failed to extract logits: {}", e)))?
+        } else {
+            let available_outputs = outputs.keys().collect::<Vec<_>>().join(", ");
+            return Err(AppError::Asr(format!(
+                "Model output missing: neither am_scores nor logits found (available: [{}])",
+                available_outputs
+            )));
+        };
 
         let logits = Array3::from_shape_vec(
             (
@@ -795,12 +800,16 @@ impl StreamingParaformer {
         let right_context = encoder_left_context;
         let runtime = if uses_online_streaming_interface(&encoder, decoder.as_ref()) {
             // Dump all encoder inputs/outputs for diagnostics
-            let enc_inputs: Vec<String> = encoder.inputs().iter().map(|i| {
-                format!("{}:{:?}", i.name(), i.dtype())
-            }).collect();
-            let enc_outputs: Vec<String> = encoder.outputs().iter().map(|o| {
-                format!("{}:{:?}", o.name(), o.dtype())
-            }).collect();
+            let enc_inputs: Vec<String> = encoder
+                .inputs()
+                .iter()
+                .map(|i| format!("{}:{:?}", i.name(), i.dtype()))
+                .collect();
+            let enc_outputs: Vec<String> = encoder
+                .outputs()
+                .iter()
+                .map(|o| format!("{}:{:?}", o.name(), o.dtype()))
+                .collect();
             log::info!("[DIAG] Online encoder inputs: {:?}", enc_inputs);
             log::info!("[DIAG] Online encoder outputs: {:?}", enc_outputs);
 
@@ -809,12 +818,16 @@ impl StreamingParaformer {
                     "Official online streaming Paraformer requires a decoder model".to_string(),
                 )
             })?;
-            let dec_inputs: Vec<String> = decoder.inputs().iter().map(|i| {
-                format!("{}:{:?}", i.name(), i.dtype())
-            }).collect();
-            let dec_outputs: Vec<String> = decoder.outputs().iter().map(|o| {
-                format!("{}:{:?}", o.name(), o.dtype())
-            }).collect();
+            let dec_inputs: Vec<String> = decoder
+                .inputs()
+                .iter()
+                .map(|i| format!("{}:{:?}", i.name(), i.dtype()))
+                .collect();
+            let dec_outputs: Vec<String> = decoder
+                .outputs()
+                .iter()
+                .map(|o| format!("{}:{:?}", o.name(), o.dtype()))
+                .collect();
             log::info!("[DIAG] Online decoder inputs: {:?}", dec_inputs);
             log::info!("[DIAG] Online decoder outputs: {:?}", dec_outputs);
             let decoder_caches = OnlineDecoderCache::from_decoder_session(&decoder)?;

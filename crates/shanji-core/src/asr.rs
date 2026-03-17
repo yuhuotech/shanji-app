@@ -160,7 +160,11 @@ impl AsrEngine {
         // Load CMVN normalization from am.mvn if available
         let cmvn_loaded;
         if let Some(ref mvn_path) = layout.mean_variance_path {
-            log::info!("[DIAG] CMVN file path: {}, exists={}", mvn_path.display(), mvn_path.exists());
+            log::info!(
+                "[DIAG] CMVN file path: {}, exists={}",
+                mvn_path.display(),
+                mvn_path.exists()
+            );
             match CmvnStats::from_file(mvn_path) {
                 Ok(cmvn) => {
                     log::info!("[DIAG] CMVN loaded OK: dim={}", cmvn.shift.len());
@@ -274,8 +278,7 @@ impl AsrEngine {
 
                     // Diagnostic: log once
                     static LOGGED_STREAMING: AtomicBool = AtomicBool::new(false);
-                    if !new_lfr_frames.is_empty()
-                        && !LOGGED_STREAMING.swap(true, Ordering::Relaxed)
+                    if !new_lfr_frames.is_empty() && !LOGGED_STREAMING.swap(true, Ordering::Relaxed)
                     {
                         let f = &new_lfr_frames[0];
                         log::info!(
@@ -370,8 +373,9 @@ impl AsrEngine {
             Some(AsrBackend::Streaming(streaming)) => {
                 // Flush remaining audio samples through incremental LFR pipeline
                 if !self.sample_buffer.is_empty() {
-                    let raw_frames =
-                        self.feature_extractor.extract_fbank_only(&self.sample_buffer)?;
+                    let raw_frames = self
+                        .feature_extractor
+                        .extract_fbank_only(&self.sample_buffer)?;
                     if !raw_frames.is_empty() {
                         let new_frames = if self.is_first_chunk {
                             raw_frames

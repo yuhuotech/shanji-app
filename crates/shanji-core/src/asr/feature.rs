@@ -22,7 +22,11 @@ impl CmvnStats {
     /// Parse a FunASR am.mvn file (Kaldi Nnet format).
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path).map_err(|e| {
-            AppError::Asr(format!("Failed to read CMVN file {}: {}", path.display(), e))
+            AppError::Asr(format!(
+                "Failed to read CMVN file {}: {}",
+                path.display(),
+                e
+            ))
         })?;
 
         let mut shift = None;
@@ -479,7 +483,11 @@ mod tests {
         let incremental_result = apply_lfr(&accumulated, 7, 6);
         assert_eq!(batch_result.len(), incremental_result.len());
 
-        for (i, (b, inc)) in batch_result.iter().zip(incremental_result.iter()).enumerate() {
+        for (i, (b, inc)) in batch_result
+            .iter()
+            .zip(incremental_result.iter())
+            .enumerate()
+        {
             assert_eq!(b, inc, "LFR frame {} mismatch", i);
         }
     }

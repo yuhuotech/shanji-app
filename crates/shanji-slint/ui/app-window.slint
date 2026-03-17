@@ -259,6 +259,11 @@ export component AppWindow inherits Window {
     in-out property <bool>   refine-model-downloading: false;
     in-out property <float>  refine-model-download-progress: 0.0;
     in-out property <string> refine-model-download-status-text: "";
+    in-out property <string> refine-model-download-error-text: "";
+    in-out property <string> refine-model-title-text: "Paraformer 离线纠正";
+    in-out property <string> refine-model-desc-text: "整句离线纠正，提升识别准确度";
+    in-out property <string> refine-model-version-text: "v1.0.0";
+    in-out property <string> refine-model-language-text: "ZH";
     in property  <[HotwordLibraryCard]> hotword-libraries: [];
     in-out property <string> hotword-stats-text: "共 0 个词库";
     in-out property <string> hotword-dir-text: "";
@@ -321,6 +326,7 @@ export component AppWindow inherits Window {
     callback clear-session-requested();
 
     title: app-name;
+    icon: @image-url("../assets/shanji_logo.png");
     width: 960px;
     height: 640px;
     default-font-family: "Hiragino Sans GB";
@@ -691,6 +697,216 @@ export component AppWindow inherits Window {
                             }
                         }
 
+                        // ── 纠正模型状态 ──────────────────────────────────
+                        Rectangle {
+                            border-radius: 18px;
+                            background: #ffffff;
+                            border-width: 1px;
+                            border-color: #d7dee8;
+                            width: card-col-width;
+
+                            VerticalLayout {
+                                alignment: start;
+                                padding: 18px;
+                                spacing: 10px;
+
+                                // title row
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    SectionIcon { label: "↑"; icon-color: #f59e0b; }
+                                    Text { text: "纠正模型状态"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
+                                    Text {
+                                        text: "●";
+                                        color: refine-model-downloading ? #3b82f6
+                                            : refine-model-downloaded && refine-asr-enabled ? #22c55e
+                                            : refine-model-downloaded ? #9ca3af
+                                            : #ef4444;
+                                        font-size: 9px;
+                                        vertical-alignment: center;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                    if refine-model-downloaded && refine-asr-enabled : Rectangle {
+                                        border-radius: 6px;
+                                        background: #d1fae5;
+                                        border-width: 1px;
+                                        border-color: #6ee7b7;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            padding-top: 3px; padding-bottom: 3px;
+                                            Text { text: "已启用"; color: #065f46; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        }
+                                    }
+                                    if refine-model-downloaded && !refine-asr-enabled : Rectangle {
+                                        border-radius: 6px;
+                                        background: #f3f4f6;
+                                        border-width: 1px;
+                                        border-color: #d1d5db;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            padding-top: 3px; padding-bottom: 3px;
+                                            Text { text: "已停用"; color: #6b7280; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        }
+                                    }
+                                    if refine-model-downloading : Rectangle {
+                                        border-radius: 6px;
+                                        background: #eff6ff;
+                                        border-width: 1px;
+                                        border-color: #93c5fd;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            padding-top: 3px; padding-bottom: 3px;
+                                            Text { text: "下载中"; color: #1d4ed8; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        }
+                                    }
+                                    if !refine-model-downloaded && !refine-model-downloading : Rectangle {
+                                        border-radius: 6px;
+                                        background: #fef3c7;
+                                        border-width: 1px;
+                                        border-color: #fcd34d;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            padding-top: 3px; padding-bottom: 3px;
+                                            Text { text: "未下载"; color: #92400e; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        }
+                                    }
+                                }
+
+                                // model name + description
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    Text { text: refine-model-title-text; color: #1f2937; font-size: 17px; font-weight: 700; }
+                                    Text { text: refine-model-desc-text;  color: #667085; font-size: 12px; wrap: word-wrap; }
+                                }
+
+                                // version / size / language pills
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    InfoPill { label: "版本"; value: refine-model-version-text; }
+                                    InfoPill { label: "大小"; value: refine-model-size-text;    }
+                                    InfoPill { label: "语言"; value: refine-model-language-text; }
+                                }
+
+                                // toggle row — only when model is downloaded
+                                if refine-model-downloaded : HorizontalLayout {
+                                    spacing: 10px;
+                                    Text {
+                                        text: "纠正功能";
+                                        color: #374151;
+                                        font-size: 13px;
+                                        font-weight: 600;
+                                        vertical-alignment: center;
+                                        horizontal-stretch: 1;
+                                    }
+                                    Rectangle {
+                                        width: 44px;
+                                        height: 24px;
+                                        border-radius: 12px;
+                                        background: refine-asr-enabled ? #22c55e : #d1d5db;
+                                        refine-toggle-ta := TouchArea {
+                                            clicked => { root.toggle-refine-asr-requested(); }
+                                        }
+                                        Rectangle {
+                                            width: 20px;
+                                            height: 20px;
+                                            border-radius: 10px;
+                                            background: #ffffff;
+                                            x: refine-asr-enabled ? 22px : 2px;
+                                            y: 2px;
+                                        }
+                                    }
+                                }
+
+                                // status badge row
+                                if refine-model-downloaded && refine-asr-enabled : Rectangle {
+                                    border-radius: 10px;
+                                    background: #dff6e8;
+                                    height: 40px;
+                                    Text {
+                                        text: "✓  纠正已启用";
+                                        color: #1a7f45;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                    }
+                                }
+                                if refine-model-downloaded && !refine-asr-enabled : Rectangle {
+                                    border-radius: 10px;
+                                    background: #f3f4f6;
+                                    border-width: 1px;
+                                    border-color: #e5e7eb;
+                                    height: 40px;
+                                    Text {
+                                        text: "—  纠正已停用";
+                                        color: #6b7280;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                    }
+                                }
+
+                                // download progress bar
+                                if refine-model-downloading : VerticalLayout {
+                                    spacing: 6px;
+                                    padding-top: 4px;
+                                    Text {
+                                        text: refine-model-download-status-text;
+                                        color: #374151;
+                                        font-size: 12px;
+                                        horizontal-alignment: center;
+                                    }
+                                    Rectangle {
+                                        height: 8px;
+                                        border-radius: 4px;
+                                        background: #e5e7eb;
+                                        Rectangle {
+                                            height: 8px;
+                                            border-radius: 4px;
+                                            background: #f59e0b;
+                                            x: 0;
+                                            width: parent.width * root.refine-model-download-progress;
+                                        }
+                                    }
+                                }
+
+                                // download button — not installed, not downloading
+                                if !refine-model-downloaded && !refine-model-downloading : Rectangle {
+                                    border-radius: 10px;
+                                    background: rdl-ta.has-hover ? #dbeafe : #eff6ff;
+                                    border-width: 1px;
+                                    border-color: #93c5fd;
+                                    height: 40px;
+                                    rdl-ta := TouchArea { clicked => { root.download-refine-model-requested(); } }
+                                    Text {
+                                        text: "↓  下载模型";
+                                        color: #1d4ed8;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                    }
+                                }
+
+                                // error after failed download
+                                if !refine-model-downloaded && !refine-model-downloading && refine-model-download-error-text != "" : Rectangle {
+                                    border-radius: 8px;
+                                    background: #fef2f2;
+                                    border-width: 1px;
+                                    border-color: #fecaca;
+                                    VerticalLayout {
+                                        padding: 8px;
+                                        Text {
+                                            text: "下载失败：" + refine-model-download-error-text;
+                                            color: #b91c1c;
+                                            font-size: 11px;
+                                            wrap: word-wrap;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // ── 麦克风授权 ────────────────────────────────────
                         Rectangle {
                             border-radius: 18px;
@@ -762,94 +978,6 @@ export component AppWindow inherits Window {
                                     spacing: 3px;
                                     Text { text: "默认设备";       color: #9ca3af; font-size: 11px; }
                                     Text { text: default-device-text; color: #1f2937; font-size: 15px; font-weight: 700; }
-                                }
-                            }
-                        }
-
-                        // ── 语音转写测试 ──────────────────────────────────
-                        Rectangle {
-                            border-radius: 18px;
-                            background: #ffffff;
-                            border-width: 1px;
-                            border-color: #d7dee8;
-                            width: card-col-width;
-
-                            VerticalLayout {
-                                alignment: start;
-                                padding: 18px;
-                                spacing: 10px;
-
-                                // title row
-                                HorizontalLayout {
-                                    spacing: 7px;
-                                    height: 22px;
-                                    SectionIcon { label: "♪"; icon-color: #8b5cf6; }
-                                    Text { text: transcribe-card-title; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
-                                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                                }
-
-                                // mic button row
-                                HorizontalLayout {
-                                    spacing: 14px;
-                                    alignment: center;
-
-                                    Rectangle {
-                                        width: 62px; height: 62px;
-                                        border-radius: 16px;
-                                        background: #2962ff;
-
-                                        TouchArea { clicked => { root.toggle-live-asr-requested(); } }
-                                        Text { text: "🎤"; horizontal-alignment: center; vertical-alignment: center; font-size: 26px; }
-                                    }
-
-                                    VerticalLayout {
-                                        alignment: center;
-                                        spacing: 4px;
-                                        Text { text: transcribe-button-text; color: #1f2937; font-size: 16px; font-weight: 700; }
-                                        Text { text: transcribe-body-text;   color: #667085; font-size: 12px; wrap: word-wrap; }
-                                    }
-                                }
-
-                                // volume bar
-                                VerticalLayout {
-                                    spacing: 6px;
-                                    HorizontalLayout {
-                                        Text { text: "输入音量"; color: #9ca3af; font-size: 12px; horizontal-stretch: 1; }
-                                        Text { text: audio-level-text; color: #9ca3af; font-size: 12px; }
-                                    }
-                                    Rectangle {
-                                        height: 6px;
-                                        border-radius: 3px;
-                                        background: #e5e7eb;
-                                        Rectangle {
-                                            height: 6px;
-                                            border-radius: 3px;
-                                            background: #3b82f6;
-                                            width: parent.width * root.audio-level-value;
-                                        }
-                                    }
-                                }
-
-                                // monitor button
-                                Button {
-                                    text: monitor-button-text;
-                                    clicked => { root.toggle-mic-monitor-requested(); }
-                                }
-
-                                // tip box
-                                Rectangle {
-                                    border-radius: 10px;
-                                    background: #fff7e8;
-                                    VerticalLayout {
-                                        padding: 12px;
-                                        Text {
-                                            text: monitor-tip-text;
-                                            color: #c26b16;
-                                            wrap: word-wrap;
-                                            font-size: 12px;
-                                            font-weight: 600;
-                                        }
-                                    }
                                 }
                             }
                         }
@@ -1037,10 +1165,145 @@ export component AppWindow inherits Window {
                             }
                         }
 
+                        // 纠正模型状态
+                        Rectangle {
+                            border-radius: 18px; background: #ffffff;
+                            border-width: 1px; border-color: #d7dee8;
+                            VerticalLayout {
+                                alignment: start; padding: 18px; spacing: 10px;
+                                HorizontalLayout {
+                                    spacing: 7px;
+                                    SectionIcon { label: "↑"; icon-color: #f59e0b; }
+                                    Text { text: "纠正模型状态"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
+                                    Text {
+                                        text: "●";
+                                        color: refine-model-downloading ? #3b82f6
+                                            : refine-model-downloaded && refine-asr-enabled ? #22c55e
+                                            : refine-model-downloaded ? #9ca3af
+                                            : #ef4444;
+                                        font-size: 9px; vertical-alignment: center;
+                                    }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                    if refine-model-downloaded && refine-asr-enabled : Rectangle {
+                                        border-radius: 6px; background: #d1fae5;
+                                        border-width: 1px; border-color: #6ee7b7;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            padding-top: 3px; padding-bottom: 3px;
+                                            Text { text: "已启用"; color: #065f46; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        }
+                                    }
+                                    if refine-model-downloaded && !refine-asr-enabled : Rectangle {
+                                        border-radius: 6px; background: #f3f4f6;
+                                        border-width: 1px; border-color: #d1d5db;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            padding-top: 3px; padding-bottom: 3px;
+                                            Text { text: "已停用"; color: #6b7280; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        }
+                                    }
+                                    if refine-model-downloading : Rectangle {
+                                        border-radius: 6px; background: #eff6ff;
+                                        border-width: 1px; border-color: #93c5fd;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            padding-top: 3px; padding-bottom: 3px;
+                                            Text { text: "下载中"; color: #1d4ed8; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        }
+                                    }
+                                    if !refine-model-downloaded && !refine-model-downloading : Rectangle {
+                                        border-radius: 6px; background: #fef3c7;
+                                        border-width: 1px; border-color: #fcd34d;
+                                        HorizontalLayout {
+                                            padding-left: 8px; padding-right: 8px;
+                                            padding-top: 3px; padding-bottom: 3px;
+                                            Text { text: "未下载"; color: #92400e; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        }
+                                    }
+                                }
+                                VerticalLayout {
+                                    spacing: 4px;
+                                    Text { text: refine-model-title-text; color: #1f2937; font-size: 17px; font-weight: 700; }
+                                    Text { text: refine-model-desc-text;  color: #667085; font-size: 12px; wrap: word-wrap; }
+                                }
+                                HorizontalLayout {
+                                    spacing: 8px;
+                                    InfoPill { label: "版本"; value: refine-model-version-text; }
+                                    InfoPill { label: "大小"; value: refine-model-size-text;    }
+                                    InfoPill { label: "语言"; value: refine-model-language-text; }
+                                }
+                                if refine-model-downloaded : HorizontalLayout {
+                                    spacing: 10px;
+                                    Text {
+                                        text: "纠正功能"; color: #374151;
+                                        font-size: 13px; font-weight: 600;
+                                        vertical-alignment: center; horizontal-stretch: 1;
+                                    }
+                                    Rectangle {
+                                        width: 44px; height: 24px; border-radius: 12px;
+                                        background: refine-asr-enabled ? #22c55e : #d1d5db;
+                                        compact-refine-toggle-ta := TouchArea {
+                                            clicked => { root.toggle-refine-asr-requested(); }
+                                        }
+                                        Rectangle {
+                                            width: 20px; height: 20px; border-radius: 10px;
+                                            background: #ffffff;
+                                            x: refine-asr-enabled ? 22px : 2px; y: 2px;
+                                        }
+                                    }
+                                }
+                                if refine-model-downloaded && refine-asr-enabled : Rectangle {
+                                    border-radius: 10px; background: #dff6e8; height: 40px;
+                                    Text {
+                                        text: "✓  纠正已启用"; color: #1a7f45;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                        font-size: 13px; font-weight: 700;
+                                    }
+                                }
+                                if refine-model-downloaded && !refine-asr-enabled : Rectangle {
+                                    border-radius: 10px; background: #f3f4f6;
+                                    border-width: 1px; border-color: #e5e7eb; height: 40px;
+                                    Text {
+                                        text: "—  纠正已停用"; color: #6b7280;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                        font-size: 13px; font-weight: 700;
+                                    }
+                                }
+                                if refine-model-downloading : VerticalLayout {
+                                    spacing: 6px; padding-top: 4px;
+                                    Text { text: refine-model-download-status-text; color: #374151; font-size: 12px; horizontal-alignment: center; }
+                                    Rectangle {
+                                        height: 8px; border-radius: 4px; background: #e5e7eb;
+                                        Rectangle { height: 8px; border-radius: 4px; background: #f59e0b; x: 0; width: parent.width * root.refine-model-download-progress; }
+                                    }
+                                }
+                                if !refine-model-downloaded && !refine-model-downloading : Rectangle {
+                                    border-radius: 10px;
+                                    background: crdl-ta.has-hover ? #dbeafe : #eff6ff;
+                                    border-width: 1px; border-color: #93c5fd; height: 40px;
+                                    crdl-ta := TouchArea { clicked => { root.download-refine-model-requested(); } }
+                                    Text {
+                                        text: "↓  下载模型"; color: #1d4ed8;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                        font-size: 13px; font-weight: 700;
+                                    }
+                                }
+                                if !refine-model-downloaded && !refine-model-downloading && refine-model-download-error-text != "" : Rectangle {
+                                    border-radius: 8px; background: #fef2f2;
+                                    border-width: 1px; border-color: #fecaca;
+                                    VerticalLayout {
+                                        padding: 8px;
+                                        Text { text: "下载失败：" + refine-model-download-error-text; color: #b91c1c; font-size: 11px; wrap: word-wrap; }
+                                    }
+                                }
+                            }
+                        }
+
                         // 麦克风授权
                         Rectangle {
                             border-radius: 18px; background: #ffffff;
-                            border-width: 1px; border-color: #d7dee8;                            VerticalLayout {
+                            border-width: 1px; border-color: #d7dee8;
+                            VerticalLayout {
                                 alignment: start; padding: 18px; spacing: 10px;
                                 HorizontalLayout {
                                     spacing: 7px; height: 22px;
@@ -1057,20 +1320,14 @@ export component AppWindow inherits Window {
                                         Text { text: mic-permission-title; color: mic-ready ? #1f2937 : #dc2626; font-size: 13px; font-weight: 700; }
                                         Text { text: mic-permission-body;  color: #667085; font-size: 12px; wrap: word-wrap; }
                                         if !mic-ready: Rectangle {
-                                            height: 28px;
-                                            border-radius: 6px;
+                                            height: 28px; border-radius: 6px;
                                             background: mic-auth-ta2.has-hover ? #1d4ed8 : #2563eb;
                                             width: 120px;
-                                            mic-auth-ta2 := TouchArea {
-                                                clicked => { root.request-mic-permission(); }
-                                            }
+                                            mic-auth-ta2 := TouchArea { clicked => { root.request-mic-permission(); } }
                                             Text {
-                                                text: "前往系统设置授权";
-                                                color: #ffffff;
-                                                font-size: 11px;
-                                                font-weight: 700;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
+                                                text: "前往系统设置授权"; color: #ffffff;
+                                                font-size: 11px; font-weight: 700;
+                                                horizontal-alignment: center; vertical-alignment: center;
                                             }
                                         }
                                     }
@@ -1086,56 +1343,8 @@ export component AppWindow inherits Window {
                                 }
                                 VerticalLayout {
                                     spacing: 3px;
-                                    Text { text: "默认设备";       color: #9ca3af; font-size: 11px; }
+                                    Text { text: "默认设备"; color: #9ca3af; font-size: 11px; }
                                     Text { text: default-device-text; color: #1f2937; font-size: 15px; font-weight: 700; }
-                                }
-                            }
-                        }
-
-                        // 语音转写测试
-                        Rectangle {
-                            border-radius: 18px; background: #ffffff;
-                            border-width: 1px; border-color: #d7dee8;
-                            VerticalLayout {
-                                alignment: start; padding: 18px; spacing: 10px;
-                                HorizontalLayout {
-                                    spacing: 7px; height: 22px;
-                                    SectionIcon { label: "♪"; icon-color: #8b5cf6; }
-                                    Text { text: transcribe-card-title; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
-                                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                                }
-                                HorizontalLayout {
-                                    spacing: 14px; alignment: center;
-                                    Rectangle {
-                                        width: 62px; height: 62px; border-radius: 16px; background: #2962ff;
-                                        TouchArea { clicked => { root.toggle-live-asr-requested(); } }
-                                        Text { text: "🎤"; horizontal-alignment: center; vertical-alignment: center; font-size: 26px; }
-                                    }
-                                    VerticalLayout {
-                                        alignment: center;
-                                        spacing: 4px;
-                                        Text { text: transcribe-button-text; color: #1f2937; font-size: 16px; font-weight: 700; }
-                                        Text { text: transcribe-body-text;   color: #667085; font-size: 12px; wrap: word-wrap; }
-                                    }
-                                }
-                                VerticalLayout {
-                                    spacing: 6px;
-                                    HorizontalLayout {
-                                        Text { text: "输入音量"; color: #9ca3af; font-size: 12px; horizontal-stretch: 1; }
-                                        Text { text: audio-level-text; color: #9ca3af; font-size: 12px; }
-                                    }
-                                    Rectangle {
-                                        height: 6px; border-radius: 3px; background: #e5e7eb;
-                                        Rectangle { height: 6px; border-radius: 3px; background: #3b82f6; width: parent.width * root.audio-level-value; }
-                                    }
-                                }
-                                Button { text: monitor-button-text; clicked => { root.toggle-mic-monitor-requested(); } }
-                                Rectangle {
-                                    border-radius: 10px; background: #fff7e8;
-                                    VerticalLayout {
-                                        padding: 12px;
-                                        Text { text: monitor-tip-text; color: #c26b16; wrap: word-wrap; font-size: 12px; font-weight: 600; }
-                                    }
                                 }
                             }
                         }

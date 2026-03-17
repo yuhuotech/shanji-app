@@ -306,16 +306,38 @@ fn icon_for_state(state: &str) -> Result<Icon, tray_icon::BadIcon> {
     let mut rgba = Vec::with_capacity((size * size * 4) as usize);
     for y in 0..size {
         for x in 0..size {
-            let inset = x > 1 && x < size - 2 && y > 1 && y < size - 2;
-            if inset {
+            if is_mic_pixel(x, y) {
                 rgba.extend_from_slice(&[r, g, b, 255]);
             } else {
-                rgba.extend_from_slice(&[243, 239, 228, 255]);
+                rgba.extend_from_slice(&[0, 0, 0, 0]);
             }
         }
     }
 
     Icon::from_rgba(rgba, size, size)
+}
+
+// 16×16 麦克风轮廓（根据 logo 主体简化）
+//
+//  ......XXXX......   row 1   顶部圆角
+//  .....XXXXXX.....   row 2-7 话筒主体
+//  ......XXXX......   row 8   底部圆角
+//  ....X......X....   row 9-10 支架两侧
+//  ....XXXXXXXX....   row 11  弧底
+//  .......XX.......   row 12-13 竖杆
+//  .....XXXXXX.....   row 14  底座
+//
+fn is_mic_pixel(x: u32, y: u32) -> bool {
+    match y {
+        1 => x >= 6 && x <= 9,
+        2..=7 => x >= 5 && x <= 10,
+        8 => x >= 6 && x <= 9,
+        9..=10 => x == 4 || x == 11,
+        11 => x >= 4 && x <= 11,
+        12..=13 => x == 7 || x == 8,
+        14 => x >= 5 && x <= 10,
+        _ => false,
+    }
 }
 
 #[cfg(test)]
