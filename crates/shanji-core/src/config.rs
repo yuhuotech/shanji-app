@@ -77,10 +77,10 @@ impl Default for AudioConfig {
             device_name: None,
             gain: 1.0,
             recording_mode: "toggle".to_string(),
-            vad_threshold: 0.5,
-            vad_end_threshold: 0.35,
+            vad_threshold: 0.45,
+            vad_end_threshold: 0.3,
             silence_timeout_ms: 1500,
-            min_speech_frames: 3,
+            min_speech_frames: 2,
             sound_feedback: true,
             noise_reduction: true,
         }
@@ -276,7 +276,7 @@ fn default_version() -> u32 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: 5,
+            version: 6,
             general: GeneralConfig::default(),
             audio: AudioConfig::default(),
             asr: AsrConfig::default(),
@@ -353,8 +353,25 @@ impl AppConfig {
             modified = true;
         }
 
+        if self.version < 6 {
+            let uses_legacy_vad_defaults = approx_eq(self.audio.vad_threshold, 0.5)
+                && approx_eq(self.audio.vad_end_threshold, 0.35)
+                && self.audio.min_speech_frames == 3;
+            if uses_legacy_vad_defaults {
+                self.audio.vad_threshold = 0.45;
+                self.audio.vad_end_threshold = 0.3;
+                self.audio.min_speech_frames = 2;
+            }
+            self.version = 6;
+            modified = true;
+        }
+
         modified
     }
+}
+
+fn approx_eq(lhs: f32, rhs: f32) -> bool {
+    (lhs - rhs).abs() <= 0.0001
 }
 
 fn needs_native_hotkey_migration(value: &str) -> bool {
@@ -424,4 +441,39 @@ pub fn reset_config(paths: &AppPaths) -> Result<AppConfig> {
     let default_config = AppConfig::default();
     save_config(paths, &default_config)?;
     Ok(default_config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn migrate_updates_legacy_vad_defaults() {
+        let mut config = AppConfig::default();
+        config.version = 5;
+        config.audio.vad_threshold = 0.5;
+        config.audio.vad_end_threshold = 0.35;
+        config.audio.min_speech_frames = 3;
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 6);
+        assert!(approx_eq(config.audio.vad_threshold, 0.45));
+        assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
+        assert_eq!(config.audio.min_speech_frames, 2);
+    }
+
+    #[test]
+    fn migrate_preserves_custom_vad_tuning() {
+        let mut config = AppConfig::default();
+        config.version = 5;
+        config.audio.vad_threshold = 0.55;
+        config.audio.vad_end_threshold = 0.25;
+        config.audio.min_speech_frames = 4;
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 6);
+        assert!(approx_eq(config.audio.vad_threshold, 0.55));
+        assert!(approx_eq(config.audio.vad_end_threshold, 0.25));
+        assert_eq!(config.audio.min_speech_frames, 4);
+    }
 }
