@@ -8,10 +8,11 @@ pub mod tokenizer;
 use crate::error::{AppError, Result};
 use crate::model::{ModelBackend, ResolvedModelLayout};
 use crate::text_processing::normalize_transcript;
-use feature::{FBankConfig, FBankExtractor};
+use feature::{apply_lfr, CmvnStats, FBankConfig, FBankExtractor};
 use ort::session::Session;
 use paraformer::{StreamingParaformer, WholeModelParaformer};
 use serde::Deserialize;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokenizer::Tokenizer;
 
 enum AsrBackend {
@@ -59,7 +60,14 @@ pub struct AsrEngine {
     sample_buffer: Vec<f32>,
     whole_audio_buffer: Vec<f32>,
     partial_result: String,
-    samples_per_chunk: usize,
+    samples_per_window: usize,
+    samples_per_step: usize,
+    /// Accumulated raw 80-dim FBank frames for streaming LFR continuity
+    raw_frame_buffer: Vec<Vec<f32>>,
+    /// Number of LFR frames already emitted from raw_frame_buffer
+    lfr_frames_emitted: usize,
+    /// Whether this is the first streaming chunk (for overlap dedup)
+    is_first_chunk: bool,
 }
 
 impl AsrEngine {
@@ -74,7 +82,11 @@ impl AsrEngine {
             sample_buffer: Vec::new(),
             whole_audio_buffer: Vec::new(),
             partial_result: String::new(),
-            samples_per_chunk: 8_000,
+            samples_per_window: 8_000,
+            samples_per_step: 8_000,
+            raw_frame_buffer: Vec::new(),
+            lfr_frames_emitted: 0,
+            is_first_chunk: true,
         })
     }
 
@@ -121,6 +133,7 @@ impl AsrEngine {
                     encoder,
                     decoder,
                     runtime_config.streaming_chunk_size,
+                    runtime_config.encoder_left_context,
                     runtime_config.predictor_tail_threshold,
                 )?)
             }
@@ -142,18 +155,47 @@ impl AsrEngine {
             AsrBackend::Streaming(_) => runtime_config.feature_config.clone(),
         };
 
-        self.feature_extractor = FBankExtractor::new(feature_config)?;
-        self.samples_per_chunk = runtime_config.samples_per_chunk;
+        let mut feature_extractor = FBankExtractor::new(feature_config)?;
+
+        // Load CMVN normalization from am.mvn if available
+        let cmvn_loaded;
+        if let Some(ref mvn_path) = layout.mean_variance_path {
+            log::info!("[DIAG] CMVN file path: {}, exists={}", mvn_path.display(), mvn_path.exists());
+            match CmvnStats::from_file(mvn_path) {
+                Ok(cmvn) => {
+                    log::info!("[DIAG] CMVN loaded OK: dim={}", cmvn.shift.len());
+                    feature_extractor.set_cmvn(cmvn);
+                    cmvn_loaded = true;
+                }
+                Err(err) => {
+                    log::warn!(
+                        "[DIAG] CMVN load FAILED from {}: {}",
+                        mvn_path.display(),
+                        err
+                    );
+                    cmvn_loaded = false;
+                }
+            }
+        } else {
+            log::warn!("[DIAG] CMVN path is None — mean_variance_path not in model layout");
+            cmvn_loaded = false;
+        }
+
+        self.feature_extractor = feature_extractor;
+        self.samples_per_window = runtime_config.samples_per_window;
+        self.samples_per_step = runtime_config.samples_per_step;
 
         log::info!(
-            "ASR model loaded: backend={:?}, model_dir={}, config={:?}, samples_per_chunk={}, streaming_chunk_size={}, feature_bins={}, lfr={:?}",
+            "ASR model loaded: backend={:?}, model_dir={}, config={:?}, samples_per_window={}, samples_per_step={}, streaming_chunk_size={}, feature_bins={}, lfr={:?}, cmvn_loaded={}",
             layout.backend,
             layout.model_dir.display(),
             layout.config_path.as_ref().map(|path| path.display().to_string()),
-            self.samples_per_chunk,
+            self.samples_per_window,
+            self.samples_per_step,
             runtime_config.streaming_chunk_size,
             runtime_config.feature_config.num_mel_bins,
-            runtime_config.feature_config.lfr
+            runtime_config.feature_config.lfr,
+            cmvn_loaded
         );
 
         self.backend = Some(backend);
@@ -171,7 +213,7 @@ impl AsrEngine {
         }
 
         self.sample_buffer.extend_from_slice(audio);
-        if self.sample_buffer.len() < self.samples_per_chunk {
+        if self.sample_buffer.len() < self.samples_per_window {
             return Ok(None);
         }
 
@@ -182,44 +224,101 @@ impl AsrEngine {
 
         match self.backend.as_mut() {
             Some(AsrBackend::Streaming(streaming)) => {
-                let chunk = self.sample_buffer[..self.samples_per_chunk].to_vec();
-                self.sample_buffer = self.sample_buffer[self.samples_per_chunk..].to_vec();
+                let mut latest_processed = None;
 
-                let features = self.feature_extractor.extract(&chunk)?;
-                if features.is_empty() {
+                while self.sample_buffer.len() >= self.samples_per_window {
+                    let chunk = self.sample_buffer[..self.samples_per_window].to_vec();
+                    let drain_len = self.samples_per_step.min(self.sample_buffer.len());
+                    self.sample_buffer.drain(..drain_len);
+
+                    // Extract raw 80-dim FBank frames (no LFR, no CMVN)
+                    let raw_frames = self.feature_extractor.extract_fbank_only(&chunk)?;
+                    if raw_frames.is_empty() {
+                        continue;
+                    }
+
+                    // Handle overlap dedup: subsequent chunks share ~1 frame with previous
+                    let new_frames = if self.is_first_chunk {
+                        self.is_first_chunk = false;
+                        raw_frames
+                    } else {
+                        // Skip the first frame which overlaps with the last of previous chunk
+                        if raw_frames.len() > 1 {
+                            raw_frames[1..].to_vec()
+                        } else {
+                            continue;
+                        }
+                    };
+
+                    self.raw_frame_buffer.extend(new_frames);
+
+                    // Apply LFR on the entire accumulated raw frame buffer
+                    let lfr_config = self.feature_extractor.lfr_config();
+                    let all_lfr = if let Some((m, n)) = lfr_config {
+                        apply_lfr(&self.raw_frame_buffer, m, n)
+                    } else {
+                        self.raw_frame_buffer.clone()
+                    };
+
+                    // Only take newly produced LFR frames
+                    if all_lfr.len() <= self.lfr_frames_emitted {
+                        continue;
+                    }
+                    let mut new_lfr_frames = all_lfr[self.lfr_frames_emitted..].to_vec();
+                    self.lfr_frames_emitted = all_lfr.len();
+
+                    // Apply CMVN on new LFR frames
+                    if let Some(cmvn) = self.feature_extractor.cmvn() {
+                        cmvn.apply(&mut new_lfr_frames);
+                    }
+
+                    // Diagnostic: log once
+                    static LOGGED_STREAMING: AtomicBool = AtomicBool::new(false);
+                    if !new_lfr_frames.is_empty()
+                        && !LOGGED_STREAMING.swap(true, Ordering::Relaxed)
+                    {
+                        let f = &new_lfr_frames[0];
+                        log::info!(
+                            "[DIAG] streaming incremental LFR: raw_buffer={}, lfr_total={}, new_lfr={}, dim={}, first5={:?}",
+                            self.raw_frame_buffer.len(),
+                            self.lfr_frames_emitted,
+                            new_lfr_frames.len(),
+                            f.len(),
+                            &f[..5.min(f.len())],
+                        );
+                    }
+
                     log::info!(
-                        "Streaming ASR chunk skipped: empty features for {} samples",
-                        chunk.len()
+                        "Streaming ASR chunk ready: samples={}, raw_frames_total={}, new_lfr_frames={}, drain_len={}, buffered_remaining={}",
+                        chunk.len(),
+                        self.raw_frame_buffer.len(),
+                        new_lfr_frames.len(),
+                        drain_len,
+                        self.sample_buffer.len()
                     );
-                    return Ok(None);
+
+                    if let Some(tokens) = streaming.process_features(&new_lfr_frames)? {
+                        let text = tokenizer.decode(&tokens, true);
+                        append_incremental_text(&mut self.partial_result, &text);
+                        let processed = normalize_transcript(&self.partial_result);
+                        log::info!(
+                            "Streaming ASR partial: tokens={}, raw='{}', processed='{}'",
+                            tokens.len(),
+                            text,
+                            processed
+                        );
+                        latest_processed = Some(processed);
+                    }
                 }
 
-                log::info!(
-                    "Streaming ASR chunk ready: samples={}, feature_frames={}, buffered_remaining={}",
-                    chunk.len(),
-                    features.len(),
-                    self.sample_buffer.len()
-                );
-
-                if let Some(tokens) = streaming.process_features(&features)? {
-                    let text = tokenizer.decode(&tokens, true);
-                    self.partial_result.push_str(&text);
-                    let processed = self.render_transcript(&self.partial_result, false);
-                    log::info!(
-                        "Streaming ASR partial: tokens={}, raw='{}', processed='{}'",
-                        tokens.len(),
-                        text,
-                        processed
+                if latest_processed.is_none() {
+                    log::debug!(
+                        "Streaming ASR buffered without partial output: buffered_remaining={}",
+                        self.sample_buffer.len()
                     );
-                    return Ok(Some(processed));
                 }
 
-                log::info!(
-                    "Streaming ASR chunk produced no partial output (feature_frames={})",
-                    features.len()
-                );
-
-                Ok(None)
+                Ok(latest_processed)
             }
             Some(AsrBackend::Whole(model)) => {
                 self.whole_audio_buffer
@@ -269,22 +368,46 @@ impl AsrEngine {
 
         let result = match self.backend.as_mut() {
             Some(AsrBackend::Streaming(streaming)) => {
-                let remaining_features = if !self.sample_buffer.is_empty() {
-                    Some(self.feature_extractor.extract(&self.sample_buffer)?)
-                } else {
-                    None
-                };
-                if let Some(features) = remaining_features.as_deref() {
-                    log::info!(
-                        "Streaming ASR finalize with remaining buffer: samples={}, feature_frames={}",
-                        self.sample_buffer.len(),
-                        features.len()
-                    );
-                    let _ = streaming.process_features(features)?;
+                // Flush remaining audio samples through incremental LFR pipeline
+                if !self.sample_buffer.is_empty() {
+                    let raw_frames =
+                        self.feature_extractor.extract_fbank_only(&self.sample_buffer)?;
+                    if !raw_frames.is_empty() {
+                        let new_frames = if self.is_first_chunk {
+                            raw_frames
+                        } else if raw_frames.len() > 1 {
+                            raw_frames[1..].to_vec()
+                        } else {
+                            raw_frames
+                        };
+                        self.raw_frame_buffer.extend(new_frames);
+                    }
+
+                    let lfr_config = self.feature_extractor.lfr_config();
+                    let all_lfr = if let Some((m, n)) = lfr_config {
+                        apply_lfr(&self.raw_frame_buffer, m, n)
+                    } else {
+                        self.raw_frame_buffer.clone()
+                    };
+
+                    if all_lfr.len() > self.lfr_frames_emitted {
+                        let mut new_lfr = all_lfr[self.lfr_frames_emitted..].to_vec();
+                        self.lfr_frames_emitted = all_lfr.len();
+                        if let Some(cmvn) = self.feature_extractor.cmvn() {
+                            cmvn.apply(&mut new_lfr);
+                        }
+                        log::info!(
+                            "Streaming ASR finalize with remaining buffer: samples={}, new_lfr_frames={}",
+                            self.sample_buffer.len(),
+                            new_lfr.len()
+                        );
+                        let _ = streaming.process_features(&new_lfr)?;
+                    }
                 }
                 let final_tokens = streaming.finalize()?;
                 let final_text = tokenizer.decode(&final_tokens, true);
-                let raw_text = format!("{}{}", self.partial_result, final_text);
+                append_incremental_text(&mut self.partial_result, &final_text);
+                let raw_text = self.partial_result.clone();
                 log::info!(
                     "Streaming ASR final: tokens={}, raw='{}'",
                     final_tokens.len(),
@@ -329,6 +452,9 @@ impl AsrEngine {
         self.sample_buffer.clear();
         self.whole_audio_buffer.clear();
         self.partial_result.clear();
+        self.raw_frame_buffer.clear();
+        self.lfr_frames_emitted = 0;
+        self.is_first_chunk = true;
 
         if let Some(ref mut backend) = self.backend {
             backend.reset();
@@ -346,7 +472,9 @@ impl AsrEngine {
 struct ModelRuntimeConfig {
     feature_config: FBankConfig,
     streaming_chunk_size: usize,
-    samples_per_chunk: usize,
+    encoder_left_context: usize,
+    samples_per_window: usize,
+    samples_per_step: usize,
     predictor_tail_threshold: f32,
 }
 
@@ -354,8 +482,10 @@ impl Default for ModelRuntimeConfig {
     fn default() -> Self {
         let feature_config = FBankConfig::default();
         Self {
-            samples_per_chunk: 8_000,
+            samples_per_window: 8_000,
+            samples_per_step: 8_000,
             streaming_chunk_size: 67,
+            encoder_left_context: 0,
             predictor_tail_threshold: 0.45,
             feature_config,
         }
@@ -405,9 +535,16 @@ impl ModelRuntimeConfig {
             if let Some(chunk_size) = model_yaml
                 .encoder_conf
                 .as_ref()
-                .and_then(|encoder| encoder.chunk_size_value())
+                .and_then(|encoder| encoder.streaming_chunk_size())
             {
                 config.streaming_chunk_size = chunk_size;
+            }
+            if let Some(left_ctx) = model_yaml
+                .encoder_conf
+                .as_ref()
+                .and_then(|encoder| encoder.encoder_left_context())
+            {
+                config.encoder_left_context = left_ctx;
             }
             if let Some(tail_threshold) = model_yaml
                 .predictor_conf
@@ -419,8 +556,12 @@ impl ModelRuntimeConfig {
         }
 
         if layout.backend == ModelBackend::Streaming {
-            config.samples_per_chunk =
+            config.samples_per_window =
                 streaming_samples_for_chunk(&config.feature_config, config.streaming_chunk_size);
+            config.samples_per_step = streaming_step_samples_for_chunk(
+                &config.feature_config,
+                config.streaming_chunk_size,
+            );
         }
 
         config
@@ -463,6 +604,8 @@ impl ModelYamlFrontendConf {
 struct ModelYamlEncoderConf {
     #[serde(default)]
     chunk_size: Vec<usize>,
+    #[serde(default)]
+    stride: Vec<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -472,12 +615,33 @@ struct ModelYamlPredictorConf {
 }
 
 impl ModelYamlEncoderConf {
+    fn streaming_chunk_size(&self) -> Option<usize> {
+        self.stride
+            .iter()
+            .copied()
+            .max()
+            .filter(|value| *value > 0)
+            .or_else(|| self.chunk_size_value())
+    }
+
     fn chunk_size_value(&self) -> Option<usize> {
         self.chunk_size
             .iter()
             .copied()
             .max()
             .filter(|value| *value > 0)
+    }
+
+    /// Encoder left context = chunk_size[last] - stride[last].
+    /// E.g. chunk_size=[12,15], stride=[8,10] → 15-10=5.
+    fn encoder_left_context(&self) -> Option<usize> {
+        let cs = self.chunk_size.last().copied()?;
+        let st = self.stride.last().copied()?;
+        if cs > st && st > 0 {
+            Some(cs - st)
+        } else {
+            None
+        }
     }
 }
 
@@ -521,8 +685,79 @@ fn streaming_samples_for_chunk(feature_config: &FBankConfig, chunk_size: usize) 
     required_samples.max(frame_length)
 }
 
+fn streaming_step_samples_for_chunk(feature_config: &FBankConfig, chunk_size: usize) -> usize {
+    let frame_shift = feature_config.sample_rate * feature_config.frame_shift_ms / 1000;
+    if let Some((_lfr_m, lfr_n)) = feature_config.lfr {
+        (chunk_size.max(1) * lfr_n * frame_shift).max(frame_shift)
+    } else {
+        (chunk_size.max(1) * frame_shift).max(frame_shift)
+    }
+}
+
+fn append_incremental_text(base: &mut String, addition: &str) {
+    if addition.is_empty() {
+        return;
+    }
+    if base.is_empty() {
+        base.push_str(addition);
+        return;
+    }
+
+    let max_overlap = base.len().min(addition.len());
+    let overlap = (0..=max_overlap)
+        .rev()
+        .find(|len| {
+            base.is_char_boundary(base.len() - len)
+                && addition.is_char_boundary(*len)
+                && base[base.len() - len..] == addition[..*len]
+        })
+        .unwrap_or(0);
+
+    base.push_str(&addition[overlap..]);
+}
+
 impl Default for AsrEngine {
     fn default() -> Self {
         Self::new(AsrConfig::default()).expect("Failed to create default ASR engine")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn online_streaming_prefers_stride_for_chunk_size() {
+        let encoder = ModelYamlEncoderConf {
+            chunk_size: vec![12, 15],
+            stride: vec![8, 10],
+        };
+
+        assert_eq!(encoder.streaming_chunk_size(), Some(10));
+        assert_eq!(encoder.chunk_size_value(), Some(15));
+    }
+
+    #[test]
+    fn online_streaming_uses_window_and_hop_samples() {
+        let config = FBankConfig {
+            sample_rate: 16_000,
+            frame_length_ms: 25,
+            frame_shift_ms: 10,
+            num_mel_bins: 80,
+            lfr: Some((7, 6)),
+            ..FBankConfig::default()
+        };
+
+        assert_eq!(streaming_samples_for_chunk(&config, 10), 10_000);
+        assert_eq!(streaming_step_samples_for_chunk(&config, 10), 9_600);
+    }
+
+    #[test]
+    fn append_incremental_text_deduplicates_overlap() {
+        let mut text = "中文流式语音".to_string();
+        append_incremental_text(&mut text, "语音识别模型");
+        append_incremental_text(&mut text, "模型，适合低延迟实时转写");
+
+        assert_eq!(text, "中文流式语音识别模型，适合低延迟实时转写");
     }
 }

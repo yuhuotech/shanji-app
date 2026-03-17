@@ -1,11 +1,11 @@
-import { Button, ScrollView, LineEdit, TextEdit, CheckBox } from "std-widgets.slint";
+import { Button, ScrollView, ListView, LineEdit, TextEdit, CheckBox, ComboBox } from "std-widgets.slint";
 
 // ── 配色 Palette（浅色模式，in-out 支持将来深色模式切换）─────────────────
 global Palette {
-    in-out property <brush> sidebar-bg: #f3f4f6;
-    in-out property <brush> content-bg: #ffffff;
-    in-out property <brush> card-bg: #f9fafb;
-    in-out property <brush> border: #e5e7eb;
+    in-out property <brush> sidebar-bg: #f0f1f3;
+    in-out property <brush> content-bg: #f5f6f8;
+    in-out property <brush> card-bg: #ffffff;
+    in-out property <brush> border: #e0e2e6;
     in-out property <brush> text-primary: #111827;
     in-out property <brush> text-secondary: #6b7280;
     in-out property <brush> text-muted: #9ca3af;
@@ -17,16 +17,28 @@ global Palette {
 }
 
 // ── 页面枚举 ──────────────────────────────────────────────────────────────
-enum SettingsSection { Asr, Llm, Output, Hotkeys, Network, History, About }
+export enum SettingsSection { Asr, Llm, Output, Hotkeys, Network, History, About }
 
 // ── 历史卡片数据结构 ───────────────────────────────────────────────────────
-struct HistoryCardData {
+export struct HistoryCardData {
     record-id: int,
     timestamp: string,
     text: string,
     has-audio: bool,
+    is-playing: bool,
     is-llm-rewritten: bool,
     was-pasted: bool,
+}
+
+// ── 热词库卡片数据结构 ─────────────────────────────────────────────────────
+export struct HotwordLibraryCard {
+    id: string,
+    name: string,
+    enabled: bool,
+    word-count-text: string,
+    is-builtin: bool,
+    source-text: string,
+    format-text: string,
 }
 
 // ── 可复用：侧边栏菜单项 ──────────────────────────────────────────────────
@@ -35,8 +47,8 @@ component NavItem inherits Rectangle {
     in property <bool> active: false;
     callback clicked;
 
-    height: 34px;
-    border-radius: 6px;
+    height: 38px;
+    border-radius: 7px;
     background: active ? Palette.nav-active-bg : transparent;
 
     ta := TouchArea {
@@ -53,7 +65,7 @@ component NavItem inherits Rectangle {
         Text {
             text: root.label;
             color: root.active ? Palette.text-primary : Palette.text-secondary;
-            font-size: 13px;
+            font-size: 14px;
             font-weight: root.active ? 600 : 400;
             vertical-alignment: center;
         }
@@ -64,10 +76,10 @@ component NavItem inherits Rectangle {
 export component SectionLabel inherits Text {
     in property <string> label;
     text: root.label;
-    color: Palette.text-muted;
-    font-size: 10px;
+    color: Palette.text-secondary;
+    font-size: 14px;
     font-weight: 700;
-    letter-spacing: 0.6px;
+    letter-spacing: 0.4px;
 }
 
 // ── 可复用：开关控件 ───────────────────────────────────────────────────────
@@ -95,24 +107,46 @@ export component ToggleSwitch inherits Rectangle {
         y: 2px;
         width: 16px;
         height: 16px;
-        border-radius: 8px;
+        border-radius: 10px;
         background: #ffffff;
 
         animate x { duration: 120ms; easing: ease-in-out; }
     }
 }
 
-// ── 主窗口 ─────────────────────────────────────────────────────────────────
-export component SettingsWindow inherits Window {
+// ── 设置页 ─────────────────────────────────────────────────────────────────
+export component SettingsPage inherits Rectangle {
     // ── 导航状态 ──
     in-out property <SettingsSection> active-section: SettingsSection.Asr;
+    in property <bool> show-back-button: false;
 
-    // ── ASR 页属性 ──
-    in-out property <string> model-text: "paraformer-zh-streaming";
-    in-out property <string> audio-device-text: "系统默认";
-    in-out property <string> recording-mode-text: "toggle";
+    // ── ASR 页属性 — 实时模型 ──
+    in-out property <string> live-model-id: "paraformer-zh-streaming";
+    in-out property <string> live-model-size-text: "约 220 MB";
+    in-out property <bool>   live-model-downloaded: false;
+    in-out property <bool>   live-model-downloading: false;
+    in-out property <float>  live-model-download-progress: 0.0;
+    in-out property <string> live-model-download-status-text: "";
+
+    // ── ASR 页属性 — 离线纠正模型 ──
     in-out property <bool>   refine-asr-enabled: false;
-    in-out property <string> hotword-summary-text: "无热词库";
+    in-out property <string> refine-model-id: "paraformer-zh";
+    in-out property <string> refine-model-size-text: "约 240 MB";
+    in-out property <bool>   refine-model-downloaded: false;
+    in-out property <bool>   refine-model-downloading: false;
+    in-out property <float>  refine-model-download-progress: 0.0;
+    in-out property <string> refine-model-download-status-text: "";
+
+    // ── ASR 页属性 — 热词库 ──
+    in property  <[HotwordLibraryCard]> hotword-libraries: [];
+    in-out property <string> hotword-stats-text: "共 0 个词库";
+    in-out property <string> hotword-dir-text: "";
+    in-out property <string> hotword-hint-text: "";
+
+    // ── ASR 页属性 — 音频 ──
+    in property  <[string]>  audio-devices: [];
+    in-out property <int>    audio-device-index: 0;
+    in-out property <string> mic-test-status: "";
 
     // ── LLM 页属性 ──
     in-out property <bool>   llm-enabled: false;
@@ -141,15 +175,16 @@ export component SettingsWindow inherits Window {
     in-out property <string> config-path-text: "";
 
     // ── Callbacks ──
-    // ASR
-    callback cycle-live-model-requested();
-    callback cycle-refine-model-requested();
+    // ASR — 模型
     callback toggle-refine-asr-requested();
     callback download-live-model-requested();
     callback download-refine-model-requested();
-    callback cycle-audio-device-requested();
-    callback cycle-recording-mode-requested();
-    callback toggle-hotword-requested();
+    // ASR — 热词库
+    callback toggle-hotword-library-requested(string);
+    callback open-hotword-dir-requested();
+    // ASR — 音频
+    callback select-audio-device-requested(int);
+    callback test-mic-requested();
     // LLM
     callback toggle-rewrite-requested();
     callback set-llm-base-url(string);
@@ -175,13 +210,11 @@ export component SettingsWindow inherits Window {
     callback delete-record-requested(int);
     // About
     callback clear-session-requested();
-
-    title: "闪记";
-    width: 900px;
-    height: 620px;
-    default-font-family: "Hiragino Sans GB";
+    callback back-requested();
 
     Rectangle {
+        width: parent.width;
+        height: parent.height;
         background: Palette.content-bg;
 
         HorizontalLayout {
@@ -205,22 +238,48 @@ export component SettingsWindow inherits Window {
 
                     // App 信息区
                     Rectangle {
-                        height: 56px;
-                        VerticalLayout {
-                            padding-left: 14px;
-                            padding-right: 14px;
+                        height: 62px;
+                        HorizontalLayout {
+                            padding-left: 12px;
+                            padding-right: 16px;
                             alignment: center;
-                            spacing: 2px;
-                            Text {
-                                text: "闪记";
-                                color: Palette.text-primary;
-                                font-size: 15px;
-                                font-weight: 800;
+                            spacing: 10px;
+
+                            if root.show-back-button: Rectangle {
+                                width: 30px;
+                                height: 30px;
+                                border-radius: 8px;
+                                background: back-touch.has-hover ? Palette.nav-active-bg : transparent;
+
+                                back-touch := TouchArea {
+                                    clicked => { root.back-requested(); }
+                                    mouse-cursor: pointer;
+                                }
+
+                                Text {
+                                    text: "←";
+                                    color: Palette.text-primary;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    font-size: 16px;
+                                    font-weight: 700;
+                                }
                             }
-                            Text {
-                                text: root.app-version-text + " · 设置";
-                                color: Palette.text-muted;
-                                font-size: 11px;
+
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 3px;
+                                Text {
+                                    text: "闪记";
+                                    color: Palette.text-primary;
+                                    font-size: 17px;
+                                    font-weight: 800;
+                                }
+                                Text {
+                                    text: root.app-version-text + " · 设置";
+                                    color: Palette.text-muted;
+                                    font-size: 12px;
+                                }
                             }
                         }
                         // 底部分割线
@@ -235,7 +294,7 @@ export component SettingsWindow inherits Window {
                     Rectangle { height: 6px; }  // 顶部间距
 
                     HorizontalLayout {
-                        height: 34px;
+                        height: 38px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
@@ -246,7 +305,7 @@ export component SettingsWindow inherits Window {
                         }
                     }
                     HorizontalLayout {
-                        height: 34px;
+                        height: 38px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
@@ -257,7 +316,7 @@ export component SettingsWindow inherits Window {
                         }
                     }
                     HorizontalLayout {
-                        height: 34px;
+                        height: 38px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
@@ -268,7 +327,7 @@ export component SettingsWindow inherits Window {
                         }
                     }
                     HorizontalLayout {
-                        height: 34px;
+                        height: 38px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
@@ -279,7 +338,7 @@ export component SettingsWindow inherits Window {
                         }
                     }
                     HorizontalLayout {
-                        height: 34px;
+                        height: 38px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
@@ -290,7 +349,7 @@ export component SettingsWindow inherits Window {
                         }
                     }
                     HorizontalLayout {
-                        height: 34px;
+                        height: 38px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
@@ -310,7 +369,7 @@ export component SettingsWindow inherits Window {
                         background: Palette.border;
                     }
                     HorizontalLayout {
-                        height: 34px;
+                        height: 38px;
                         padding-left: 8px;
                         padding-right: 8px;
                         NavItem {
@@ -335,107 +394,338 @@ if root.active-section == SettingsSection.Asr: ScrollView {
     width: 100%;
     height: 100%;
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        padding: 24px;
+        spacing: 20px;
 
         VerticalLayout {
             spacing: 4px;
-            Text { text: "语音识别"; color: Palette.text-primary; font-size: 16px; font-weight: 700; }
-            Text { text: "ASR 模型、麦克风、录音行为"; color: Palette.text-muted; font-size: 11px; }
+            Text { text: "语音识别"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
+            Text { text: "ASR 模型配置、热词库与音频输入"; color: Palette.text-muted; font-size: 13px; }
         }
 
-        SectionLabel { label: "模型"; }
-        Rectangle {
-            border-radius: 8px;
+        // ① 实时识别模型
+        VerticalLayout {
+            spacing: 6px;
+            SectionLabel { label: "实时识别模型"; }
+            Rectangle {
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
-            VerticalLayout {
+            height: live-model-card.min-height;
+            live-model-card := VerticalLayout {
+                // 模型信息行
                 Rectangle {
-                    height: 54px;
-                    border-width: 0px;
+                    height: 62px;
                     HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px;
+                        padding-left: 16px; padding-right: 16px;
                         alignment: space-between;
                         VerticalLayout {
-                            alignment: center; spacing: 2px;
-                            Text { text: "实时模型"; color: Palette.text-primary; font-size: 12px; font-weight: 600; }
-                            Text { text: root.model-text; color: Palette.text-muted; font-size: 10px; }
+                            alignment: center; spacing: 3px;
+                            Text { text: root.live-model-id; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                            Text { text: "边说边转录，流式推理，低延迟实时识别"; color: Palette.text-secondary; font-size: 12px; }
                         }
-                        Button { text: "切换"; clicked => { root.cycle-live-model-requested(); } }
+                        if root.live-model-downloaded && !root.live-model-downloading: Rectangle {
+                            border-radius: 5px; background: #f0fdf4; border-width: 1px; border-color: #bbf7d0;
+                            height: 24px; width: 72px;
+                            Text { text: "✓ 已加载"; color: #16a34a; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        if root.live-model-downloading: Rectangle {
+                            border-radius: 5px; background: #eff6ff; border-width: 1px; border-color: #bfdbfe;
+                            height: 24px; width: 64px;
+                            Text { text: "下载中…"; color: #2563eb; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        if !root.live-model-downloaded && !root.live-model-downloading: Rectangle {
+                            border-radius: 5px; background: #fef2f2; border-width: 1px; border-color: #fecaca;
+                            height: 24px; width: 56px;
+                            Text { text: "未下载"; color: Palette.danger; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
                     }
-                    // 底部分割线
                     Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
                 }
-                Rectangle {
-                    height: 54px;
+                // 未下载：提示 + 下载按钮
+                if !root.live-model-downloaded && !root.live-model-downloading: Rectangle {
+                    height: 44px;
                     HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px;
+                        padding-left: 16px; padding-right: 16px;
+                        alignment: space-between;
+                        Text { text: root.live-model-size-text; color: Palette.text-muted; font-size: 12px; vertical-alignment: center; }
+                        Button { text: "下载模型"; clicked => { root.download-live-model-requested(); } }
+                    }
+                }
+                // 下载中：进度条
+                if root.live-model-downloading: VerticalLayout {
+                    padding-top: 12px; padding-bottom: 12px;
+                    padding-left: 16px; padding-right: 16px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text { text: root.live-model-download-status-text; color: Palette.text-secondary; font-size: 12px; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        height: 6px; border-radius: 3px; background: #e5e7eb;
+                        Rectangle {
+                            x: 0; y: 0; height: 6px; border-radius: 3px; background: Palette.accent;
+                            width: parent.width * root.live-model-download-progress;
+                        }
+                    }
+                }
+                // 已下载：元数据 footer
+                if root.live-model-downloaded && !root.live-model-downloading: Rectangle {
+                    height: 34px;
+                    background: #fafafa;
+                    border-radius: 10px;
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px;
+                        spacing: 20px;
+                        Text { text: root.live-model-size-text; color: Palette.text-muted; font-size: 11px; vertical-alignment: center; }
+                        Text { text: "语言：中文（普通话）"; color: Palette.text-muted; font-size: 11px; vertical-alignment: center; }
+                        Text { text: "格式：ONNX"; color: Palette.text-muted; font-size: 11px; vertical-alignment: center; }
+                    }
+                }
+            }
+        }
+        } // end ①
+
+        // ② 离线纠正模型
+        VerticalLayout {
+            spacing: 6px;
+            SectionLabel { label: "离线纠正模型"; }
+            Rectangle {
+            border-radius: 10px;
+            background: Palette.card-bg;
+            border-width: 1px;
+            border-color: Palette.border;
+            height: refine-model-card.min-height;
+            refine-model-card := VerticalLayout {
+                // 开关行（带说明）
+                Rectangle {
+                    height: 72px;
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px;
                         alignment: space-between;
                         VerticalLayout {
-                            alignment: center; spacing: 2px;
-                            Text { text: "整体纠正"; color: Palette.text-primary; font-size: 12px; font-weight: 600; }
-                            Text { text: "录音结束后二次修正全文"; color: Palette.text-muted; font-size: 10px; }
+                            alignment: center; spacing: 3px;
+                            Text { text: "录音结束后全文纠正"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                            Text {
+                                text: "录音停止后重新推理完整音频，修正流式识别的错误，提升准确率（约增加 1–3 秒等待）";
+                                color: Palette.text-secondary; font-size: 11px; wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
                         }
                         ToggleSwitch {
                             checked: root.refine-asr-enabled;
                             toggled(v) => { root.toggle-refine-asr-requested(); }
                         }
                     }
+                    Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                }
+                // 模型信息行
+                Rectangle {
+                    height: 54px;
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px;
+                        alignment: space-between;
+                        VerticalLayout {
+                            alignment: center; spacing: 2px;
+                            Text { text: root.refine-model-id; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                            Text { text: "整体推理模型，精度高于流式版本"; color: Palette.text-muted; font-size: 11px; }
+                        }
+                        if root.refine-model-downloaded && !root.refine-model-downloading: Rectangle {
+                            border-radius: 5px; background: #f0fdf4; border-width: 1px; border-color: #bbf7d0;
+                            height: 24px; width: 72px;
+                            Text { text: "✓ 已加载"; color: #16a34a; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        if root.refine-model-downloading: Rectangle {
+                            border-radius: 5px; background: #eff6ff; border-width: 1px; border-color: #bfdbfe;
+                            height: 24px; width: 64px;
+                            Text { text: "下载中…"; color: #2563eb; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                        if !root.refine-model-downloaded && !root.refine-model-downloading: Rectangle {
+                            border-radius: 5px; background: #fef2f2; border-width: 1px; border-color: #fecaca;
+                            height: 24px; width: 56px;
+                            Text { text: "未下载"; color: Palette.danger; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                        }
+                    }
+                    Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                }
+                // 未下载：下载按钮
+                if !root.refine-model-downloaded && !root.refine-model-downloading: Rectangle {
+                    height: 44px;
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px;
+                        alignment: space-between;
+                        Text { text: root.refine-model-size-text; color: Palette.text-muted; font-size: 12px; vertical-alignment: center; }
+                        Button { text: "下载模型"; clicked => { root.download-refine-model-requested(); } }
+                    }
+                }
+                // 下载中：进度条
+                if root.refine-model-downloading: VerticalLayout {
+                    padding-top: 12px; padding-bottom: 12px;
+                    padding-left: 16px; padding-right: 16px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        alignment: space-between;
+                        Text { text: root.refine-model-download-status-text; color: Palette.text-secondary; font-size: 12px; vertical-alignment: center; }
+                    }
+                    Rectangle {
+                        height: 6px; border-radius: 3px; background: #e5e7eb;
+                        Rectangle {
+                            x: 0; y: 0; height: 6px; border-radius: 3px; background: Palette.accent;
+                            width: parent.width * root.refine-model-download-progress;
+                        }
+                    }
                 }
             }
         }
+        } // end ②
 
-        SectionLabel { label: "音频"; }
-        Rectangle {
-            border-radius: 8px;
+        // ③ 热词库
+        VerticalLayout {
+            spacing: 6px;
+            SectionLabel { label: "热词库"; }
+            Text {
+                text: root.hotword-hint-text;
+                color: Palette.text-muted;
+                font-size: 11px;
+                wrap: word-wrap;
+            }
+            Rectangle {
+            border-radius: 10px;
+            background: Palette.card-bg;
+            border-width: 1px;
+            border-color: Palette.border;
+            height: hotword-card.min-height;
+            hotword-card := VerticalLayout {
+                // 统计头
+                Rectangle {
+                    min-height: 52px;
+                    VerticalLayout {
+                        padding-left: 16px; padding-right: 16px;
+                        padding-top: 8px; padding-bottom: 8px;
+                        spacing: 0px;
+                        HorizontalLayout {
+                            alignment: space-between;
+                            VerticalLayout {
+                                alignment: start; spacing: 2px;
+                                Text { text: root.hotword-stats-text; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                                Text { text: root.hotword-dir-text; color: Palette.text-muted; font-size: 11px; }
+                            }
+                            Rectangle {
+                                min-width: 88px;
+                                min-height: 30px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Button {
+                                        text: "打开目录";
+                                        clicked => { root.open-hotword-dir-requested(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                }
+                // 词库列表
+                for lib in root.hotword-libraries: Rectangle {
+                    min-height: 50px;
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px;
+                        alignment: space-between;
+                        Rectangle {
+                            min-height: 50px;
+                            VerticalLayout {
+                                alignment: center;
+                                VerticalLayout {
+                                    alignment: start; spacing: 3px;
+                                    Text { text: lib.name; color: lib.enabled ? Palette.text-primary : Palette.text-muted; font-size: 13px; font-weight: 400; }
+                                    HorizontalLayout {
+                                        spacing: 6px;
+                                        Text { text: lib.word-count-text; color: Palette.text-muted; font-size: 11px; vertical-alignment: center; }
+                                        Rectangle {
+                                            border-radius: 3px;
+                                            background: lib.is-builtin ? #eff6ff : #f0fdf4;
+                                            height: 16px; width: 44px;
+                                            Text {
+                                                text: lib.is-builtin ? "内置" : "自定义";
+                                                color: lib.is-builtin ? #3b82f6 : #16a34a;
+                                                font-size: 10px; horizontal-alignment: center; vertical-alignment: center;
+                                            }
+                                        }
+                                        Text {
+                                            text: lib.format-text;
+                                            color: Palette.text-muted;
+                                            font-size: 11px;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle {
+                            min-width: 36px;
+                            min-height: 50px;
+                            VerticalLayout {
+                                alignment: center;
+                                ToggleSwitch {
+                                    checked: lib.enabled;
+                                    toggled(v) => { root.toggle-hotword-library-requested(lib.id); }
+                                }
+                            }
+                        }
+                    }
+                    Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; opacity: 0.4; }
+                }
+            }
+        }
+        } // end ③
+
+        // ④ 音频输入
+        VerticalLayout {
+            spacing: 6px;
+            SectionLabel { label: "音频输入"; }
+            Rectangle {
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
             VerticalLayout {
                 Rectangle {
-                    height: 44px;
+                    height: 54px;
                     HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px;
+                        padding-left: 16px; padding-right: 16px;
                         alignment: space-between;
-                        Text { text: "输入设备"; color: Palette.text-primary; font-size: 12px; font-weight: 600; vertical-alignment: center; }
-                        Button { text: root.audio-device-text; clicked => { root.cycle-audio-device-requested(); } }
+                        VerticalLayout {
+                            alignment: center; spacing: 2px;
+                            Text { text: "输入设备"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                            Text { text: "选择用于语音输入的麦克风设备"; color: Palette.text-muted; font-size: 11px; }
+                        }
+                        ComboBox {
+                            model: root.audio-devices;
+                            current-index: root.audio-device-index;
+                            selected(device-name) => {
+                                root.select-audio-device-requested(self.current-index);
+                            }
+                        }
                     }
                     Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
                 }
                 Rectangle {
                     height: 44px;
                     HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px;
+                        padding-left: 16px; padding-right: 16px;
                         alignment: space-between;
-                        Text { text: "录音模式"; color: Palette.text-primary; font-size: 12px; font-weight: 600; vertical-alignment: center; }
-                        Button { text: root.recording-mode-text; clicked => { root.cycle-recording-mode-requested(); } }
+                        Text {
+                            text: root.mic-test-status == "" ? "测试麦克风是否正常工作" : root.mic-test-status;
+                            color: Palette.text-primary;
+                            font-size: 12px; vertical-alignment: center;
+                        }
+                        Button { text: "测试麦克风"; clicked => { root.test-mic-requested(); } }
                     }
                 }
             }
         }
-
-        SectionLabel { label: "热词库"; }
-        Rectangle {
-            border-radius: 8px;
-            background: Palette.card-bg;
-            border-width: 1px;
-            border-color: Palette.border;
-            height: 44px;
-            HorizontalLayout {
-                padding-left: 14px; padding-right: 14px;
-                alignment: space-between;
-                Text { text: root.hotword-summary-text; color: Palette.text-secondary; font-size: 11px; vertical-alignment: center; }
-                Button { text: "切换"; clicked => { root.toggle-hotword-requested(); } }
-            }
-        }
-
-        SectionLabel { label: "模型管理"; }
-        HorizontalLayout {
-            spacing: 8px;
-            Button { text: "下载实时模型"; clicked => { root.download-live-model-requested(); } }
-            Button { text: "下载纠正模型"; clicked => { root.download-refine-model-requested(); } }
-        }
+        } // end ④
     }
 }
 
@@ -444,28 +734,28 @@ if root.active-section == SettingsSection.Llm: ScrollView {
     width: 100%;
     height: 100%;
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        padding: 24px;
+        spacing: 20px;
 
         VerticalLayout {
             spacing: 4px;
-            Text { text: "LLM 润色"; color: Palette.text-primary; font-size: 16px; font-weight: 700; }
-            Text { text: "通过大模型对转录文本进行改写"; color: Palette.text-muted; font-size: 11px; }
+            Text { text: "LLM 润色"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
+            Text { text: "通过大模型对转录文本进行改写"; color: Palette.text-muted; font-size: 13px; }
         }
 
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
             height: 54px;
             HorizontalLayout {
-                padding-left: 14px; padding-right: 14px;
+                padding-left: 16px; padding-right: 16px;
                 alignment: space-between;
                 VerticalLayout {
                     alignment: center; spacing: 2px;
-                    Text { text: "启用 LLM 润色"; color: Palette.text-primary; font-size: 12px; font-weight: 600; }
-                    Text { text: "关闭时直接输出 ASR 原始结果"; color: Palette.text-muted; font-size: 10px; }
+                    Text { text: "启用 LLM 润色"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                    Text { text: "关闭时直接输出 ASR 原始结果"; color: Palette.text-muted; font-size: 12px; }
                 }
                 ToggleSwitch {
                     checked: root.llm-enabled;
@@ -476,20 +766,20 @@ if root.active-section == SettingsSection.Llm: ScrollView {
 
         SectionLabel { label: "API 配置"; }
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
             VerticalLayout {
-                padding-top: 12px;
-                padding-bottom: 12px;
-                padding-left: 14px;
-                padding-right: 14px;
-                spacing: 10px;
+                padding-top: 14px;
+                padding-bottom: 14px;
+                padding-left: 16px;
+                padding-right: 16px;
+                spacing: 12px;
 
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "API Base URL"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 11px; font-weight: 600; }
+                    Text { text: "API Base URL"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 13px; font-weight: 400; }
                     LineEdit {
                         text: root.llm-base-url;
                         enabled: root.llm-enabled;
@@ -500,8 +790,8 @@ if root.active-section == SettingsSection.Llm: ScrollView {
                     spacing: 4px;
                     HorizontalLayout {
                         alignment: space-between;
-                        Text { text: "API Key"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 11px; font-weight: 600; }
-                        Text { text: "存储在系统钥匙串"; color: Palette.text-muted; font-size: 9px; vertical-alignment: center; }
+                        Text { text: "API Key"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 13px; font-weight: 400; }
+                        Text { text: "存储在系统钥匙串"; color: Palette.text-muted; font-size: 11px; vertical-alignment: center; }
                     }
                     LineEdit {
                         input-type: InputType.password;
@@ -512,7 +802,7 @@ if root.active-section == SettingsSection.Llm: ScrollView {
                 }
                 VerticalLayout {
                     spacing: 4px;
-                    Text { text: "模型名称"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 11px; font-weight: 600; }
+                    Text { text: "模型名称"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 13px; font-weight: 400; }
                     LineEdit {
                         text: root.llm-model-name;
                         enabled: root.llm-enabled;
@@ -524,7 +814,7 @@ if root.active-section == SettingsSection.Llm: ScrollView {
 
         SectionLabel { label: "润色提示词"; }
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
@@ -545,18 +835,18 @@ if root.active-section == SettingsSection.Output: ScrollView {
     width: 100%;
     height: 100%;
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        padding: 24px;
+        spacing: 20px;
 
         VerticalLayout {
             spacing: 4px;
-            Text { text: "输出"; color: Palette.text-primary; font-size: 16px; font-weight: 700; }
-            Text { text: "文本格式与粘贴行为"; color: Palette.text-muted; font-size: 11px; }
+            Text { text: "输出"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
+            Text { text: "文本格式与粘贴行为"; color: Palette.text-muted; font-size: 13px; }
         }
 
         SectionLabel { label: "格式"; }
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
@@ -564,9 +854,9 @@ if root.active-section == SettingsSection.Output: ScrollView {
                 Rectangle {
                     height: 44px;
                     HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px;
+                        padding-left: 16px; padding-right: 16px;
                         alignment: space-between;
-                        Text { text: "标点风格"; color: Palette.text-primary; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                        Text { text: "标点风格"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
                         Button { text: root.punct-style-text; clicked => { root.cycle-punct-style-requested(); } }
                     }
                     Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
@@ -574,9 +864,9 @@ if root.active-section == SettingsSection.Output: ScrollView {
                 Rectangle {
                     height: 44px;
                     HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px;
+                        padding-left: 16px; padding-right: 16px;
                         alignment: space-between;
-                        Text { text: "追加内容"; color: Palette.text-primary; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                        Text { text: "追加内容"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
                         Button { text: root.append-content-text; clicked => { root.cycle-append-content-requested(); } }
                     }
                 }
@@ -585,15 +875,15 @@ if root.active-section == SettingsSection.Output: ScrollView {
 
         SectionLabel { label: "界面"; }
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
             height: 44px;
             HorizontalLayout {
-                padding-left: 14px; padding-right: 14px;
+                padding-left: 16px; padding-right: 16px;
                 alignment: space-between;
-                Text { text: "悬浮窗"; color: Palette.text-primary; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                Text { text: "悬浮窗"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
                 ToggleSwitch {
                     checked: root.overlay-visible;
                     toggled(v) => { root.toggle-overlay-requested(); }
@@ -603,15 +893,15 @@ if root.active-section == SettingsSection.Output: ScrollView {
 
         SectionLabel { label: "外观"; }
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
             height: 44px;
             HorizontalLayout {
-                padding-left: 14px; padding-right: 14px;
+                padding-left: 16px; padding-right: 16px;
                 alignment: space-between;
-                Text { text: "主题"; color: Palette.text-primary; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                Text { text: "主题"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
                 Button { text: root.theme-text; clicked => { root.cycle-theme-requested(); } }
             }
         }
@@ -623,29 +913,29 @@ if root.active-section == SettingsSection.Hotkeys: ScrollView {
     width: 100%;
     height: 100%;
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        padding: 24px;
+        spacing: 20px;
 
         VerticalLayout {
             spacing: 4px;
-            Text { text: "快捷键"; color: Palette.text-primary; font-size: 16px; font-weight: 700; }
-            Text { text: "全局快捷键设置"; color: Palette.text-muted; font-size: 11px; }
+            Text { text: "快捷键"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
+            Text { text: "全局快捷键设置"; color: Palette.text-muted; font-size: 13px; }
         }
 
         SectionLabel { label: "PUSH-TO-TALK"; }
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
             height: 54px;
             HorizontalLayout {
-                padding-left: 14px; padding-right: 14px;
+                padding-left: 16px; padding-right: 16px;
                 alignment: space-between;
                 VerticalLayout {
                     alignment: center; spacing: 2px;
-                    Text { text: "当前快捷键"; color: Palette.text-primary; font-size: 12px; font-weight: 600; }
-                    Text { text: root.hotkey-summary-text; color: Palette.text-muted; font-size: 10px; }
+                    Text { text: "当前快捷键"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                    Text { text: root.hotkey-summary-text; color: Palette.text-muted; font-size: 12px; }
                 }
                 Button { text: "重新录制"; clicked => { root.record-hotkey-requested(); } }
             }
@@ -658,26 +948,26 @@ if root.active-section == SettingsSection.Network: ScrollView {
     width: 100%;
     height: 100%;
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        padding: 24px;
+        spacing: 20px;
 
         VerticalLayout {
             spacing: 4px;
-            Text { text: "网络"; color: Palette.text-primary; font-size: 16px; font-weight: 700; }
-            Text { text: "模型下载代理配置"; color: Palette.text-muted; font-size: 11px; }
+            Text { text: "网络"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
+            Text { text: "模型下载代理配置"; color: Palette.text-muted; font-size: 13px; }
         }
 
         SectionLabel { label: "下载代理"; }
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
             height: 44px;
             HorizontalLayout {
-                padding-left: 14px; padding-right: 14px;
+                padding-left: 16px; padding-right: 16px;
                 alignment: space-between;
-                Text { text: "GitHub 代理"; color: Palette.text-primary; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                Text { text: "GitHub 代理"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
                 Button { text: "切换"; clicked => { root.cycle-github-proxy-requested(); } }
             }
         }
@@ -698,8 +988,8 @@ if root.active-section == SettingsSection.History: Rectangle {
                 VerticalLayout {
                     alignment: center;
                     spacing: 2px;
-                    Text { text: "历史记录"; color: Palette.text-primary; font-size: 16px; font-weight: 700; }
-                    Text { text: root.history-stats-text; color: Palette.text-muted; font-size: 11px; }
+                    Text { text: "历史记录"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
+                    Text { text: root.history-stats-text; color: Palette.text-muted; font-size: 13px; }
                 }
                 HorizontalLayout {
                     alignment: end;
@@ -712,38 +1002,45 @@ if root.active-section == SettingsSection.History: Rectangle {
         }
 
         // 卡片列表（可滚动）
-        ScrollView {
+        history-list := ListView {
             vertical-stretch: 1;
-            VerticalLayout {
-                padding: 16px;
-                spacing: 10px;
 
-                for card in root.history-records: Rectangle {
-                    border-radius: 8px;
+            for card in root.history-records: Rectangle {
+                width: history-list.width;
+                height: 110px;
+                background: transparent;
+
+                Rectangle {
+                    x: 16px;
+                    y: 0;
+                    width: max(0px, parent.width - 32px);
+                    height: 100px;
+                    border-radius: 10px;
                     background: Palette.card-bg;
                     border-width: 1px;
                     border-color: Palette.border;
-                    height: card-inner.min-height;
+                    clip: true;
+                    cache-rendering-hint: true;
 
-                    card-inner := VerticalLayout {
+                    VerticalLayout {
                         padding-top: 12px;
-                        padding-bottom: 12px;
-                        padding-left: 14px;
-                        padding-right: 14px;
-                        spacing: 8px;
+                        padding-bottom: 10px;
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        spacing: 6px;
 
                         HorizontalLayout {
                             alignment: space-between;
                             Text {
                                 text: card.timestamp;
                                 color: Palette.text-muted;
-                                font-size: 10px;
+                                font-size: 12px;
                                 vertical-alignment: center;
                             }
                             HorizontalLayout {
                                 spacing: 4px;
                                 if card.has-audio: Button {
-                                    text: "▶ 播放";
+                                    text: card.is-playing ? "■ 停止" : "▶ 播放";
                                     clicked => { root.play-audio-requested(card.record-id); }
                                 }
                                 if card.has-audio: Button {
@@ -756,11 +1053,13 @@ if root.active-section == SettingsSection.History: Rectangle {
                             }
                         }
 
+                        // overflow: elide 单行省略，消除 word-wrap 折行测量开销
                         Text {
                             text: card.text;
                             color: Palette.text-primary;
                             font-size: 12px;
-                            wrap: word-wrap;
+                            overflow: elide;
+                            vertical-stretch: 1;
                         }
 
                         HorizontalLayout {
@@ -770,14 +1069,14 @@ if root.active-section == SettingsSection.History: Rectangle {
                                 background: #eff6ff;
                                 height: 16px;
                                 width: 56px;
-                                Text { text: "LLM润色"; color: #3b82f6; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                                Text { text: "LLM润色"; color: #3b82f6; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
                             }
                             if !card.is-llm-rewritten: Rectangle {
                                 border-radius: 3px;
                                 background: #f3f4f6;
                                 height: 16px;
                                 width: 56px;
-                                Text { text: "原始转录"; color: Palette.text-muted; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                                Text { text: "原始转录"; color: Palette.text-muted; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
                             }
                             if card.has-audio: Rectangle {
                                 border-radius: 3px;
@@ -786,7 +1085,7 @@ if root.active-section == SettingsSection.History: Rectangle {
                                 border-color: Palette.border;
                                 height: 16px;
                                 width: 56px;
-                                Text { text: "🎙 有录音"; color: Palette.text-muted; font-size: 9px; horizontal-alignment: center; vertical-alignment: center; }
+                                Text { text: "🎙 有录音"; color: Palette.text-muted; font-size: 10px; horizontal-alignment: center; vertical-alignment: center; }
                             }
                         }
                     }
@@ -801,17 +1100,17 @@ if root.active-section == SettingsSection.About: ScrollView {
     width: 100%;
     height: 100%;
     VerticalLayout {
-        padding: 20px;
-        spacing: 16px;
+        padding: 24px;
+        spacing: 20px;
 
         VerticalLayout {
             spacing: 4px;
-            Text { text: "关于"; color: Palette.text-primary; font-size: 16px; font-weight: 700; }
-            Text { text: "闪记 · 本地 AI 语音输入"; color: Palette.text-muted; font-size: 11px; }
+            Text { text: "关于"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
+            Text { text: "闪记 · 本地 AI 语音输入"; color: Palette.text-muted; font-size: 13px; }
         }
 
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
@@ -819,9 +1118,9 @@ if root.active-section == SettingsSection.About: ScrollView {
                 Rectangle {
                     height: 44px;
                     HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px;
+                        padding-left: 16px; padding-right: 16px;
                         alignment: space-between;
-                        Text { text: "版本"; color: Palette.text-primary; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                        Text { text: "版本"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
                         Text { text: root.app-version-text; color: Palette.text-muted; font-size: 12px; vertical-alignment: center; }
                     }
                     Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
@@ -829,11 +1128,11 @@ if root.active-section == SettingsSection.About: ScrollView {
                 Rectangle {
                     height: 54px;
                     HorizontalLayout {
-                        padding-left: 14px; padding-right: 14px;
+                        padding-left: 16px; padding-right: 16px;
                         alignment: space-between;
                         VerticalLayout {
                             alignment: center; spacing: 2px;
-                            Text { text: "配置路径"; color: Palette.text-primary; font-size: 12px; font-weight: 600; }
+                            Text { text: "配置路径"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
                             Text { text: root.config-path-text; color: Palette.text-muted; font-size: 10px; wrap: word-wrap; }
                         }
                     }
@@ -842,15 +1141,15 @@ if root.active-section == SettingsSection.About: ScrollView {
         }
 
         Rectangle {
-            border-radius: 8px;
+            border-radius: 10px;
             background: Palette.danger-bg;
             border-width: 1px;
             border-color: Palette.danger-border;
             height: 44px;
             HorizontalLayout {
-                padding-left: 14px; padding-right: 14px;
+                padding-left: 16px; padding-right: 16px;
                 alignment: space-between;
-                Text { text: "清理会话"; color: Palette.danger; font-size: 12px; font-weight: 600; vertical-alignment: center; }
+                Text { text: "清理会话"; color: Palette.danger; font-size: 13px; font-weight: 400; vertical-alignment: center; }
                 Button { text: "清理"; clicked => { root.clear-session-requested(); } }
             }
         }

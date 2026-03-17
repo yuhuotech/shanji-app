@@ -14,6 +14,9 @@ slint = "1"
 log = "0.4"
 env_logger = "0.11"
 hound = "3"
+global-hotkey = "0.6"
+tray-icon = "0.21"
+rodio = "0.20"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"

@@ -232,20 +232,62 @@ ASR 模型主要解决“音频到文字”的问题，不擅长稳定处理：
 
 系统启动时会自动确保存在一份内置技术词库，例如：
 
-- `Apple`
-- `Intel`
-- `Mac`
-- `MacBook`
-- `Xcode`
-- `iOS`
-- `GitHub`
-- `ModelScope`
-- `Hugging Face`
-- `ONNX`
-- `Paraformer`
-- `FunASR`
+- `AI 编程`
+- `计算机开发`
+- `跨境电商`
+- `自媒体`
+- `网络热词`
 
 这样即使用户还没有手动导入词库，技术类语音输入也能立即得到基础词典支持。
+
+当前词典目录结构为：
+
+```text
+hotwords/
+  libraries.json
+  builtin/
+    ai-coding.md
+    computing.md
+    cross-border-ecommerce.md
+    self-media.md
+    internet-slang.md
+  user/
+  imported/
+```
+
+其中：
+
+- `builtin/`
+  - 系统自动种入的内置领域词典
+- `user/`
+  - 用户手工维护的词典，推荐直接使用 Markdown
+- `imported/`
+  - 导入的 txt/csv/scel/thuocl 词典
+
+当前已支持的词典格式：
+
+- `.md`
+- `.txt`
+- `.csv`
+- `.scel`
+- `.thuocl`
+
+Markdown 词典支持简单 frontmatter，例如：
+
+```md
+---
+id: builtin_ai_coding
+name: AI 编程
+enabled: true
+weight: 88
+---
+
+- OpenAI
+- ChatGPT
+- Cursor 90
+```
+
+这让词典可以直接像文档一样维护，而不需要改代码。
 
 ### 4.6 ITN 第一版
 

@@ -1,4 +1,4 @@
-use shanji_core::audio;
+use shanji_core::audio::{self, AudioInputDevice};
 use shanji_core::config::{self, AppConfig, AppState};
 use shanji_core::history::HistoryDb;
 use shanji_core::hotwords;
@@ -6,6 +6,174 @@ use shanji_core::model;
 use shanji_core::paths::AppPaths;
 use shanji_core::state::{self, RuntimeSnapshot};
 use shanji_platform::{hotkeys, tray};
+use std::io::BufReader;
+use std::sync::{mpsc, Mutex, OnceLock};
+
+// CoreAudio device 枚举偶发性耗时，缓存结果，只在设置窗口打开时主动刷新
+static DEVICE_CACHE: OnceLock<Mutex<Vec<AudioInputDevice>>> = OnceLock::new();
+static HISTORY_PLAYBACK_COMMAND_TX: OnceLock<mpsc::Sender<HistoryPlaybackCommand>> =
+    OnceLock::new();
+static HISTORY_PLAYBACK_EVENT_BUS: OnceLock<Mutex<Vec<mpsc::Sender<HistoryPlaybackEvent>>>> =
+    OnceLock::new();
+static HISTORY_PLAYBACK_ACTIVE_RECORD: OnceLock<Mutex<Option<i32>>> = OnceLock::new();
+
+enum HistoryPlaybackCommand {
+    Play { record_id: i32, audio_path: String },
+    Stop,
+}
+
+#[derive(Clone, Copy)]
+pub enum HistoryPlaybackEvent {
+    Changed,
+}
+
+fn device_cache() -> &'static Mutex<Vec<AudioInputDevice>> {
+    DEVICE_CACHE.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn history_playback_event_bus() -> &'static Mutex<Vec<mpsc::Sender<HistoryPlaybackEvent>>> {
+    HISTORY_PLAYBACK_EVENT_BUS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn history_playback_active_record() -> &'static Mutex<Option<i32>> {
+    HISTORY_PLAYBACK_ACTIVE_RECORD.get_or_init(|| Mutex::new(None))
+}
+
+fn notify_history_playback_event() {
+    let mut subscribers = history_playback_event_bus().lock().unwrap();
+    subscribers.retain(|sender| sender.send(HistoryPlaybackEvent::Changed).is_ok());
+}
+
+fn set_active_history_playback(record_id: Option<i32>) {
+    let mut active = history_playback_active_record().lock().unwrap();
+    if *active == record_id {
+        return;
+    }
+    *active = record_id;
+    drop(active);
+    notify_history_playback_event();
+}
+
+fn ensure_history_playback_runtime() -> &'static mpsc::Sender<HistoryPlaybackCommand> {
+    HISTORY_PLAYBACK_COMMAND_TX.get_or_init(|| {
+        let (tx, rx) = mpsc::channel::<HistoryPlaybackCommand>();
+        std::thread::spawn(move || {
+            use rodio::{Decoder, OutputStream, Sink};
+
+            let (stream, stream_handle) = match OutputStream::try_default() {
+                Ok(stream) => stream,
+                Err(err) => {
+                    log::error!("Failed to create history audio output stream: {}", err);
+                    while rx.recv().is_ok() {}
+                    return;
+                }
+            };
+
+            let _stream = stream;
+            let mut current: Option<(i32, Sink)> = None;
+
+            loop {
+                match rx.recv_timeout(std::time::Duration::from_millis(100)) {
+                    Ok(HistoryPlaybackCommand::Play {
+                        record_id,
+                        audio_path,
+                    }) => {
+                        if let Some((_, sink)) = current.take() {
+                            sink.stop();
+                        }
+
+                        match std::fs::File::open(&audio_path)
+                            .map(BufReader::new)
+                            .map_err(|err| {
+                                format!("Failed to open audio file {}: {}", audio_path, err)
+                            })
+                            .and_then(|reader| {
+                                Decoder::new(reader).map_err(|err| {
+                                    format!("Failed to decode audio file {}: {}", audio_path, err)
+                                })
+                            }) {
+                            Ok(source) => match Sink::try_new(&stream_handle) {
+                                Ok(sink) => {
+                                    sink.append(source);
+                                    sink.play();
+                                    current = Some((record_id, sink));
+                                    set_active_history_playback(Some(record_id));
+                                }
+                                Err(err) => {
+                                    log::error!(
+                                        "Failed to create history playback sink for {}: {}",
+                                        audio_path,
+                                        err
+                                    );
+                                    set_active_history_playback(None);
+                                }
+                            },
+                            Err(err) => {
+                                log::error!("{}", err);
+                                set_active_history_playback(None);
+                            }
+                        }
+                    }
+                    Ok(HistoryPlaybackCommand::Stop) => {
+                        if let Some((_, sink)) = current.take() {
+                            sink.stop();
+                        }
+                        set_active_history_playback(None);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let finished = current
+                            .as_ref()
+                            .map(|(_, sink)| sink.empty())
+                            .unwrap_or(false);
+                        if finished {
+                            current = None;
+                            set_active_history_playback(None);
+                        }
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        if let Some((_, sink)) = current.take() {
+                            sink.stop();
+                        }
+                        set_active_history_playback(None);
+                        break;
+                    }
+                }
+            }
+        });
+        tx
+    })
+}
+
+pub fn subscribe_history_playback_events() -> mpsc::Receiver<HistoryPlaybackEvent> {
+    let (tx, rx) = mpsc::channel();
+    history_playback_event_bus().lock().unwrap().push(tx);
+    rx
+}
+
+pub fn active_history_playback_record_id() -> Option<i32> {
+    *history_playback_active_record().lock().unwrap()
+}
+
+/// 刷新音频设备缓存（设置窗口打开时调用）
+pub fn refresh_audio_device_cache() {
+    if let Ok(devices) = audio::list_input_devices() {
+        *device_cache().lock().unwrap() = devices;
+    }
+}
+
+fn cached_audio_devices() -> Vec<AudioInputDevice> {
+    let cache = device_cache().lock().unwrap();
+    if cache.is_empty() {
+        drop(cache);
+        // 首次访问时同步填充
+        if let Ok(devices) = audio::list_input_devices() {
+            *device_cache().lock().unwrap() = devices.clone();
+            return devices;
+        }
+        return Vec::new();
+    }
+    cache.clone()
+}
 
 #[allow(dead_code)]
 pub struct UiSnapshot {
@@ -70,22 +238,64 @@ pub struct UiSnapshot {
     pub overlay_body_text: String,
 }
 
+pub struct RuntimeUiSnapshot {
+    pub status_text: String,
+    pub transcribe_button_text: String,
+    pub transcribe_body_text: String,
+    pub audio_level_text: String,
+    pub audio_level_value: f32,
+    pub monitor_button_text: String,
+    pub tray_summary_text: String,
+    pub live_asr_text: String,
+    pub overlay_visible: bool,
+    pub overlay_state_text: String,
+    pub overlay_body_text: String,
+}
+
+pub struct HotwordLibraryCardData {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub word_count_text: String,
+    pub is_builtin: bool,
+    pub source_text: String,
+    pub format_text: String,
+}
+
 pub struct SettingsWindowSnapshot {
     pub theme_text: String,
-    pub model_text: String,
-    pub audio_device_text: String,
-    pub recording_mode_text: String,
     pub punct_style_text: String,
     pub append_content_text: String,
-    pub hotword_summary_text: String,
     pub hotkey_summary_text: String,
     pub config_path_text: String,
     pub llm_enabled: bool,
     pub llm_base_url: String,
     pub llm_model_name: String,
     pub llm_system_prompt: String,
-    pub refine_asr_enabled: bool,
     pub overlay_enabled: bool,
+    // ASR — live model
+    pub live_model_id: String,
+    pub live_model_size_text: String,
+    pub live_model_downloaded: bool,
+    pub live_model_downloading: bool,
+    pub live_model_download_progress: f32,
+    pub live_model_download_status_text: String,
+    // ASR — refine model
+    pub refine_asr_enabled: bool,
+    pub refine_model_id: String,
+    pub refine_model_size_text: String,
+    pub refine_model_downloaded: bool,
+    pub refine_model_downloading: bool,
+    pub refine_model_download_progress: f32,
+    pub refine_model_download_status_text: String,
+    // ASR — hotwords
+    pub hotword_stats_text: String,
+    pub hotword_libraries: Vec<HotwordLibraryCardData>,
+    pub hotword_dir_text: String,
+    pub hotword_hint_text: String,
+    // ASR — audio
+    pub audio_devices: Vec<String>,
+    pub audio_device_index: i32,
 }
 
 const GITHUB_PROXY_VALUES: [&str; 3] = ["https://ghfast.top/", "https://gh-proxy.com/", ""];
@@ -161,7 +371,7 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
 
 pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
     let paths = resolve_app_paths();
-    config::init_config(&paths).map_err(|e| e.to_string())?;
+    // init_config 是启动逻辑（建目录、写默认热词、迁移），不在轮询路径里重复调用
     let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     state::set_active_model(cfg.asr.live_model_id.clone());
     let runtime = state::get_runtime_snapshot();
@@ -178,7 +388,7 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
     let live_model_downloading = crate::model_downloader::is_downloading(&cfg.asr.live_model_id);
     let refine_model_downloading =
         crate::model_downloader::is_downloading(&cfg.asr.refine_model_id);
-    let audio_devices = audio::list_input_devices().unwrap_or_default();
+    let audio_devices = cached_audio_devices();
     let selected_device = selected_audio_device_name(&cfg, &audio_devices);
     let hotkey_display = cfg.hotkeys.toggle_recording.clone();
     let audio_level = runtime.audio_level.clamp(0.0, 1.0);
@@ -357,7 +567,6 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
 
 pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
     let paths = resolve_app_paths();
-    config::init_config(&paths).map_err(|e| e.to_string())?;
     let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     let runtime = state::get_runtime_snapshot();
     let live_model = active_live_model_info(&paths, &cfg);
@@ -374,49 +583,177 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
     let refine_model_downloading =
         crate::model_downloader::is_downloading(&cfg.asr.refine_model_id);
 
+    let audio_devices = cached_audio_devices();
+    let audio_device_index = {
+        let selected = selected_audio_device_name(&cfg, &audio_devices);
+        audio_devices
+            .iter()
+            .position(|d| d.name == selected)
+            .map(|i| i as i32)
+            .unwrap_or(0)
+    };
+    let hotword_libraries = build_hotword_library_cards(&paths);
+
+    let live_size_bytes = live_model.as_ref().map(|m| m.size_bytes).unwrap_or(0);
+    let refine_size_bytes = refine_model.as_ref().map(|m| m.size_bytes).unwrap_or(0);
+
     Ok(SettingsWindowSnapshot {
         theme_text: format!("主题: {}", cfg.general.theme),
-        model_text: format!(
-            "实时模型: {} ({})\n整体纠正: {} / {}",
-            cfg.asr.live_model_id,
-            model_install_state_text(live_model_downloaded, live_model_downloading),
-            if cfg.asr.refine_enabled {
-                "enabled"
-            } else {
-                "disabled"
-            },
-            format!(
-                "{} ({})",
-                cfg.asr.refine_model_id,
-                model_install_state_text(refine_model_downloaded, refine_model_downloading)
-            )
-        ),
-        audio_device_text: format!(
-            "音频输入: {}",
-            selected_audio_device_name(&cfg, &audio::list_input_devices().unwrap_or_default())
-        ),
-        recording_mode_text: format!("录音模式: {}", cfg.audio.recording_mode),
         punct_style_text: format!("标点风格: {}", cfg.output.punct_style),
         append_content_text: format!("附加内容: {}", cfg.output.append_content),
-        hotword_summary_text: load_hotword_summary(&paths),
         hotkey_summary_text: load_hotkey_summary(&cfg),
         config_path_text: format!("配置路径: {}", paths.config_file().display()),
         llm_enabled: cfg.rewrite.enabled,
-        llm_base_url: cfg.rewrite.providers.first()
+        llm_base_url: cfg
+            .rewrite
+            .providers
+            .first()
             .map(|p| p.base_url.clone())
             .unwrap_or_default(),
-        llm_model_name: cfg.rewrite.providers.first()
+        llm_model_name: cfg
+            .rewrite
+            .providers
+            .first()
             .map(|p| p.model.clone())
             .unwrap_or_default(),
         llm_system_prompt: {
             let active_id = &cfg.rewrite.active_prompt_id;
-            cfg.rewrite.prompts.iter()
+            cfg.rewrite
+                .prompts
+                .iter()
                 .find(|p| &p.id == active_id)
                 .map(|p| p.system_prompt.clone())
                 .unwrap_or_default()
         },
-        refine_asr_enabled: cfg.asr.refine_enabled,
         overlay_enabled: runtime.overlay_visible,
+        // live model
+        live_model_id: cfg.asr.live_model_id.clone(),
+        live_model_size_text: format_size_mb(live_size_bytes),
+        live_model_downloaded,
+        live_model_downloading,
+        live_model_download_progress: crate::model_downloader::get_progress(&cfg.asr.live_model_id),
+        live_model_download_status_text: crate::model_downloader::get_status_text(
+            &cfg.asr.live_model_id,
+        ),
+        // refine model
+        refine_asr_enabled: cfg.asr.refine_enabled,
+        refine_model_id: cfg.asr.refine_model_id.clone(),
+        refine_model_size_text: format_size_mb(refine_size_bytes),
+        refine_model_downloaded,
+        refine_model_downloading,
+        refine_model_download_progress: crate::model_downloader::get_progress(
+            &cfg.asr.refine_model_id,
+        ),
+        refine_model_download_status_text: crate::model_downloader::get_status_text(
+            &cfg.asr.refine_model_id,
+        ),
+        // hotwords
+        hotword_stats_text: build_hotword_stats_text(&hotword_libraries),
+        hotword_libraries,
+        hotword_dir_text: format!("词典目录: {}", compact_path_display(paths.hotwords_dir())),
+        hotword_hint_text:
+            "支持 md / txt / csv / scel / thuocl；推荐把自定义词典直接放到 hotwords/user/ 下"
+                .to_string(),
+        // audio
+        audio_devices: audio_devices.into_iter().map(|d| d.name).collect(),
+        audio_device_index,
+    })
+}
+
+pub fn refresh_runtime_ui() -> Result<RuntimeUiSnapshot, String> {
+    let paths = resolve_app_paths();
+    let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    let runtime = state::get_runtime_snapshot();
+    let audio_level = runtime.audio_level.clamp(0.0, 1.0);
+
+    Ok(RuntimeUiSnapshot {
+        status_text: runtime.status_message.clone(),
+        transcribe_button_text: if crate::audio_transcriber::is_running() {
+            "停止测试录音".to_string()
+        } else {
+            "点击测试录音".to_string()
+        },
+        transcribe_body_text: if crate::audio_transcriber::is_running() {
+            "正在通过真实麦克风和当前模型进行转写".to_string()
+        } else {
+            "测试转写功能是否正常".to_string()
+        },
+        audio_level_text: format!("{}%", (audio_level * 100.0).round() as u32),
+        audio_level_value: audio_level,
+        monitor_button_text: if crate::audio_monitor::is_running() {
+            "停止监听麦克风输入".to_string()
+        } else {
+            "监听麦克风输入".to_string()
+        },
+        tray_summary_text: load_tray_summary(&cfg, &runtime),
+        live_asr_text: load_live_asr_summary(&cfg, &runtime),
+        overlay_visible: runtime.overlay_visible
+            && matches!(
+                runtime.current_state,
+                AppState::Recording | AppState::Transcribing | AppState::Rewriting
+            ),
+        overlay_state_text: format_overlay_state(&runtime),
+        overlay_body_text: format_overlay_body(&cfg, &runtime),
+    })
+}
+
+pub struct DownloadProgressSnapshot {
+    pub live_model_downloading: bool,
+    pub live_model_download_progress: f32,
+    pub live_model_download_status_text: String,
+    pub refine_model_downloading: bool,
+    pub refine_model_download_progress: f32,
+    pub refine_model_download_status_text: String,
+}
+
+/// 只读下载进度，不读配置文件、不重建 VecModel，供轮询定时器使用
+pub fn get_download_progress() -> Option<DownloadProgressSnapshot> {
+    if !crate::model_downloader::any_downloading() {
+        return None;
+    }
+    let paths = resolve_app_paths();
+    let cfg = config::get_config(&paths).ok()?;
+    let live_id = cfg.asr.live_model_id.clone();
+    let refine_id = cfg.asr.refine_model_id.clone();
+    Some(DownloadProgressSnapshot {
+        live_model_downloading: crate::model_downloader::is_downloading(&live_id),
+        live_model_download_progress: crate::model_downloader::get_progress(&live_id),
+        live_model_download_status_text: crate::model_downloader::get_status_text(&live_id),
+        refine_model_downloading: crate::model_downloader::is_downloading(&refine_id),
+        refine_model_download_progress: crate::model_downloader::get_progress(&refine_id),
+        refine_model_download_status_text: crate::model_downloader::get_status_text(&refine_id),
+    })
+}
+
+pub struct MainWindowDownloadSnapshot {
+    pub model_ready: bool,
+    pub model_downloading: bool,
+    pub model_download_progress: f32,
+    pub model_download_status_text: String,
+    pub model_download_error_text: String,
+}
+
+pub fn get_main_window_download_progress() -> Option<MainWindowDownloadSnapshot> {
+    if !crate::model_downloader::any_downloading() {
+        return None;
+    }
+
+    let paths = resolve_app_paths();
+    let cfg = config::get_config(&paths).ok()?;
+    let live_model = active_live_model_info(&paths, &cfg);
+
+    Some(MainWindowDownloadSnapshot {
+        model_ready: live_model
+            .as_ref()
+            .map(|m| m.is_downloaded)
+            .unwrap_or(false),
+        model_downloading: crate::model_downloader::is_downloading(&cfg.asr.live_model_id),
+        model_download_progress: crate::model_downloader::get_progress(&cfg.asr.live_model_id),
+        model_download_status_text: crate::model_downloader::get_status_text(
+            &cfg.asr.live_model_id,
+        ),
+        model_download_error_text: crate::model_downloader::get_last_error(&cfg.asr.live_model_id)
+            .unwrap_or_default(),
     })
 }
 
@@ -425,15 +762,6 @@ pub fn cycle_theme() -> Result<UiSnapshot, String> {
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     cfg.general.theme = next_theme(&cfg.general.theme).to_string();
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
-    refresh_snapshot()
-}
-
-pub fn cycle_recording_mode() -> Result<UiSnapshot, String> {
-    let paths = resolve_app_paths();
-    config::init_config(&paths).map_err(|e| e.to_string())?;
-    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    cfg.audio.recording_mode = next_recording_mode(&cfg.audio.recording_mode).to_string();
     config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
     refresh_snapshot()
 }
@@ -465,35 +793,6 @@ pub fn cycle_append_content() -> Result<UiSnapshot, String> {
     refresh_snapshot()
 }
 
-pub fn cycle_audio_device() -> Result<UiSnapshot, String> {
-    let paths = resolve_app_paths();
-    config::init_config(&paths).map_err(|e| e.to_string())?;
-    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    let devices = audio::list_input_devices().map_err(|e| e.to_string())?;
-    if devices.is_empty() {
-        return Err("No audio input devices available".to_string());
-    }
-
-    let current_name = cfg.audio.device_name.clone().or_else(|| {
-        devices
-            .iter()
-            .find(|device| device.is_default)
-            .map(|device| device.name.clone())
-    });
-
-    let current_idx = current_name
-        .as_ref()
-        .and_then(|name| devices.iter().position(|device| device.name == *name))
-        .unwrap_or(0);
-    let next_idx = (current_idx + 1) % devices.len();
-    cfg.audio.device_name = Some(devices[next_idx].name.clone());
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
-
-    let mut snapshot = refresh_snapshot()?;
-    snapshot.status_text = format!("Selected audio input {}", devices[next_idx].name);
-    Ok(snapshot)
-}
-
 pub fn cycle_github_proxy() -> Result<UiSnapshot, String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
@@ -518,68 +817,34 @@ pub fn set_github_proxy_index(index: i32) -> Result<UiSnapshot, String> {
     Ok(snapshot)
 }
 
-pub fn cycle_active_model() -> Result<UiSnapshot, String> {
+pub fn select_audio_device(index: usize) -> Result<SettingsWindowSnapshot, String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    let models = model::list_models_with_paths(&paths).map_err(|e| e.to_string())?;
-
-    let available: Vec<_> = models
-        .into_iter()
-        .filter(|m| m.backend == shanji_core::model::ModelBackend::Streaming)
-        .collect();
-    if available.is_empty() {
-        return Err("No streaming models available in registry".to_string());
+    let devices = cached_audio_devices();
+    if let Some(device) = devices.get(index) {
+        cfg.audio.device_name = Some(device.name.clone());
+        config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
     }
-
-    let preferred: Vec<_> = available.iter().filter(|m| m.is_downloaded).collect();
-    let source: Vec<_> = if preferred.is_empty() {
-        available.iter().collect()
-    } else {
-        preferred
-    };
-
-    let current_idx = source
-        .iter()
-        .position(|m| m.id == cfg.asr.live_model_id)
-        .unwrap_or(0);
-    let next_idx = (current_idx + 1) % source.len();
-    cfg.asr.live_model_id = source[next_idx].id.clone();
-
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
-    refresh_snapshot()
+    refresh_settings_window()
 }
 
-pub fn cycle_refine_model() -> Result<UiSnapshot, String> {
+pub fn toggle_hotword_library(id: &str) -> Result<SettingsWindowSnapshot, String> {
     let paths = resolve_app_paths();
-    config::init_config(&paths).map_err(|e| e.to_string())?;
-    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    let models = model::list_models_with_paths(&paths).map_err(|e| e.to_string())?;
-
-    let available: Vec<_> = models
-        .into_iter()
-        .filter(|m| m.backend == shanji_core::model::ModelBackend::Whole)
-        .collect();
-    if available.is_empty() {
-        return Err("No whole models available in registry".to_string());
-    }
-
-    let preferred: Vec<_> = available.iter().filter(|m| m.is_downloaded).collect();
-    let source: Vec<_> = if preferred.is_empty() {
-        available.iter().collect()
-    } else {
-        preferred
-    };
-
-    let current_idx = source
+    let libraries = hotwords::list_libraries_with_paths(&paths).map_err(|e| e.to_string())?;
+    let library = libraries
         .iter()
-        .position(|m| m.id == cfg.asr.refine_model_id)
-        .unwrap_or(0);
-    let next_idx = (current_idx + 1) % source.len();
-    cfg.asr.refine_model_id = source[next_idx].id.clone();
+        .find(|l| l.id == id)
+        .ok_or_else(|| format!("Hotword library '{}' not found", id))?;
+    hotwords::set_library_enabled_with_paths(&paths, id, !library.enabled)
+        .map_err(|e| e.to_string())?;
+    refresh_settings_window()
+}
 
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
-    refresh_snapshot()
+pub fn open_hotword_directory() -> Result<SettingsWindowSnapshot, String> {
+    let paths = resolve_app_paths();
+    open_path_in_system(&paths.hotwords_dir().display().to_string())?;
+    refresh_settings_window()
 }
 
 pub fn toggle_refine_asr() -> Result<UiSnapshot, String> {
@@ -589,29 +854,6 @@ pub fn toggle_refine_asr() -> Result<UiSnapshot, String> {
     cfg.asr.refine_enabled = !cfg.asr.refine_enabled;
     config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
     refresh_snapshot()
-}
-
-pub fn toggle_latest_hotword_library() -> Result<UiSnapshot, String> {
-    let paths = resolve_app_paths();
-    let libraries = hotwords::list_libraries_with_paths(&paths).map_err(|e| e.to_string())?;
-    let library = libraries
-        .first()
-        .ok_or_else(|| "No hotword libraries available".to_string())?;
-
-    hotwords::set_library_enabled_with_paths(&paths, &library.id, !library.enabled)
-        .map_err(|e| e.to_string())?;
-
-    let mut snapshot = refresh_snapshot()?;
-    snapshot.status_text = format!(
-        "Hotword library {} is now {}",
-        library.name,
-        if library.enabled {
-            "disabled"
-        } else {
-            "enabled"
-        }
-    );
-    Ok(snapshot)
 }
 
 pub fn clear_history() -> Result<UiSnapshot, String> {
@@ -626,16 +868,15 @@ pub fn clear_history() -> Result<UiSnapshot, String> {
 
 pub fn load_history_cards() -> Result<(Vec<shanji_core::history::HistoryCardData>, u32), String> {
     let paths = resolve_app_paths();
-    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
-        .map_err(|e| e.to_string())?;
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
     db.list_cards(20).map_err(|e| e.to_string())
 }
 
 pub fn copy_history_record(record_id: i32) -> Result<(), String> {
     let paths = resolve_app_paths();
-    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
-        .map_err(|e| e.to_string())?;
-    let record = db.get(record_id as i64)
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
+    let record = db
+        .get(record_id as i64)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Record {} not found", record_id))?;
     let text = record_output_text(&record);
@@ -644,9 +885,9 @@ pub fn copy_history_record(record_id: i32) -> Result<(), String> {
 
 pub fn paste_history_record(record_id: i32) -> Result<(), String> {
     let paths = resolve_app_paths();
-    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
-        .map_err(|e| e.to_string())?;
-    let record = db.get(record_id as i64)
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
+    let record = db
+        .get(record_id as i64)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Record {} not found", record_id))?;
     let cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
@@ -657,34 +898,56 @@ pub fn paste_history_record(record_id: i32) -> Result<(), String> {
 
 pub fn delete_history_record(record_id: i32) -> Result<(), String> {
     let paths = resolve_app_paths();
-    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
-        .map_err(|e| e.to_string())?;
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
     db.delete(record_id as i64).map_err(|e| e.to_string())?;
     Ok(())
 }
 
-pub fn play_history_audio(record_id: i32) -> Result<(), String> {
+fn history_audio_path(record_id: i32) -> Result<String, String> {
     let paths = resolve_app_paths();
-    let db = shanji_core::history::HistoryDb::new_with_paths(&paths)
-        .map_err(|e| e.to_string())?;
-    let record = db.get(record_id as i64)
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
+    let record = db
+        .get(record_id as i64)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Record {} not found", record_id))?;
-    let audio_path = record.audio_path
-        .ok_or_else(|| format!("Record {} has no audio file", record_id))?;
-    open_path_in_system(&audio_path)
+    record
+        .audio_path
+        .ok_or_else(|| format!("Record {} has no audio file", record_id))
+}
+
+pub fn play_history_audio(record_id: i32) -> Result<(), String> {
+    let command_tx = ensure_history_playback_runtime();
+
+    if active_history_playback_record_id() == Some(record_id) {
+        command_tx
+            .send(HistoryPlaybackCommand::Stop)
+            .map_err(|err| format!("Failed to stop audio playback: {}", err))?;
+        return Ok(());
+    }
+
+    let audio_path = history_audio_path(record_id)?;
+    command_tx
+        .send(HistoryPlaybackCommand::Play {
+            record_id,
+            audio_path,
+        })
+        .map_err(|err| format!("Failed to start audio playback: {}", err))
 }
 
 pub fn retranscribe_history(record_id: i32) -> Result<(), String> {
     // Phase 1：仅打开音频文件（完整重新转录需要音频管道，暂留为占位实现）
-    play_history_audio(record_id)
+    let audio_path = history_audio_path(record_id)?;
+    open_path_in_system(&audio_path)
 }
 
 pub fn set_llm_base_url(url: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    let provider = cfg.rewrite.providers.first_mut()
+    let provider = cfg
+        .rewrite
+        .providers
+        .first_mut()
         .ok_or_else(|| "No LLM provider configured".to_string())?;
     provider.base_url = url;
     shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
@@ -694,7 +957,10 @@ pub fn set_llm_model_name(model: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    let provider = cfg.rewrite.providers.first_mut()
+    let provider = cfg
+        .rewrite
+        .providers
+        .first_mut()
         .ok_or_else(|| "No LLM provider configured".to_string())?;
     provider.model = model;
     shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
@@ -703,7 +969,10 @@ pub fn set_llm_model_name(model: String) -> Result<(), String> {
 pub fn set_llm_api_key(key: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     let cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    let provider_id = cfg.rewrite.providers.first()
+    let provider_id = cfg
+        .rewrite
+        .providers
+        .first()
         .map(|p| p.id.clone())
         .unwrap_or_else(|| cfg.rewrite.active_provider_id.clone());
     if provider_id.is_empty() {
@@ -719,13 +988,14 @@ pub fn set_llm_system_prompt(prompt: String) -> Result<(), String> {
     // system_prompt 存在于 prompts 列表中，修改当前激活的 prompt preset
     let active_id = cfg.rewrite.active_prompt_id.clone();
     // First try to find the active non-builtin preset
-    if let Some(preset) = cfg.rewrite.prompts.iter_mut()
+    if let Some(preset) = cfg
+        .rewrite
+        .prompts
+        .iter_mut()
         .find(|p| p.id == active_id && !p.is_builtin)
     {
         preset.system_prompt = prompt;
-    } else if let Some(preset) = cfg.rewrite.prompts.iter_mut()
-        .find(|p| p.id == "custom")
-    {
+    } else if let Some(preset) = cfg.rewrite.prompts.iter_mut().find(|p| p.id == "custom") {
         // Fall back to any existing "custom" entry (even if not currently active)
         preset.system_prompt = prompt;
         cfg.rewrite.active_prompt_id = "custom".to_string();
@@ -897,9 +1167,10 @@ fn next_theme(current: &str) -> &'static str {
 }
 
 fn load_audio_device_summary(cfg: &AppConfig) -> String {
-    let Ok(devices) = audio::list_input_devices() else {
+    let devices = cached_audio_devices();
+    if devices.is_empty() {
         return "Audio devices unavailable".to_string();
-    };
+    }
 
     let selected = cfg
         .audio
@@ -1022,16 +1293,6 @@ fn refine_model_info(paths: &AppPaths, cfg: &AppConfig) -> Option<shanji_core::m
         })
 }
 
-fn model_install_state_text(downloaded: bool, downloading: bool) -> &'static str {
-    if downloading {
-        "downloading"
-    } else if downloaded {
-        "downloaded"
-    } else {
-        "remote"
-    }
-}
-
 fn refine_runtime_summary(cfg: &AppConfig, downloaded: bool, downloading: bool) -> String {
     if !cfg.asr.refine_enabled {
         return format!("未启用 · {}", cfg.asr.refine_model_id);
@@ -1076,14 +1337,6 @@ fn human_readable_bytes(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
         format!("{} B", bytes)
-    }
-}
-
-fn next_recording_mode(current: &str) -> &'static str {
-    match current {
-        "toggle" => "push-to-talk",
-        "push-to-talk" => "toggle",
-        _ => "toggle",
     }
 }
 
@@ -1208,6 +1461,68 @@ fn open_path_in_system(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn format_size_mb(bytes: u64) -> String {
+    if bytes == 0 {
+        return "大小未知".to_string();
+    }
+    let mb = bytes as f64 / 1_048_576.0;
+    if mb < 1000.0 {
+        format!("约 {:.0} MB", mb)
+    } else {
+        format!("约 {:.1} GB", mb / 1024.0)
+    }
+}
+
+fn build_hotword_library_cards(paths: &AppPaths) -> Vec<HotwordLibraryCardData> {
+    let Ok(libraries) = hotwords::list_libraries_with_paths(paths) else {
+        return Vec::new();
+    };
+    libraries
+        .into_iter()
+        .map(|lib| {
+            let is_builtin = matches!(lib.source, hotwords::LibrarySource::Builtin);
+            HotwordLibraryCardData {
+                id: lib.id,
+                name: lib.name,
+                enabled: lib.enabled,
+                word_count_text: format!("{} 词条", lib.word_count),
+                is_builtin,
+                source_text: match lib.source {
+                    hotwords::LibrarySource::Builtin => "内置".to_string(),
+                    hotwords::LibrarySource::User => "自定义".to_string(),
+                    hotwords::LibrarySource::Imported => "导入".to_string(),
+                },
+                format_text: lib.format.to_string(),
+            }
+        })
+        .collect()
+}
+
+fn build_hotword_stats_text(libs: &[HotwordLibraryCardData]) -> String {
+    let enabled = libs.iter().filter(|l| l.enabled).count();
+    let total_words: usize = libs
+        .iter()
+        .filter(|l| l.enabled)
+        .map(|l| {
+            l.word_count_text
+                .split_whitespace()
+                .next()
+                .and_then(|s| s.parse::<usize>().ok())
+                .unwrap_or(0)
+        })
+        .sum();
+    if libs.is_empty() {
+        "暂无词库".to_string()
+    } else {
+        format!(
+            "已启用 {} / {} 个词库 · 共 {} 词条",
+            enabled,
+            libs.len(),
+            total_words
+        )
+    }
+}
+
 fn load_hotword_summary(paths: &AppPaths) -> String {
     let Ok(libraries) = hotwords::list_libraries_with_paths(paths) else {
         return "Hotwords unavailable".to_string();
@@ -1278,6 +1593,35 @@ fn github_proxy_display(cfg: &AppConfig) -> &str {
     } else {
         value
     }
+}
+
+fn compact_path_display(path: std::path::PathBuf) -> String {
+    let display = path.display().to_string();
+    let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+        return display;
+    };
+    let home_text = home.display().to_string();
+    if let Ok(stripped) = path.strip_prefix(&home) {
+        let short = format!("~/{}", stripped.display());
+        if short.len() <= 52 {
+            return short;
+        }
+    }
+
+    let parts = display
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.len() >= 3 {
+        return format!(
+            ".../{}/{}/{}",
+            parts[parts.len() - 3],
+            parts[parts.len() - 2],
+            parts[parts.len() - 1]
+        );
+    }
+
+    display.replace(&home_text, "~")
 }
 
 fn load_model_summary(paths: &AppPaths, cfg: &AppConfig) -> String {
@@ -1401,7 +1745,6 @@ fn truncate(text: &str, max_chars: usize) -> String {
         truncated
     }
 }
-
 
 #[allow(dead_code)]
 fn _config_for_future_use(paths: &AppPaths) -> Result<AppConfig, String> {

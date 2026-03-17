@@ -9,11 +9,11 @@ use std::sync::{Arc, Mutex};
 #[derive(Debug, Clone)]
 pub struct HistoryCardData {
     pub record_id: i32,
-    pub timestamp: String,    // 格式化后的本地时间，如 "2026-03-16 14:32"
-    pub text: String,         // 优先展示: rewritten > corrected_transcribed > transcribed
+    pub timestamp: String, // 格式化后的本地时间，如 "2026-03-16 14:32"
+    pub text: String,      // 优先展示: rewritten > corrected_transcribed > transcribed
     pub has_audio: bool,
     pub is_llm_rewritten: bool,
-    pub was_pasted: bool,     // 当前始终 false（暂无粘贴状态跟踪，预留字段）
+    pub was_pasted: bool, // 当前始终 false（暂无粘贴状态跟踪，预留字段）
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -372,27 +372,33 @@ impl HistoryDb {
     pub fn list_cards(&self, limit: u32) -> Result<(Vec<HistoryCardData>, u32)> {
         let total = self.count()?;
         let records = self.list(0, limit)?;
-        let cards = records.into_iter().filter_map(|r| {
-            let id = i32::try_from(r.id?).ok()?;
-            // 注意：先捕获 is_llm_rewritten，再 move rewritten 字段
-            let is_llm_rewritten = r.rewritten.as_ref()
-                .map(|s| !s.is_empty()).unwrap_or(false);
-            let has_audio = r.audio_path.as_ref()
-                .map(|p| !p.is_empty()).unwrap_or(false);
-            let text = r.rewritten
-                .filter(|s| !s.is_empty())
-                .or_else(|| r.corrected_transcribed.filter(|s| !s.is_empty()))
-                .unwrap_or(r.transcribed);
-            let ts = format_timestamp(r.created_at);
-            Some(HistoryCardData {
-                record_id: id,
-                timestamp: ts,
-                text,
-                has_audio,
-                is_llm_rewritten,
-                was_pasted: false,
+        let cards = records
+            .into_iter()
+            .filter_map(|r| {
+                let id = i32::try_from(r.id?).ok()?;
+                // 注意：先捕获 is_llm_rewritten，再 move rewritten 字段
+                let is_llm_rewritten = r.rewritten.as_ref().map(|s| !s.is_empty()).unwrap_or(false);
+                let has_audio = r
+                    .audio_path
+                    .as_ref()
+                    .map(|p| !p.is_empty())
+                    .unwrap_or(false);
+                let text = r
+                    .rewritten
+                    .filter(|s| !s.is_empty())
+                    .or_else(|| r.corrected_transcribed.filter(|s| !s.is_empty()))
+                    .unwrap_or(r.transcribed);
+                let ts = format_timestamp(r.created_at);
+                Some(HistoryCardData {
+                    record_id: id,
+                    timestamp: ts,
+                    text,
+                    has_audio,
+                    is_llm_rewritten,
+                    was_pasted: false,
+                })
             })
-        }).collect();
+            .collect();
         Ok((cards, total))
     }
 

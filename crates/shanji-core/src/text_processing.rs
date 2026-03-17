@@ -2,13 +2,48 @@ use crate::hotwords::Hotword;
 use std::collections::HashMap;
 
 const FILLER_WORDS: &[&str] = &[
-    "嗯", "啊", "哦", "呃", "额", "哎", "欸", "诶", "呢", "吧", "嘛", "哈", "然后呢", "这个",
+    "嗯",
+    "啊",
+    "哦",
+    "呃",
+    "额",
+    "哎",
+    "欸",
+    "诶",
+    "呢",
+    "吧",
+    "嘛",
+    "哈",
+    "然后呢",
+    "这个",
 ];
 
 const CONNECTIVE_MARKERS: &[&str] = &[
-    "尤其", "但是", "不过", "所以", "因此", "然后", "而且", "并且", "或者", "至少", "因为",
-    "另外", "同时", "例如", "比如", "其实", "如果", "就是", "接着", "最后", "更建议", "建议",
-    "总之", "并且", "不过如果",
+    "尤其",
+    "但是",
+    "不过",
+    "所以",
+    "因此",
+    "然后",
+    "而且",
+    "并且",
+    "或者",
+    "至少",
+    "因为",
+    "另外",
+    "同时",
+    "例如",
+    "比如",
+    "其实",
+    "如果",
+    "就是",
+    "接着",
+    "最后",
+    "更建议",
+    "建议",
+    "总之",
+    "并且",
+    "不过如果",
 ];
 
 #[derive(Clone, Debug, Default)]
@@ -67,7 +102,12 @@ pub fn render_segmented_transcript(
     let partial = normalize_transcript_with_hotwords(current_partial, &config.hotwords);
 
     if !config.insert_punct {
-        return join_without_punctuation(&committed, pending.as_ref(), &partial, &config.punct_style);
+        return join_without_punctuation(
+            &committed,
+            pending.as_ref(),
+            &partial,
+            &config.punct_style,
+        );
     }
 
     match config.punct_style.as_str() {
@@ -135,7 +175,11 @@ fn render_segmented_chinese(
 
     if !current_partial.is_empty() {
         if !text.is_empty() && !ends_with_punctuation(&text) {
-            text.push_str(if current_partial.len() > 24 { "，" } else { "" });
+            text.push_str(if current_partial.len() > 24 {
+                "，"
+            } else {
+                ""
+            });
         }
         text.push_str(current_partial);
     }
@@ -266,7 +310,22 @@ fn refine_chinese_clause(text: &str, is_final: bool) -> String {
             && since_punct >= 28
             && idx + 1 < chars.len()
             && !ends_with_punctuation(&out)
-            && matches!(ch, '是' | '要' | '用' | '做' | '让' | '把' | '在' | '对' | '到' | '后' | '前' | '时' | '并' | '或')
+            && matches!(
+                ch,
+                '是' | '要'
+                    | '用'
+                    | '做'
+                    | '让'
+                    | '把'
+                    | '在'
+                    | '对'
+                    | '到'
+                    | '后'
+                    | '前'
+                    | '时'
+                    | '并'
+                    | '或'
+            )
         {
             out.push('，');
             since_punct = 0;
@@ -326,9 +385,8 @@ fn is_filler_boundary(chars: &[char], start: usize, filler: &str) -> bool {
         || chars[start.saturating_sub(1)].is_whitespace()
         || is_boundary_punctuation(chars[start - 1]);
     let end = start + len;
-    let next_ok = end >= chars.len()
-        || chars[end].is_whitespace()
-        || is_boundary_punctuation(chars[end]);
+    let next_ok =
+        end >= chars.len() || chars[end].is_whitespace() || is_boundary_punctuation(chars[end]);
 
     prev_ok && next_ok
 }
@@ -633,7 +691,11 @@ fn parse_chinese_number(text: &str) -> Option<u64> {
             .chars()
             .map(chinese_digit_value)
             .collect::<Option<Vec<_>>>()
-            .map(|digits| digits.into_iter().fold(0u64, |acc, digit| acc * 10 + digit as u64));
+            .map(|digits| {
+                digits
+                    .into_iter()
+                    .fold(0u64, |acc, digit| acc * 10 + digit as u64)
+            });
     }
 
     let mut result = 0u64;
@@ -679,20 +741,22 @@ fn parse_chinese_number(text: &str) -> Option<u64> {
 }
 
 fn chinese_digit_char(ch: char) -> Option<String> {
-    Some(match ch {
-        '零' | '〇' => "0",
-        '一' => "1",
-        '二' | '两' => "2",
-        '三' => "3",
-        '四' => "4",
-        '五' => "5",
-        '六' => "6",
-        '七' => "7",
-        '八' => "8",
-        '九' => "9",
-        _ => return None,
-    }
-    .to_string())
+    Some(
+        match ch {
+            '零' | '〇' => "0",
+            '一' => "1",
+            '二' | '两' => "2",
+            '三' => "3",
+            '四' => "4",
+            '五' => "5",
+            '六' => "6",
+            '七' => "7",
+            '八' => "8",
+            '九' => "9",
+            _ => return None,
+        }
+        .to_string(),
+    )
 }
 
 fn chinese_digit_value(ch: char) -> Option<u32> {
@@ -714,7 +778,22 @@ fn chinese_digit_value(ch: char) -> Option<u32> {
 fn is_chinese_number_char(ch: char) -> bool {
     matches!(
         ch,
-        '零' | '〇' | '一' | '二' | '两' | '三' | '四' | '五' | '六' | '七' | '八' | '九' | '十' | '百' | '千' | '万' | '亿'
+        '零' | '〇'
+            | '一'
+            | '二'
+            | '两'
+            | '三'
+            | '四'
+            | '五'
+            | '六'
+            | '七'
+            | '八'
+            | '九'
+            | '十'
+            | '百'
+            | '千'
+            | '万'
+            | '亿'
     )
 }
 
@@ -726,7 +805,9 @@ fn apply_hotword_overrides(text: &str, hotwords: &[Hotword]) -> String {
     hotwords
         .iter()
         .filter(|hotword| !hotword.word.is_empty() && !hotword.word.is_ascii())
-        .fold(text.to_string(), |acc, hotword| acc.replace(&hotword.word, &hotword.word))
+        .fold(text.to_string(), |acc, hotword| {
+            acc.replace(&hotword.word, &hotword.word)
+        })
 }
 
 fn apply_common_corrections(text: &str) -> String {
@@ -745,7 +826,9 @@ fn apply_common_corrections(text: &str) -> String {
         ("显显著", "显著"),
     ]
     .into_iter()
-    .fold(text.to_string(), |acc, (wrong, correct)| acc.replace(wrong, correct))
+    .fold(text.to_string(), |acc, (wrong, correct)| {
+        acc.replace(wrong, correct)
+    })
 }
 
 fn is_repeatable_cjk(ch: char) -> bool {
@@ -753,7 +836,9 @@ fn is_repeatable_cjk(ch: char) -> bool {
 }
 
 fn is_phrase_duplicate_candidate(phrase: &[char]) -> bool {
-    phrase.iter().any(|ch| is_repeatable_cjk(*ch) || ch.is_whitespace())
+    phrase
+        .iter()
+        .any(|ch| is_repeatable_cjk(*ch) || ch.is_whitespace())
 }
 
 fn is_boundary_punctuation(ch: char) -> bool {

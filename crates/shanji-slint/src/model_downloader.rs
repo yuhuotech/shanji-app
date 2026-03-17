@@ -1,5 +1,6 @@
 use shanji_core::paths::AppPaths;
 use std::collections::HashMap;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 
 const MAX_RETRIES: u32 = 10;
@@ -14,9 +15,25 @@ struct DownloadState {
 }
 
 static STATE: OnceLock<Mutex<HashMap<String, DownloadState>>> = OnceLock::new();
+static DOWNLOAD_EVENT_LISTENERS: OnceLock<Mutex<Vec<Sender<()>>>> = OnceLock::new();
 
 fn state() -> &'static Mutex<HashMap<String, DownloadState>> {
     STATE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn download_event_listeners() -> &'static Mutex<Vec<Sender<()>>> {
+    DOWNLOAD_EVENT_LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn notify_download_changed() {
+    let mut listeners = download_event_listeners().lock().unwrap();
+    listeners.retain(|tx| tx.send(()).is_ok());
+}
+
+pub fn subscribe_download_events() -> Receiver<()> {
+    let (tx, rx) = mpsc::channel();
+    download_event_listeners().lock().unwrap().push(tx);
+    rx
 }
 
 fn get_state(model_id: &str) -> DownloadState {
@@ -32,10 +49,16 @@ fn update_state(model_id: &str, update: impl FnOnce(&mut DownloadState)) {
     let mut all = state().lock().unwrap();
     let entry = all.entry(model_id.to_string()).or_default();
     update(entry);
+    drop(all);
+    notify_download_changed();
 }
 
 pub fn is_downloading(model_id: &str) -> bool {
     get_state(model_id).downloading
+}
+
+pub fn any_downloading() -> bool {
+    state().lock().unwrap().values().any(|s| s.downloading)
 }
 
 pub fn get_progress(model_id: &str) -> f32 {
@@ -62,6 +85,7 @@ pub fn start(paths: AppPaths, model_id: String) -> Result<(), String> {
         entry.last_error = None;
         entry.status_text = "准备下载...".to_string();
     }
+    notify_download_changed();
 
     std::thread::spawn(move || {
         let mut attempt = 0u32;

@@ -33,6 +33,7 @@ tokio = { version = "1", features = ["rt", "sync"] }
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 nnnoiseless = "0.4"
+realfft = "3"
 
 [dev-dependencies]
 tempfile = "3"

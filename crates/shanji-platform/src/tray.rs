@@ -3,6 +3,13 @@ use shanji_core::config::AppState;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
+const TRAY_ICON_ID: &str = "shanji-tray";
+const OPEN_ITEM_ID: &str = "open-main";
+const RECORD_ITEM_ID: &str = "toggle-recording";
+const HISTORY_ITEM_ID: &str = "open-history";
+const SETTINGS_ITEM_ID: &str = "open-settings";
+const QUIT_ITEM_ID: &str = "quit-app";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrayAction {
     ShowMainWindow,
@@ -142,11 +149,11 @@ pub fn build_tray_menu(app_name: &str, state: AppState, minimize_to_tray: bool) 
 impl TrayRuntime {
     pub fn new(model: &TrayMenuModel) -> Result<Self, String> {
         let menu = Menu::new();
-        let open_item = MenuItem::with_id("open-main", "Open Shanji", true, None);
-        let record_item = MenuItem::with_id("toggle-recording", "Start recording", true, None);
-        let history_item = MenuItem::with_id("open-history", "Open history", true, None);
-        let settings_item = MenuItem::with_id("open-settings", "Open settings", true, None);
-        let quit_item = MenuItem::with_id("quit-app", "Quit", true, None);
+        let open_item = MenuItem::with_id(OPEN_ITEM_ID, "Open Shanji", true, None);
+        let record_item = MenuItem::with_id(RECORD_ITEM_ID, "Start recording", true, None);
+        let history_item = MenuItem::with_id(HISTORY_ITEM_ID, "Open history", true, None);
+        let settings_item = MenuItem::with_id(SETTINGS_ITEM_ID, "Open settings", true, None);
+        let quit_item = MenuItem::with_id(QUIT_ITEM_ID, "Quit", true, None);
         let separator_a = PredefinedMenuItem::separator();
         let separator_b = PredefinedMenuItem::separator();
 
@@ -162,6 +169,7 @@ impl TrayRuntime {
         .map_err(|err| format!("Failed to build tray menu: {}", err))?;
 
         let tray_icon = TrayIconBuilder::new()
+            .with_id(TRAY_ICON_ID)
             .with_icon(icon_for_state(&model.icon_state).map_err(|err| err.to_string())?)
             .with_tooltip(&model.tooltip)
             .with_menu(Box::new(menu))
@@ -253,6 +261,36 @@ impl TrayRuntime {
         }
 
         events
+    }
+}
+
+pub fn translate_menu_event(event: MenuEvent) -> Option<PlatformTrayEvent> {
+    match event.id.0.as_str() {
+        OPEN_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::ShowMainWindow)),
+        RECORD_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::ToggleRecording)),
+        HISTORY_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::OpenHistory)),
+        SETTINGS_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::OpenSettings)),
+        QUIT_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::Quit)),
+        _ => None,
+    }
+}
+
+pub fn translate_tray_icon_event(event: TrayIconEvent) -> Option<PlatformTrayEvent> {
+    if event.id().0 != TRAY_ICON_ID {
+        return None;
+    }
+
+    match event {
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        }
+        | TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+        } => Some(PlatformTrayEvent::PrimaryClick),
+        _ => None,
     }
 }
 

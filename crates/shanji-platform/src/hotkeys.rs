@@ -3,6 +3,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use serde::{Deserialize, Serialize};
 use shanji_core::config::HotkeyConfig;
 use std::collections::HashMap;
+use std::sync::{OnceLock, RwLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HotkeyAction {
@@ -189,6 +190,16 @@ pub struct HotkeyRuntime {
     bindings: HashMap<u32, RegisteredHotkey>,
 }
 
+static ACTIVE_BINDINGS: OnceLock<RwLock<HashMap<u32, RegisteredHotkey>>> = OnceLock::new();
+
+fn active_bindings() -> &'static RwLock<HashMap<u32, RegisteredHotkey>> {
+    ACTIVE_BINDINGS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn replace_active_bindings(bindings: HashMap<u32, RegisteredHotkey>) {
+    *active_bindings().write().unwrap() = bindings;
+}
+
 impl HotkeyRuntime {
     pub fn register(config: &HotkeyConfig) -> Result<Self, String> {
         let manager = GlobalHotKeyManager::new()
@@ -216,6 +227,8 @@ impl HotkeyRuntime {
                 },
             );
         }
+
+        replace_active_bindings(bindings.clone());
 
         Ok(Self {
             _manager: manager,
@@ -258,6 +271,32 @@ impl HotkeyRuntime {
 
     pub fn registered_count(&self) -> usize {
         self.bindings.len()
+    }
+}
+
+impl Drop for HotkeyRuntime {
+    fn drop(&mut self) {
+        replace_active_bindings(HashMap::new());
+    }
+}
+
+pub fn translate_global_event(event: GlobalHotKeyEvent) -> Option<PlatformHotkeyEvent> {
+    let binding = active_bindings().read().unwrap().get(&event.id).copied()?;
+
+    match (binding.trigger, event.state) {
+        (HotkeyTrigger::Press, HotKeyState::Pressed) => Some(PlatformHotkeyEvent {
+            action: binding.action,
+            state: HotkeyEventState::Pressed,
+        }),
+        (HotkeyTrigger::PressAndRelease, HotKeyState::Pressed) => Some(PlatformHotkeyEvent {
+            action: binding.action,
+            state: HotkeyEventState::Pressed,
+        }),
+        (HotkeyTrigger::PressAndRelease, HotKeyState::Released) => Some(PlatformHotkeyEvent {
+            action: binding.action,
+            state: HotkeyEventState::Released,
+        }),
+        _ => None,
     }
 }
 

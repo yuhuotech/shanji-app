@@ -27,6 +27,18 @@ impl AppPaths {
         self.data_dir.join("hotwords")
     }
 
+    pub fn builtin_hotwords_dir(&self) -> PathBuf {
+        self.hotwords_dir().join("builtin")
+    }
+
+    pub fn user_hotwords_dir(&self) -> PathBuf {
+        self.hotwords_dir().join("user")
+    }
+
+    pub fn imported_hotwords_dir(&self) -> PathBuf {
+        self.hotwords_dir().join("imported")
+    }
+
     pub fn temp_dir(&self) -> PathBuf {
         self.data_dir.join("temp")
     }
@@ -40,6 +52,9 @@ impl AppPaths {
         std::fs::create_dir_all(&self.data_dir)?;
         std::fs::create_dir_all(self.models_dir())?;
         std::fs::create_dir_all(self.hotwords_dir())?;
+        std::fs::create_dir_all(self.builtin_hotwords_dir())?;
+        std::fs::create_dir_all(self.user_hotwords_dir())?;
+        std::fs::create_dir_all(self.imported_hotwords_dir())?;
         std::fs::create_dir_all(self.temp_dir())?;
         std::fs::create_dir_all(self.recordings_dir())?;
         Ok(())

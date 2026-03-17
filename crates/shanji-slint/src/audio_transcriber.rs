@@ -186,7 +186,10 @@ fn run_live_asr(
         .map_err(|e| e.to_string())?;
 
     let hotword_inventory = hotwords::load_all_enabled_with_paths(&paths).unwrap_or_else(|err| {
-        log::warn!("Failed to load hotword libraries, continuing without them: {}", err);
+        log::warn!(
+            "Failed to load hotword libraries, continuing without them: {}",
+            err
+        );
         Vec::new()
     });
     let text_config = TextProcessingConfig {
@@ -199,7 +202,13 @@ fn run_live_asr(
         let vad_model_dir = model::get_model_dir_with_paths(&paths, "silero-vad");
         let vad_model_path = vad_model_dir.join("silero_vad.onnx");
         match vad::ensure_vad_model(&vad_model_path) {
-            Ok(()) => match VadDetector::new(&vad_model_path, config.audio.vad_threshold, config.audio.vad_end_threshold, config.audio.min_speech_frames, config.audio.silence_timeout_ms) {
+            Ok(()) => match VadDetector::new(
+                &vad_model_path,
+                config.audio.vad_threshold,
+                config.audio.vad_end_threshold,
+                config.audio.min_speech_frames,
+                config.audio.silence_timeout_ms,
+            ) {
                 Ok(v) => Some(v),
                 Err(e) => {
                     log::warn!("VAD init failed, running without VAD: {}", e);
@@ -220,8 +229,12 @@ fn run_live_asr(
         config.asr.refine_enabled
     );
 
-    let mut live_engine =
-        build_engine(&paths, &config, &text_config.hotwords, &config.asr.live_model_id)?;
+    let mut live_engine = build_engine(
+        &paths,
+        &config,
+        &text_config.hotwords,
+        &config.asr.live_model_id,
+    )?;
     let mut refine_worker = if config.asr.refine_enabled
         && model::is_model_downloaded_with_paths(&paths, &config.asr.refine_model_id)
     {
@@ -309,9 +322,12 @@ fn run_live_asr(
                                     &mut live_engine,
                                     &mut current_segment_audio,
                                     &mut segment_overlap_audio,
+                                    &mut current_segment_leading_pause_ms,
+                                    &mut pending_segment,
                                     &mut current_partial,
-                                    &segments,
-                                    pending_segment.as_ref(),
+                                    &mut segments,
+                                    &mut next_segment_id,
+                                    refine_worker.as_mut(),
                                     &err,
                                 );
                             }
@@ -341,16 +357,18 @@ fn run_live_asr(
                                         &mut live_engine,
                                         &mut current_segment_audio,
                                         &mut segment_overlap_audio,
+                                        &mut current_segment_leading_pause_ms,
+                                        &mut pending_segment,
                                         &mut current_partial,
-                                        &segments,
-                                        pending_segment.as_ref(),
+                                        &mut segments,
+                                        &mut next_segment_id,
+                                        refine_worker.as_mut(),
                                         &err,
                                     );
                                 }
                             }
                             VadEvent::Silence => {
-                                accumulated_silence_ms =
-                                    accumulated_silence_ms.saturating_add(32);
+                                accumulated_silence_ms = accumulated_silence_ms.saturating_add(32);
                                 if !current_segment_audio.is_empty() || !current_partial.is_empty()
                                 {
                                     log::info!(
@@ -377,9 +395,12 @@ fn run_live_asr(
                                         &mut live_engine,
                                         &mut current_segment_audio,
                                         &mut segment_overlap_audio,
+                                        &mut current_segment_leading_pause_ms,
+                                        &mut pending_segment,
                                         &mut current_partial,
-                                        &segments,
-                                        pending_segment.as_ref(),
+                                        &mut segments,
+                                        &mut next_segment_id,
+                                        refine_worker.as_mut(),
                                         &err,
                                     );
                                 }
@@ -402,9 +423,12 @@ fn run_live_asr(
                             &mut live_engine,
                             &mut current_segment_audio,
                             &mut segment_overlap_audio,
+                            &mut current_segment_leading_pause_ms,
+                            &mut pending_segment,
                             &mut current_partial,
-                            &segments,
-                            pending_segment.as_ref(),
+                            &mut segments,
+                            &mut next_segment_id,
+                            refine_worker.as_mut(),
                             &err,
                         );
                     }
@@ -891,17 +915,62 @@ fn recover_live_segment(
     live_engine: &mut AsrEngine,
     current_segment_audio: &mut Vec<f32>,
     segment_overlap_audio: &mut Vec<f32>,
+    current_segment_leading_pause_ms: &mut u32,
+    pending_segment: &mut Option<PendingSegment>,
     current_partial: &mut String,
-    segments: &[TranscriptSegment],
-    pending_segment: Option<&PendingSegment>,
+    segments: &mut Vec<TranscriptSegment>,
+    next_segment_id: &mut u64,
+    refine_worker: Option<&mut RefineWorker>,
     err: &str,
 ) {
     log::warn!("Live ASR chunk failed, resetting active segment: {}", err);
+    let mut fallback_text = current_partial.trim().to_string();
+    let mut segment_audio = std::mem::take(current_segment_audio);
+    let mut leading_pause_ms = *current_segment_leading_pause_ms;
+
     live_engine.reset();
-    current_segment_audio.clear();
     segment_overlap_audio.clear();
     current_partial.clear();
-    sync_runtime_transcript(text_config, segments, pending_segment, "");
+
+    if !fallback_text.is_empty() {
+        if let Some(previous) = pending_segment.take() {
+            let mut merged_audio = previous.audio;
+            merged_audio.extend_from_slice(&segment_audio);
+            segment_audio = merged_audio;
+            leading_pause_ms = previous.leading_pause_ms;
+            fallback_text = format!("{}{}", previous.live_text, fallback_text);
+        }
+
+        if segment_audio.len() < MIN_REFINE_SEGMENT_SAMPLES {
+            log::info!(
+                "Recovered live segment as pending text after failure: samples={}, text='{}'",
+                segment_audio.len(),
+                fallback_text
+            );
+            *pending_segment = Some(PendingSegment {
+                leading_pause_ms,
+                audio: segment_audio,
+                live_text: fallback_text,
+            });
+        } else {
+            log::info!(
+                "Recovered live segment as committed text after failure: samples={}, text='{}'",
+                segment_audio.len(),
+                fallback_text
+            );
+            push_segment(
+                segments,
+                next_segment_id,
+                refine_worker,
+                leading_pause_ms,
+                segment_audio,
+                fallback_text,
+            );
+        }
+    }
+
+    *current_segment_leading_pause_ms = 0;
+    sync_runtime_transcript(text_config, segments, pending_segment.as_ref(), "");
     state::set_state(AppState::Recording);
     state::set_status_message(format!("实时转写分段异常，已自动恢复: {}", err));
 }
@@ -919,18 +988,12 @@ fn maybe_rewrite_text(config: &AppConfig, text: &str) -> Option<String> {
             Ok(rewritten) if !rewritten.is_empty() => Some(rewritten),
             Ok(_) => None,
             Err(err) => {
-                state::set_status_message(format!(
-                    "LLM 润色失败，已保留原文: {}",
-                    err
-                ));
+                state::set_status_message(format!("LLM 润色失败，已保留原文: {}", err));
                 None
             }
         },
         Err(err) => {
-            state::set_status_message(format!(
-                "LLM 润色不可用，已保留原文: {}",
-                err
-            ));
+            state::set_status_message(format!("LLM 润色不可用，已保留原文: {}", err));
             None
         }
     }

@@ -1,4 +1,5 @@
 import { Button, ScrollView } from "std-widgets.slint";
+import { SettingsPage, SettingsSection, HotwordLibraryCard, HistoryCardData } from "settings-window.slint";
 
 // ── Reusable: small coloured icon box used in card section headers ──────────
 component SectionIcon inherits Rectangle {
@@ -241,6 +242,43 @@ export component AppWindow inherits Window {
     in-out property <string> rewrite-text: "";
     in-out property <string> tray-summary-text: "";
     in-out property <string> live-asr-text: "";
+    in-out property <bool> show-settings-page: false;
+    in-out property <SettingsSection> active-section: SettingsSection.Asr;
+
+    // settings page state
+    in-out property <string> live-model-id: "paraformer-zh-streaming";
+    in-out property <string> live-model-size-text: "约 220 MB";
+    in-out property <bool>   live-model-downloaded: false;
+    in-out property <bool>   live-model-downloading: false;
+    in-out property <float>  live-model-download-progress: 0.0;
+    in-out property <string> live-model-download-status-text: "";
+    in-out property <bool>   refine-asr-enabled: false;
+    in-out property <string> refine-model-id: "paraformer-zh";
+    in-out property <string> refine-model-size-text: "约 240 MB";
+    in-out property <bool>   refine-model-downloaded: false;
+    in-out property <bool>   refine-model-downloading: false;
+    in-out property <float>  refine-model-download-progress: 0.0;
+    in-out property <string> refine-model-download-status-text: "";
+    in property  <[HotwordLibraryCard]> hotword-libraries: [];
+    in-out property <string> hotword-stats-text: "共 0 个词库";
+    in-out property <string> hotword-dir-text: "";
+    in-out property <string> hotword-hint-text: "";
+    in property  <[string]>  audio-devices: [];
+    in-out property <int>    audio-device-index: 0;
+    in-out property <string> mic-test-status: "";
+    in-out property <bool>   llm-enabled: false;
+    in-out property <string> llm-base-url: "https://api.openai.com/v1";
+    in-out property <string> llm-model-name: "gpt-4o-mini";
+    in-out property <string> llm-system-prompt: "";
+    in-out property <string> punct-style-text: "zh";
+    in-out property <string> append-content-text: "space";
+    in-out property <bool>   overlay-visible: false;
+    in-out property <string> theme-text: "system";
+    in-out property <string> hotkey-summary-text: "未设置";
+    in-out property <int>    github-proxy-index: 0;
+    in property  <[HistoryCardData]> history-records: [];
+    in-out property <string> app-version-text: "v0.1";
+    in-out property <string> config-path-text: "";
 
     // Equal column width: (inner_content_width - 2*spacing) / 3
     // inner = VerticalLayout.width(= min(max(W-40,360),1180)) - 2*padding(20px) = VW - 40
@@ -251,9 +289,36 @@ export component AppWindow inherits Window {
     callback refresh-requested();
     callback open-history-requested();
     callback open-settings-requested();
+    callback close-settings-requested();
     callback toggle-live-asr-requested();
     callback toggle-mic-monitor-requested();
     callback request-mic-permission();
+    callback toggle-refine-asr-requested();
+    callback download-live-model-requested();
+    callback download-refine-model-requested();
+    callback toggle-hotword-library-requested(string);
+    callback open-hotword-dir-requested();
+    callback select-audio-device-requested(int);
+    callback test-mic-requested();
+    callback toggle-rewrite-requested();
+    callback set-llm-base-url(string);
+    callback set-llm-api-key(string);
+    callback set-llm-model-name(string);
+    callback set-llm-system-prompt(string);
+    callback cycle-punct-style-requested();
+    callback cycle-append-content-requested();
+    callback toggle-overlay-requested();
+    callback cycle-theme-requested();
+    callback record-hotkey-requested();
+    callback cycle-github-proxy-requested();
+    callback refresh-history-requested();
+    callback clear-history-requested();
+    callback play-audio-requested(int);
+    callback retranscribe-requested(int);
+    callback copy-record-requested(int);
+    callback paste-record-requested(int);
+    callback delete-record-requested(int);
+    callback clear-session-requested();
 
     title: app-name;
     width: 960px;
@@ -264,7 +329,77 @@ export component AppWindow inherits Window {
     Rectangle {
         background: #edf1f6;
 
-        ScrollView {
+        if root.show-settings-page: SettingsPage {
+            width: parent.width;
+            height: parent.height;
+            show-back-button: true;
+
+            active-section <=> root.active-section;
+            live-model-id <=> root.live-model-id;
+            live-model-size-text <=> root.live-model-size-text;
+            live-model-downloaded <=> root.live-model-downloaded;
+            live-model-downloading <=> root.live-model-downloading;
+            live-model-download-progress <=> root.live-model-download-progress;
+            live-model-download-status-text <=> root.live-model-download-status-text;
+            refine-asr-enabled <=> root.refine-asr-enabled;
+            refine-model-id <=> root.refine-model-id;
+            refine-model-size-text <=> root.refine-model-size-text;
+            refine-model-downloaded <=> root.refine-model-downloaded;
+            refine-model-downloading <=> root.refine-model-downloading;
+            refine-model-download-progress <=> root.refine-model-download-progress;
+            refine-model-download-status-text <=> root.refine-model-download-status-text;
+            hotword-libraries <=> root.hotword-libraries;
+            hotword-stats-text <=> root.hotword-stats-text;
+            hotword-dir-text <=> root.hotword-dir-text;
+            hotword-hint-text <=> root.hotword-hint-text;
+            audio-devices <=> root.audio-devices;
+            audio-device-index <=> root.audio-device-index;
+            mic-test-status <=> root.mic-test-status;
+            llm-enabled <=> root.llm-enabled;
+            llm-base-url <=> root.llm-base-url;
+            llm-model-name <=> root.llm-model-name;
+            llm-system-prompt <=> root.llm-system-prompt;
+            punct-style-text <=> root.punct-style-text;
+            append-content-text <=> root.append-content-text;
+            overlay-visible <=> root.overlay-visible;
+            theme-text <=> root.theme-text;
+            hotkey-summary-text <=> root.hotkey-summary-text;
+            github-proxy-index <=> root.github-proxy-index;
+            history-records <=> root.history-records;
+            history-stats-text <=> root.history-stats-text;
+            app-version-text <=> root.app-version-text;
+            config-path-text <=> root.config-path-text;
+
+            back-requested => { root.close-settings-requested(); }
+            toggle-refine-asr-requested => { root.toggle-refine-asr-requested(); }
+            download-live-model-requested => { root.download-live-model-requested(); }
+            download-refine-model-requested => { root.download-refine-model-requested(); }
+            toggle-hotword-library-requested(id) => { root.toggle-hotword-library-requested(id); }
+            open-hotword-dir-requested => { root.open-hotword-dir-requested(); }
+            select-audio-device-requested(index) => { root.select-audio-device-requested(index); }
+            test-mic-requested => { root.test-mic-requested(); }
+            toggle-rewrite-requested => { root.toggle-rewrite-requested(); }
+            set-llm-base-url(url) => { root.set-llm-base-url(url); }
+            set-llm-api-key(key) => { root.set-llm-api-key(key); }
+            set-llm-model-name(model) => { root.set-llm-model-name(model); }
+            set-llm-system-prompt(prompt) => { root.set-llm-system-prompt(prompt); }
+            cycle-punct-style-requested => { root.cycle-punct-style-requested(); }
+            cycle-append-content-requested => { root.cycle-append-content-requested(); }
+            toggle-overlay-requested => { root.toggle-overlay-requested(); }
+            cycle-theme-requested => { root.cycle-theme-requested(); }
+            record-hotkey-requested => { root.record-hotkey-requested(); }
+            cycle-github-proxy-requested => { root.cycle-github-proxy-requested(); }
+            refresh-history-requested => { root.refresh-history-requested(); }
+            clear-history-requested => { root.clear-history-requested(); }
+            play-audio-requested(id) => { root.play-audio-requested(id); }
+            retranscribe-requested(id) => { root.retranscribe-requested(id); }
+            copy-record-requested(id) => { root.copy-record-requested(id); }
+            paste-record-requested(id) => { root.paste-record-requested(id); }
+            delete-record-requested(id) => { root.delete-record-requested(id); }
+            clear-session-requested => { root.clear-session-requested(); }
+        }
+
+        if !root.show-settings-page: ScrollView {
             width: parent.width;
             height: parent.height;
 

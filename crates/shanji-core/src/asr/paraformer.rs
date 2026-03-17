@@ -162,12 +162,7 @@ impl OnlineDecoderCache {
                 let width = dims.get(2).copied().unwrap_or(10).max(1) as usize;
                 Some((
                     suffix,
-                    Self::zeroed(
-                        name,
-                        format!("out_cache_{}", suffix),
-                        channels,
-                        width,
-                    ),
+                    Self::zeroed(name, format!("out_cache_{}", suffix), channels, width),
                 ))
             })
             .collect::<Vec<_>>();
@@ -183,9 +178,10 @@ impl OnlineDecoderCache {
     }
 
     fn tensor(&self) -> Result<DynTensor> {
-        Tensor::from_array(
-            ([1usize, self.channels, self.width], self.data.clone().into_boxed_slice()),
-        )
+        Tensor::from_array((
+            [1usize, self.channels, self.width],
+            self.data.clone().into_boxed_slice(),
+        ))
         .map(|tensor| tensor.upcast())
         .map_err(|e| AppError::Asr(format!("Failed to create decoder cache tensor: {}", e)))
     }
@@ -582,7 +578,13 @@ fn uses_online_streaming_interface(encoder: &Session, decoder: Option<&Session>)
         .map(|output| output.name())
         .collect::<Vec<_>>();
     let decoder_inputs = decoder
-        .map(|session| session.inputs().iter().map(|input| input.name()).collect::<Vec<_>>())
+        .map(|session| {
+            session
+                .inputs()
+                .iter()
+                .map(|input| input.name())
+                .collect::<Vec<_>>()
+        })
         .unwrap_or_default();
 
     encoder_outputs.contains(&"enc")
@@ -753,12 +755,32 @@ impl ParaformerDecoder {
 }
 
 /// Streaming Paraformer ASR
+///
+/// Implements the FunASR streaming protocol:
+/// - Each encoder call receives `left_context + stride + right_context` frames
+/// - Alphas for look-back (first `left_context`) and look-ahead (last `right_context`)
+///   are zeroed before CIF processing
+/// - Full encoder output (all frames) is passed to the decoder
+/// - Feature cache of `left_context + right_context` frames is maintained between chunks
 pub struct StreamingParaformer {
     runtime: StreamingRuntime,
-    /// Feature buffer for accumulating frames
+    /// Feature buffer for accumulating LFR frames until we have `stride` frames
     feature_buffer: VecDeque<Vec<f32>>,
-    /// Chunk size in frames (default 67 frames ~ 1 second)
+    /// Stride: number of new LFR frames per chunk (e.g. 10)
     chunk_size: usize,
+    /// Left context frames (look-back, e.g. 5)
+    left_context: usize,
+    /// Right context frames (look-ahead, e.g. 5)
+    right_context: usize,
+    /// Cached feature frames from previous chunk: left_context + right_context frames.
+    /// Initialized to zeros for the first chunk.
+    feature_cache: Vec<Vec<f32>>,
+    /// Feature dimension (e.g. 560 for LFR features)
+    feat_dim: usize,
+    /// Whether the cache has been initialized
+    cache_initialized: bool,
+    /// Counter for diagnostic logging
+    chunk_index: usize,
 }
 
 impl StreamingParaformer {
@@ -766,14 +788,35 @@ impl StreamingParaformer {
         encoder: Session,
         decoder: Option<Session>,
         chunk_size: usize,
+        encoder_left_context: usize,
         tail_threshold: f32,
     ) -> Result<Self> {
+        // Right context equals left context for standard paraformer streaming
+        let right_context = encoder_left_context;
         let runtime = if uses_online_streaming_interface(&encoder, decoder.as_ref()) {
+            // Dump all encoder inputs/outputs for diagnostics
+            let enc_inputs: Vec<String> = encoder.inputs().iter().map(|i| {
+                format!("{}:{:?}", i.name(), i.dtype())
+            }).collect();
+            let enc_outputs: Vec<String> = encoder.outputs().iter().map(|o| {
+                format!("{}:{:?}", o.name(), o.dtype())
+            }).collect();
+            log::info!("[DIAG] Online encoder inputs: {:?}", enc_inputs);
+            log::info!("[DIAG] Online encoder outputs: {:?}", enc_outputs);
+
             let decoder = decoder.ok_or_else(|| {
                 AppError::Asr(
                     "Official online streaming Paraformer requires a decoder model".to_string(),
                 )
             })?;
+            let dec_inputs: Vec<String> = decoder.inputs().iter().map(|i| {
+                format!("{}:{:?}", i.name(), i.dtype())
+            }).collect();
+            let dec_outputs: Vec<String> = decoder.outputs().iter().map(|o| {
+                format!("{}:{:?}", o.name(), o.dtype())
+            }).collect();
+            log::info!("[DIAG] Online decoder inputs: {:?}", dec_inputs);
+            log::info!("[DIAG] Online decoder outputs: {:?}", dec_outputs);
             let decoder_caches = OnlineDecoderCache::from_decoder_session(&decoder)?;
             let hidden_size = decoder
                 .inputs()
@@ -802,10 +845,22 @@ impl StreamingParaformer {
             }
         };
 
+        log::info!(
+            "StreamingParaformer: stride={}, left_context={}, right_context={}, total_encoder_input={}",
+            chunk_size, encoder_left_context, right_context,
+            encoder_left_context + chunk_size + right_context
+        );
+
         Ok(Self {
             runtime,
             feature_buffer: VecDeque::new(),
             chunk_size,
+            left_context: encoder_left_context,
+            right_context,
+            feature_cache: Vec::new(),
+            feat_dim: 0,
+            cache_initialized: false,
+            chunk_index: 0,
         })
     }
 
@@ -858,6 +913,9 @@ impl StreamingParaformer {
             }
         }
         self.feature_buffer.clear();
+        self.feature_cache.clear();
+        self.cache_initialized = false;
+        self.chunk_index = 0;
     }
 
     fn process_chunk_internal(
@@ -873,7 +931,8 @@ impl StreamingParaformer {
 
                 let (encoder_out, _lens) = encoder.encode(chunk, true)?;
                 if let Some(decoder) = decoder {
-                    let ctc_logits = decoder.decode(&encoder_out, &[encoder_out.shape()[1] as i64])?;
+                    let ctc_logits =
+                        decoder.decode(&encoder_out, &[encoder_out.shape()[1] as i64])?;
                     let tokens = decoder.greedy_decode(&ctc_logits, 0);
                     return Ok(Some(tokens));
                 }
@@ -887,20 +946,71 @@ impl StreamingParaformer {
                 last_encoder_out,
                 last_encoder_len,
             } => {
+                let left_ctx = self.left_context;
+                let right_ctx = self.right_context;
+                let cache_size = left_ctx + right_ctx;
+                let chunk_idx = self.chunk_index;
+                self.chunk_index += 1;
+
                 let (encoder_out, encoder_out_lens, alphas) = if chunk.is_empty() {
                     (None, last_encoder_len.clone(), Vec::new())
                 } else {
-                    let (enc, enc_len, alphas) = run_online_encoder(encoder, chunk)?;
+                    // Initialize feature dimension and zero-cache on first chunk
+                    if !self.cache_initialized && cache_size > 0 {
+                        let dim = chunk.first().map(|f| f.len()).unwrap_or(560);
+                        self.feat_dim = dim;
+                        // Initialize cache with zero frames (no prior context)
+                        self.feature_cache = vec![vec![0.0f32; dim]; cache_size];
+                        self.cache_initialized = true;
+                    }
+
+                    // Build encoder input: [cache] + [new stride frames]
+                    // Total = left_context + right_context + stride = cache_size + stride
+                    let encoder_input = if cache_size > 0 && self.cache_initialized {
+                        let mut combined = self.feature_cache.clone();
+                        combined.extend_from_slice(chunk);
+                        combined
+                    } else {
+                        chunk.to_vec()
+                    };
+
+                    // Update cache: last `cache_size` frames from the combined input
+                    if cache_size > 0 {
+                        let total = encoder_input.len();
+                        let start = total.saturating_sub(cache_size);
+                        self.feature_cache = encoder_input[start..].to_vec();
+                    }
+
+                    let (enc, enc_len, mut all_alphas) =
+                        run_online_encoder(encoder, &encoder_input)?;
+
+                    let enc_frames = enc.shape()[1];
+                    let alpha_len = all_alphas.len();
+
+                    // Zero out look-back alphas (first left_context positions)
+                    for i in 0..left_ctx.min(alpha_len) {
+                        all_alphas[i] = 0.0;
+                    }
+                    // Zero out look-ahead alphas (last right_context positions)
+                    let suf_start = (left_ctx + self.chunk_size).min(alpha_len);
+                    for i in suf_start..alpha_len {
+                        all_alphas[i] = 0.0;
+                    }
+
+                    log::info!(
+                        "[DIAG] chunk#{}: input_frames={} (cache={} + new={}), enc_out={}, alphas_len={}, zeroed=[0..{}]+[{}..{}]",
+                        chunk_idx, encoder_input.len(), cache_size, chunk.len(),
+                        enc_frames, alpha_len, left_ctx.min(alpha_len), suf_start, alpha_len
+                    );
+
+                    // Pass FULL encoder output (not trimmed) to decoder
                     *last_encoder_out = Some(enc.clone());
                     *last_encoder_len = enc_len.clone();
-                    (Some(enc), enc_len, alphas)
+                    (Some(enc), enc_len, all_alphas)
                 };
 
-                let acoustic_embeds = cif_state.build_acoustic_embeds(
-                    encoder_out.as_ref(),
-                    &alphas,
-                    is_final,
-                )?;
+                let acoustic_embeds =
+                    cif_state.build_acoustic_embeds(encoder_out.as_ref(), &alphas, is_final)?;
 
                 let Some((acoustic_embeds, acoustic_embeds_len)) = acoustic_embeds else {
                     return Ok(None);
@@ -948,8 +1058,7 @@ mod tests {
                 0.1, 0.8, 0.05, 0.03, 0.02, // frame 0 -> token 1
                 0.1, 0.8, 0.05, 0.03, 0.02, // frame 1 -> token 1 (repeat, should collapse)
                 0.7, 0.1, 0.1, 0.05, 0.05, // frame 2 -> token 0 (blank)
-                0.05, 0.05, 0.8, 0.05,
-                0.05, // frame 3 -> token 2
+                0.05, 0.05, 0.8, 0.05, 0.05, // frame 3 -> token 2
             ],
         )
         .unwrap();

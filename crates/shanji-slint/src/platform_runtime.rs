@@ -1,8 +1,8 @@
 use shanji_core::config::{self, HotkeyConfig};
 use shanji_core::paths;
 use shanji_core::state;
-use shanji_platform::hotkeys::{HotkeyRuntime, PlatformHotkeyEvent};
-use shanji_platform::tray::{self, PlatformTrayEvent, TrayRuntime};
+use shanji_platform::hotkeys::HotkeyRuntime;
+use shanji_platform::tray::{self, TrayRuntime};
 
 pub struct PlatformRuntime {
     hotkeys: Option<HotkeyRuntime>,
@@ -10,6 +10,7 @@ pub struct PlatformRuntime {
     hotkey_signature: String,
     tray_signature: String,
     last_error: Option<String>,
+    initialized: bool,
 }
 
 impl PlatformRuntime {
@@ -20,12 +21,16 @@ impl PlatformRuntime {
             hotkey_signature: String::new(),
             tray_signature: String::new(),
             last_error: None,
+            initialized: false,
         }
     }
 
     pub fn sync(&mut self) -> Result<(), String> {
         let paths = paths::standard_app_paths("shanji").map_err(|err| err.to_string())?;
-        config::init_config(&paths).map_err(|err| err.to_string())?;
+        if !self.initialized {
+            config::init_config(&paths).map_err(|err| err.to_string())?;
+            self.initialized = true;
+        }
         let config = config::get_config(&paths).map_err(|err| err.to_string())?;
         let hotkey_signature = hotkey_signature(&config.hotkeys);
         let runtime = state::get_runtime_snapshot();
@@ -69,20 +74,6 @@ impl PlatformRuntime {
 
         self.last_error = None;
         Ok(())
-    }
-
-    pub fn poll_hotkey_events(&self) -> Vec<PlatformHotkeyEvent> {
-        self.hotkeys
-            .as_ref()
-            .map(|runtime| runtime.poll_events())
-            .unwrap_or_default()
-    }
-
-    pub fn poll_tray_events(&self) -> Vec<PlatformTrayEvent> {
-        self.tray
-            .as_ref()
-            .map(|runtime| runtime.poll_events())
-            .unwrap_or_default()
     }
 }
 

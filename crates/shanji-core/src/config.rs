@@ -1,6 +1,30 @@
 use crate::error::{AppError, Result};
 use crate::paths::AppPaths;
 use serde::{Deserialize, Serialize};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Mutex, OnceLock, RwLock};
+
+static CONFIG_CACHE: OnceLock<RwLock<Option<AppConfig>>> = OnceLock::new();
+static CONFIG_EVENT_LISTENERS: OnceLock<Mutex<Vec<Sender<()>>>> = OnceLock::new();
+
+fn config_cache() -> &'static RwLock<Option<AppConfig>> {
+    CONFIG_CACHE.get_or_init(|| RwLock::new(None))
+}
+
+fn config_event_listeners() -> &'static Mutex<Vec<Sender<()>>> {
+    CONFIG_EVENT_LISTENERS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn notify_config_changed() {
+    let mut listeners = config_event_listeners().lock().unwrap();
+    listeners.retain(|tx| tx.send(()).is_ok());
+}
+
+pub fn subscribe_config_events() -> Receiver<()> {
+    let (tx, rx) = mpsc::channel();
+    config_event_listeners().lock().unwrap().push(tx);
+    rx
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -369,20 +393,30 @@ pub fn init_config(paths: &AppPaths) -> Result<()> {
 }
 
 pub fn get_config(paths: &AppPaths) -> Result<AppConfig> {
-    let config_path = paths.config_file();
-
-    if !config_path.exists() {
-        return Ok(AppConfig::default());
+    // 先查内存缓存，命中则直接返回，避免每次读磁盘
+    if let Some(cached) = config_cache().read().unwrap().as_ref() {
+        return Ok(cached.clone());
     }
 
-    let content = std::fs::read_to_string(config_path).map_err(|e| AppError::Io(e.to_string()))?;
-    let config = serde_json::from_str(&content).map_err(|e| AppError::Config(e.to_string()))?;
+    let config_path = paths.config_file();
+    let config = if config_path.exists() {
+        let content =
+            std::fs::read_to_string(config_path).map_err(|e| AppError::Io(e.to_string()))?;
+        serde_json::from_str(&content).map_err(|e| AppError::Config(e.to_string()))?
+    } else {
+        AppConfig::default()
+    };
+
+    *config_cache().write().unwrap() = Some(config.clone());
     Ok(config)
 }
 
 pub fn save_config(paths: &AppPaths, config: &AppConfig) -> Result<()> {
     let json = serde_json::to_string_pretty(config).map_err(|e| AppError::Config(e.to_string()))?;
     std::fs::write(paths.config_file(), json).map_err(|e| AppError::Io(e.to_string()))?;
+    // 写入后同步更新内存缓存，下次 get_config 直接命中
+    *config_cache().write().unwrap() = Some(config.clone());
+    notify_config_changed();
     Ok(())
 }
 
