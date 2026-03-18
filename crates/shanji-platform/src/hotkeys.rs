@@ -3,7 +3,12 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use serde::{Deserialize, Serialize};
 use shanji_core::config::HotkeyConfig;
 use std::collections::HashMap;
-use std::sync::{OnceLock, RwLock};
+use std::collections::VecDeque;
+use std::sync::{Mutex, OnceLock, RwLock};
+
+#[cfg(target_os = "macos")]
+#[path = "hotkeys_macos.rs"]
+mod hotkeys_macos;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HotkeyAction {
@@ -125,6 +130,14 @@ pub fn summarize_hotkeys(config: &HotkeyConfig) -> HotkeySummary {
 }
 
 pub fn bindings_from_config(config: &HotkeyConfig) -> Vec<HotkeyBinding> {
+    #[cfg(target_os = "macos")]
+    let definitions = [(
+        HotkeyAction::PushToTalk,
+        config.push_to_talk.as_str(),
+        HotkeyTrigger::PressAndRelease,
+    )];
+
+    #[cfg(not(target_os = "macos"))]
     let definitions = [
         (
             HotkeyAction::ToggleRecording,
@@ -186,27 +199,54 @@ struct RegisteredHotkey {
 }
 
 pub struct HotkeyRuntime {
-    _manager: GlobalHotKeyManager,
+    _manager: Option<GlobalHotKeyManager>,
     bindings: HashMap<u32, RegisteredHotkey>,
+    #[cfg(target_os = "macos")]
+    _native: Option<hotkeys_macos::NativeHotkeyRuntime>,
 }
 
 static ACTIVE_BINDINGS: OnceLock<RwLock<HashMap<u32, RegisteredHotkey>>> = OnceLock::new();
+static NATIVE_EVENTS: OnceLock<Mutex<VecDeque<PlatformHotkeyEvent>>> = OnceLock::new();
 
 fn active_bindings() -> &'static RwLock<HashMap<u32, RegisteredHotkey>> {
     ACTIVE_BINDINGS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn native_events() -> &'static Mutex<VecDeque<PlatformHotkeyEvent>> {
+    NATIVE_EVENTS.get_or_init(|| Mutex::new(VecDeque::new()))
 }
 
 fn replace_active_bindings(bindings: HashMap<u32, RegisteredHotkey>) {
     *active_bindings().write().unwrap() = bindings;
 }
 
+pub(crate) fn push_native_event(event: PlatformHotkeyEvent) {
+    native_events().lock().unwrap().push_back(event);
+}
+
+pub fn drain_native_events() -> Vec<PlatformHotkeyEvent> {
+    let mut queue = native_events().lock().unwrap();
+    queue.drain(..).collect()
+}
+
 impl HotkeyRuntime {
     pub fn register(config: &HotkeyConfig) -> Result<Self, String> {
-        let manager = GlobalHotKeyManager::new()
-            .map_err(|err| format!("Failed to create hotkey manager: {}", err))?;
+        let mut manager = None;
         let mut bindings = HashMap::new();
+        #[cfg(target_os = "macos")]
+        let mut native = None;
 
         for binding in bindings_from_config(config) {
+            #[cfg(target_os = "macos")]
+            if is_native_only_binding(&binding.normalized) {
+                native = Some(hotkeys_macos::NativeHotkeyRuntime::new(
+                    binding.action,
+                    binding.trigger,
+                    config.push_to_talk_hold_delay_ms,
+                )?);
+                continue;
+            }
+
             if is_modifier_only(&binding.normalized) {
                 continue;
             }
@@ -215,8 +255,15 @@ impl HotkeyRuntime {
                 continue;
             };
 
+            if manager.is_none() {
+                manager = Some(
+                    GlobalHotKeyManager::new()
+                        .map_err(|err| format!("Failed to create hotkey manager: {}", err))?,
+                );
+            }
+
             let id = hotkey.id();
-            manager.register(hotkey).map_err(|err| {
+            manager.as_ref().unwrap().register(hotkey).map_err(|err| {
                 format!("Failed to register hotkey {}: {}", binding.accelerator, err)
             })?;
             bindings.insert(
@@ -233,6 +280,8 @@ impl HotkeyRuntime {
         Ok(Self {
             _manager: manager,
             bindings,
+            #[cfg(target_os = "macos")]
+            _native: native,
         })
     }
 
@@ -331,6 +380,7 @@ fn collect_unsupported(bindings: &[HotkeyBinding]) -> Vec<String> {
     bindings
         .iter()
         .filter(|binding| is_modifier_only(&binding.normalized))
+        .filter(|binding| !supports_modifier_only(&binding.normalized))
         .map(|binding| {
             format!(
                 "{} uses modifier-only shortcut {}",
@@ -344,8 +394,35 @@ fn collect_unsupported(bindings: &[HotkeyBinding]) -> Vec<String> {
 fn is_modifier_only(normalized: &str) -> bool {
     matches!(
         normalized,
-        "Command" | "Ctrl" | "Option" | "Shift" | "Command+Shift" | "Command+Option" | "Ctrl+Shift"
+        "Command"
+            | "Ctrl"
+            | "Option"
+            | "Shift"
+            | "RightCommand"
+            | "Command+Shift"
+            | "Command+Option"
+            | "Ctrl+Shift"
     )
+}
+
+#[cfg(target_os = "macos")]
+fn is_native_only_binding(normalized: &str) -> bool {
+    normalized == "RightCommand"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn is_native_only_binding(_normalized: &str) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn supports_modifier_only(normalized: &str) -> bool {
+    normalized == "RightCommand"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn supports_modifier_only(_normalized: &str) -> bool {
+    false
 }
 
 fn normalize_shortcut(shortcut: &str) -> Option<String> {
@@ -374,6 +451,9 @@ fn normalize_shortcut(shortcut: &str) -> Option<String> {
 
 fn normalize_token(token: &str) -> String {
     match token.to_ascii_lowercase().as_str() {
+        "rightcommand" | "right-command" | "right_cmd" | "rightcmd" | "rcmd" => {
+            "RightCommand".to_string()
+        }
         "cmd" | "command" | "meta" | "super" => "Command".to_string(),
         "ctrl" | "control" => "Ctrl".to_string(),
         "alt" | "option" => "Option".to_string(),
@@ -503,6 +583,7 @@ mod tests {
         let config = HotkeyConfig {
             toggle_recording: "Cmd+Shift+R".to_string(),
             push_to_talk: "Command+Shift+R".to_string(),
+            push_to_talk_hold_delay_ms: 500,
             toggle_rewrite: "Ctrl+Shift+R".to_string(),
             open_history: "Ctrl+Shift+H".to_string(),
             open_main: "Ctrl+Shift+S".to_string(),
@@ -510,10 +591,21 @@ mod tests {
 
         let summary = summarize_hotkeys(&config);
 
-        assert_eq!(summary.bindings.len(), 5);
-        assert_eq!(summary.conflicts.len(), 1);
-        assert!(summary.unsupported.is_empty());
-        assert!(summary.inventory_text().contains("Push-to-talk"));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(summary.bindings.len(), 1);
+            assert!(summary.conflicts.is_empty());
+            assert!(summary.unsupported.is_empty());
+            assert!(summary.inventory_text().contains("Push-to-talk"));
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(summary.bindings.len(), 5);
+            assert_eq!(summary.conflicts.len(), 1);
+            assert!(summary.unsupported.is_empty());
+            assert!(summary.inventory_text().contains("Push-to-talk"));
+        }
     }
 
     #[test]
@@ -521,6 +613,7 @@ mod tests {
         let config = HotkeyConfig {
             toggle_recording: "Command".to_string(),
             push_to_talk: "Option".to_string(),
+            push_to_talk_hold_delay_ms: 500,
             toggle_rewrite: "Ctrl+Shift+R".to_string(),
             open_history: "Ctrl+Shift+H".to_string(),
             open_main: "Ctrl+Shift+S".to_string(),
@@ -528,6 +621,29 @@ mod tests {
 
         let summary = summarize_hotkeys(&config);
 
+        #[cfg(target_os = "macos")]
+        assert_eq!(summary.unsupported.len(), 1);
+
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(summary.unsupported.len(), 2);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accepts_right_command_as_supported_single_hotkey() {
+        let config = HotkeyConfig {
+            toggle_recording: String::new(),
+            push_to_talk: "RightCommand".to_string(),
+            push_to_talk_hold_delay_ms: 500,
+            toggle_rewrite: String::new(),
+            open_history: String::new(),
+            open_main: String::new(),
+        };
+
+        let summary = summarize_hotkeys(&config);
+
+        assert_eq!(summary.bindings.len(), 1);
+        assert!(summary.unsupported.is_empty());
+        assert_eq!(summary.bindings[0].normalized, "RightCommand");
     }
 }

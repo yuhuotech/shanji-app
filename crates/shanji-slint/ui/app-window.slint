@@ -1,25 +1,7 @@
 import { Button, ScrollView } from "std-widgets.slint";
 import { SettingsPage, SettingsSection, HotwordLibraryCard, HistoryCardData } from "settings-window.slint";
-
-// ── Reusable: small coloured icon box used in card section headers ──────────
-component SectionIcon inherits Rectangle {
-    in property <string> label;
-    in property <brush> icon-color;
-
-    width: 22px;
-    height: 22px;
-    border-radius: 6px;
-    background: icon-color;
-
-    Text {
-        text: label;
-        color: #ffffff;
-        font-size: 12px;
-        font-weight: 700;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
+import { Icons, SvgIcon } from "icons.slint";
+import { CustomSelector } from "form.slint";
 
 // ── Reusable: shield badge used in permission rows ────────────────────────────
 component ShieldBadge inherits Rectangle {
@@ -87,112 +69,6 @@ component InfoPill inherits Rectangle {
     }
 }
 
-component ProxySelector inherits Rectangle {
-    in property <[string]> model: ["ghfast.top", "gh-proxy.com", "不使用代理"];
-    in-out property <int> current-index: 0;
-    callback selected(int);
-
-    min-width: 148px;
-    height: 28px;
-    border-radius: 9px;
-    background: selector-touch.has-hover ? #f1f5f9 : #f7f9fc;
-    border-width: 1px;
-    border-color: selector-touch.has-hover ? #98a7bb : #d6dee8;
-
-    selector-touch := TouchArea {
-        clicked => {
-            selector-popup.show();
-        }
-    }
-
-    Text {
-        x: 12px;
-        y: (parent.height - self.height) / 2;
-        width: parent.width - 46px;
-        text: root.model[max(0, min(root.current-index, root.model.length - 1))];
-        color: #334155;
-        font-size: 11px;
-        vertical-alignment: center;
-    }
-
-    Rectangle {
-        x: parent.width - self.width - 8px;
-        y: (parent.height - self.height) / 2;
-        width: 18px;
-        height: 18px;
-        border-radius: 5px;
-        background: selector-touch.has-hover ? #dbeafe : #e7eef7;
-
-        Path {
-            x: (parent.width - self.width) / 2;
-            y: (parent.height - self.height) / 2;
-            width: 10px;
-            height: 6px;
-            viewbox-width: 10;
-            viewbox-height: 6;
-            commands: "M 1 1 L 5 5 L 9 1";
-            stroke: #2563eb;
-            stroke-width: 1.4px;
-            fill: transparent;
-        }
-    }
-
-    selector-popup := PopupWindow {
-        x: 0;
-        y: root.height + 6px;
-        width: root.width;
-        height: root.model.length * 36px + 10px;
-
-        Rectangle {
-            border-radius: 12px;
-            background: #ffffff;
-            border-width: 1px;
-            border-color: #d6dee8;
-
-            VerticalLayout {
-                padding: 5px;
-                spacing: 4px;
-
-                for value[index] in root.model : Rectangle {
-                    height: 36px;
-                    border-radius: 8px;
-                    background: item-touch.has-hover || index == root.current-index ? #eef4ff : #ffffff;
-
-                    HorizontalLayout {
-                        padding-left: 12px;
-                        padding-right: 10px;
-                        spacing: 8px;
-
-                        Text {
-                            text: value;
-                            color: index == root.current-index ? #1d4ed8 : #334155;
-                            font-size: 12px;
-                            font-weight: index == root.current-index ? 600 : 500;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-
-                        if index == root.current-index : Text {
-                            text: "✓";
-                            color: #2563eb;
-                            font-size: 12px;
-                            font-weight: 700;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    item-touch := TouchArea {
-                        clicked => {
-                            root.current-index = index;
-                            root.selected(index);
-                            selector-popup.close();
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
 export component AppWindow inherits Window {
     // ── properties ──────────────────────────────────────────────────────────
@@ -201,7 +77,7 @@ export component AppWindow inherits Window {
     in-out property <string> status-text: "准备就绪";
     in-out property <string> hotkey-hint-title: "按下快捷键开始语音输入";
     in-out property <string> hotkey-hint-body: "把光标放到目标输入框，按住说话，松开后自动转写并粘贴";
-    in-out property <string> hotkey-display-text: "LeftCommand";
+    in-out property <string> hotkey-display-text: "RightCommand";
 
     in-out property <string> model-title-text: "Paraformer 中文";
     in-out property <string> model-desc-text: "中文普通话语音识别";
@@ -273,8 +149,12 @@ export component AppWindow inherits Window {
     in-out property <string> mic-test-status: "";
     in-out property <bool>   llm-enabled: false;
     in-out property <string> llm-base-url: "https://api.openai.com/v1";
+    in-out property <bool>   llm-api-key-saved: false;
     in-out property <string> llm-model-name: "gpt-4o-mini";
     in-out property <string> llm-system-prompt: "";
+    in-out property <string> llm-test-status-text: "";
+    in-out property <int>    llm-test-status-type: 0;
+    in-out property <bool>   llm-testing: false;
     in-out property <string> punct-style-text: "zh";
     in-out property <string> append-content-text: "space";
     in-out property <bool>   overlay-visible: false;
@@ -310,6 +190,7 @@ export component AppWindow inherits Window {
     callback set-llm-api-key(string);
     callback set-llm-model-name(string);
     callback set-llm-system-prompt(string);
+    callback test-llm-api-requested();
     callback cycle-punct-style-requested();
     callback cycle-append-content-requested();
     callback toggle-overlay-requested();
@@ -363,8 +244,12 @@ export component AppWindow inherits Window {
             mic-test-status <=> root.mic-test-status;
             llm-enabled <=> root.llm-enabled;
             llm-base-url <=> root.llm-base-url;
+            llm-api-key-saved <=> root.llm-api-key-saved;
             llm-model-name <=> root.llm-model-name;
             llm-system-prompt <=> root.llm-system-prompt;
+            llm-test-status-text <=> root.llm-test-status-text;
+            llm-test-status-type <=> root.llm-test-status-type;
+            llm-testing <=> root.llm-testing;
             punct-style-text <=> root.punct-style-text;
             append-content-text <=> root.append-content-text;
             overlay-visible <=> root.overlay-visible;
@@ -389,6 +274,7 @@ export component AppWindow inherits Window {
             set-llm-api-key(key) => { root.set-llm-api-key(key); }
             set-llm-model-name(model) => { root.set-llm-model-name(model); }
             set-llm-system-prompt(prompt) => { root.set-llm-system-prompt(prompt); }
+            test-llm-api-requested => { root.test-llm-api-requested(); }
             cycle-punct-style-requested => { root.cycle-punct-style-requested(); }
             cycle-append-content-requested => { root.cycle-append-content-requested(); }
             toggle-overlay-requested => { root.toggle-overlay-requested(); }
@@ -432,18 +318,13 @@ export component AppWindow inherits Window {
                         Rectangle {
                             width: 42px; height: 42px;
                             border-radius: 12px;
-                            background: #2962ff;
+                            clip: true;
 
-                            Path {
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                                width: 22px; height: 22px;
-                                viewbox-width: 24; viewbox-height: 24;
-                                // mic body + stand arc + pole + base
-                                commands: "M 9 12 L 9 5 A 3 3 0 0 1 15 5 L 15 12 A 3 3 0 0 1 9 12 Z M 5 11 A 7 7 0 0 0 19 11 M 12 18 L 12 21 M 9 21 L 15 21";
-                                stroke: #ffffff;
-                                stroke-width: 1.5px;
-                                fill: transparent;
+                            Image {
+                                width: parent.width;
+                                height: parent.height;
+                                source: @image-url("../assets/shanji_logo.png");
+                                image-fit: cover;
                             }
                         }
 
@@ -459,19 +340,16 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             alignment: end;
                             spacing: 4px;
-                            // 刷新：循环箭头 (Feather refresh-cw)
                             GhostIconButton {
-                                icon-path: "M 23 4 L 23 10 L 17 10 M 1 20 L 1 14 L 7 14 M 3.51 9 A 9 9 0 0 1 18.36 5.64 L 23 10 M 1 14 L 5.64 18.36 A 9 9 0 0 0 20.49 15";
+                                icon-path: Icons.refresh;
                                 clicked => { root.refresh-requested(); }
                             }
-                            // 历史：时钟 (Feather clock)
                             GhostIconButton {
-                                icon-path: "M 12 2 A 10 10 0 1 0 12 22 A 10 10 0 0 0 12 2 Z M 12 6 L 12 12 L 16 14";
+                                icon-path: Icons.clock;
                                 clicked => { root.open-history-requested(); }
                             }
-                            // 设置：滑块调节 (Feather sliders)
                             GhostIconButton {
-                                icon-path: "M 4 21 L 4 14 M 4 10 L 4 3 M 12 21 L 12 12 M 12 8 L 12 3 M 20 21 L 20 16 M 20 12 L 20 3 M 1 14 L 7 14 M 9 8 L 15 8 M 17 16 L 23 16";
+                                icon-path: Icons.sliders;
                                 clicked => { root.open-settings-requested(); }
                             }
                         }
@@ -494,7 +372,17 @@ export component AppWindow inherits Window {
                                 width: 46px; height: 46px;
                                 border-radius: 13px;
                                 background: #2962ff;
-                                Text { text: "⌨"; color: #ffffff; horizontal-alignment: center; vertical-alignment: center; font-size: 22px; font-weight: 700; }
+
+                                Path {
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 26px; height: 26px;
+                                    viewbox-width: 24; viewbox-height: 24;
+                                    commands: Icons.keyboard;
+                                    stroke: #ffffff;
+                                    stroke-width: 2px;
+                                    fill: transparent;
+                                }
                             }
 
                             VerticalLayout {
@@ -549,8 +437,8 @@ export component AppWindow inherits Window {
                                 // title row
                                 HorizontalLayout {
                                     spacing: 7px;
-                                    SectionIcon { label: "↓"; icon-color: #0d9488; }
-                                    Text { text: "模型状态"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
+                                    SvgIcon { commands: Icons.zap; icon-color: #0d9488; }
+                                    Text { text: "实时模型（必需）"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                     Text { text: "●"; color: model-ready ? #22c55e : #ef4444; font-size: 9px; vertical-alignment: center; }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
                                     if model-ready : Rectangle {
@@ -612,7 +500,8 @@ export component AppWindow inherits Window {
                                         vertical-alignment: center;
                                     }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
-                                    ProxySelector {
+                                    CustomSelector {
+                                        model: ["ghfast.top", "gh-proxy.com", "不使用代理"];
                                         width: 146px;
                                         current-index: root.github-proxy-current-index;
                                         selected(index) => {
@@ -713,8 +602,8 @@ export component AppWindow inherits Window {
                                 // title row
                                 HorizontalLayout {
                                     spacing: 7px;
-                                    SectionIcon { label: "↑"; icon-color: #f59e0b; }
-                                    Text { text: "纠正模型状态"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
+                                    SvgIcon { commands: Icons.layers; icon-color: #f59e0b; }
+                                    Text { text: "离线模型（可选）"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                     Text {
                                         text: "●";
                                         color: refine-model-downloading ? #3b82f6
@@ -725,48 +614,20 @@ export component AppWindow inherits Window {
                                         vertical-alignment: center;
                                     }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
-                                    if refine-model-downloaded && refine-asr-enabled : Rectangle {
-                                        border-radius: 6px;
-                                        background: #d1fae5;
-                                        border-width: 1px;
-                                        border-color: #6ee7b7;
-                                        HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            padding-top: 3px; padding-bottom: 3px;
-                                            Text { text: "已启用"; color: #065f46; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                    Rectangle {
+                                        width: 36px;
+                                        height: 20px;
+                                        border-radius: 10px;
+                                        background: refine-asr-enabled ? #22c55e : #d1d5db;
+                                        refine-toggle-ta := TouchArea {
+                                            clicked => { root.toggle-refine-asr-requested(); }
                                         }
-                                    }
-                                    if refine-model-downloaded && !refine-asr-enabled : Rectangle {
-                                        border-radius: 6px;
-                                        background: #f3f4f6;
-                                        border-width: 1px;
-                                        border-color: #d1d5db;
-                                        HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            padding-top: 3px; padding-bottom: 3px;
-                                            Text { text: "已停用"; color: #6b7280; font-size: 11px; font-weight: 700; vertical-alignment: center; }
-                                        }
-                                    }
-                                    if refine-model-downloading : Rectangle {
-                                        border-radius: 6px;
-                                        background: #eff6ff;
-                                        border-width: 1px;
-                                        border-color: #93c5fd;
-                                        HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            padding-top: 3px; padding-bottom: 3px;
-                                            Text { text: "下载中"; color: #1d4ed8; font-size: 11px; font-weight: 700; vertical-alignment: center; }
-                                        }
-                                    }
-                                    if !refine-model-downloaded && !refine-model-downloading : Rectangle {
-                                        border-radius: 6px;
-                                        background: #fef3c7;
-                                        border-width: 1px;
-                                        border-color: #fcd34d;
-                                        HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            padding-top: 3px; padding-bottom: 3px;
-                                            Text { text: "未下载"; color: #92400e; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        Rectangle {
+                                            width: 16px; height: 16px;
+                                            border-radius: 8px;
+                                            background: #ffffff;
+                                            x: refine-asr-enabled ? 18px : 2px;
+                                            y: 2px;
                                         }
                                     }
                                 }
@@ -786,43 +647,13 @@ export component AppWindow inherits Window {
                                     InfoPill { label: "语言"; value: refine-model-language-text; }
                                 }
 
-                                // toggle row — only when model is downloaded
-                                if refine-model-downloaded : HorizontalLayout {
-                                    spacing: 10px;
-                                    Text {
-                                        text: "纠正功能";
-                                        color: #374151;
-                                        font-size: 13px;
-                                        font-weight: 600;
-                                        vertical-alignment: center;
-                                        horizontal-stretch: 1;
-                                    }
-                                    Rectangle {
-                                        width: 44px;
-                                        height: 24px;
-                                        border-radius: 12px;
-                                        background: refine-asr-enabled ? #22c55e : #d1d5db;
-                                        refine-toggle-ta := TouchArea {
-                                            clicked => { root.toggle-refine-asr-requested(); }
-                                        }
-                                        Rectangle {
-                                            width: 20px;
-                                            height: 20px;
-                                            border-radius: 10px;
-                                            background: #ffffff;
-                                            x: refine-asr-enabled ? 22px : 2px;
-                                            y: 2px;
-                                        }
-                                    }
-                                }
-
-                                // status badge row
+                                // green: enabled + downloaded
                                 if refine-model-downloaded && refine-asr-enabled : Rectangle {
                                     border-radius: 10px;
                                     background: #dff6e8;
                                     height: 40px;
                                     Text {
-                                        text: "✓  纠正已启用";
+                                        text: "模型已启用已下载";
                                         color: #1a7f45;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
@@ -830,15 +661,17 @@ export component AppWindow inherits Window {
                                         font-weight: 700;
                                     }
                                 }
+
+                                // orange: downloaded + not enabled
                                 if refine-model-downloaded && !refine-asr-enabled : Rectangle {
                                     border-radius: 10px;
-                                    background: #f3f4f6;
+                                    background: #fff7ed;
                                     border-width: 1px;
-                                    border-color: #e5e7eb;
+                                    border-color: #fed7aa;
                                     height: 40px;
                                     Text {
-                                        text: "—  纠正已停用";
-                                        color: #6b7280;
+                                        text: "模型未启用已下载";
+                                        color: #c2410c;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
                                         font-size: 13px;
@@ -870,8 +703,8 @@ export component AppWindow inherits Window {
                                     }
                                 }
 
-                                // download button — not installed, not downloading
-                                if !refine-model-downloaded && !refine-model-downloading : Rectangle {
+                                // download button: enabled but not downloaded
+                                if !refine-model-downloaded && !refine-model-downloading && refine-asr-enabled : Rectangle {
                                     border-radius: 10px;
                                     background: rdl-ta.has-hover ? #dbeafe : #eff6ff;
                                     border-width: 1px;
@@ -881,6 +714,23 @@ export component AppWindow inherits Window {
                                     Text {
                                         text: "↓  下载模型";
                                         color: #1d4ed8;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                    }
+                                }
+
+                                // gray: not enabled, not downloaded
+                                if !refine-model-downloaded && !refine-model-downloading && !refine-asr-enabled : Rectangle {
+                                    border-radius: 10px;
+                                    background: #f3f4f6;
+                                    border-width: 1px;
+                                    border-color: #e5e7eb;
+                                    height: 40px;
+                                    Text {
+                                        text: "模型未启用";
+                                        color: #6b7280;
                                         horizontal-alignment: center;
                                         vertical-alignment: center;
                                         font-size: 13px;
@@ -924,7 +774,7 @@ export component AppWindow inherits Window {
                                 HorizontalLayout {
                                     spacing: 7px;
                                     height: 22px;
-                                    SectionIcon { label: "~"; icon-color: #3b82f6; }
+                                    SvgIcon { commands: Icons.mic; icon-color: #3b82f6; }
                                     Text { text: "麦克风授权"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                     Text { text: "●"; color: mic-ready ? #22c55e : #ef4444; font-size: 9px; vertical-alignment: center; }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
@@ -997,7 +847,7 @@ export component AppWindow inherits Window {
                                 alignment: start; padding: 14px; spacing: 6px;
                                 HorizontalLayout {
                                     spacing: 6px;
-                                    SectionIcon { label: "✓"; icon-color: #16a34a; }
+                                    SvgIcon { commands: Icons.shield-check; icon-color: #16a34a; }
                                     Text { text: "本地离线识别"; color: #15803d; font-size: 13px; font-weight: 700; vertical-alignment: center; }
                                 }
                                 Text {
@@ -1015,7 +865,7 @@ export component AppWindow inherits Window {
                                 alignment: start; padding: 14px; spacing: 6px;
                                 HorizontalLayout {
                                     spacing: 6px;
-                                    SectionIcon { label: "↩"; icon-color: #2563eb; }
+                                    SvgIcon { commands: Icons.send; icon-color: #2563eb; }
                                     Text { text: "全自动粘贴"; color: #1d4ed8; font-size: 13px; font-weight: 700; vertical-alignment: center; }
                                 }
                                 Text {
@@ -1033,7 +883,7 @@ export component AppWindow inherits Window {
                                 alignment: start; padding: 14px; spacing: 6px;
                                 HorizontalLayout {
                                     spacing: 6px;
-                                    SectionIcon { label: "✎"; icon-color: #7c3aed; }
+                                    SvgIcon { commands: Icons.sparkles; icon-color: #7c3aed; }
                                     Text { text: "LLM润色"; color: #6d28d9; font-size: 13px; font-weight: 700; vertical-alignment: center; }
                                 }
                                 Text {
@@ -1057,8 +907,8 @@ export component AppWindow inherits Window {
                                 alignment: start; padding: 18px; spacing: 10px;
                                 HorizontalLayout {
                                     spacing: 7px;
-                                    SectionIcon { label: "↓"; icon-color: #0d9488; }
-                                    Text { text: "模型状态"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
+                                    SvgIcon { commands: Icons.zap; icon-color: #0d9488; }
+                                    Text { text: "实时模型（必需）"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                     Text { text: "●"; color: model-ready ? #22c55e : #ef4444; font-size: 9px; vertical-alignment: center; }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
                                     if model-ready : Rectangle {
@@ -1115,7 +965,8 @@ export component AppWindow inherits Window {
                                         vertical-alignment: center;
                                     }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
-                                    ProxySelector {
+                                    CustomSelector {
+                                        model: ["ghfast.top", "gh-proxy.com", "不使用代理"];
                                         width: 146px;
                                         current-index: root.github-proxy-current-index;
                                         selected(index) => {
@@ -1165,7 +1016,7 @@ export component AppWindow inherits Window {
                             }
                         }
 
-                        // 纠正模型状态
+                        // 离线模型（可选）
                         Rectangle {
                             border-radius: 18px; background: #ffffff;
                             border-width: 1px; border-color: #d7dee8;
@@ -1173,8 +1024,8 @@ export component AppWindow inherits Window {
                                 alignment: start; padding: 18px; spacing: 10px;
                                 HorizontalLayout {
                                     spacing: 7px;
-                                    SectionIcon { label: "↑"; icon-color: #f59e0b; }
-                                    Text { text: "纠正模型状态"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
+                                    SvgIcon { commands: Icons.layers; icon-color: #f59e0b; }
+                                    Text { text: "离线模型（可选）"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                     Text {
                                         text: "●";
                                         color: refine-model-downloading ? #3b82f6
@@ -1184,40 +1035,16 @@ export component AppWindow inherits Window {
                                         font-size: 9px; vertical-alignment: center;
                                     }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
-                                    if refine-model-downloaded && refine-asr-enabled : Rectangle {
-                                        border-radius: 6px; background: #d1fae5;
-                                        border-width: 1px; border-color: #6ee7b7;
-                                        HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            padding-top: 3px; padding-bottom: 3px;
-                                            Text { text: "已启用"; color: #065f46; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                    Rectangle {
+                                        width: 36px; height: 20px; border-radius: 10px;
+                                        background: refine-asr-enabled ? #22c55e : #d1d5db;
+                                        compact-refine-toggle-ta := TouchArea {
+                                            clicked => { root.toggle-refine-asr-requested(); }
                                         }
-                                    }
-                                    if refine-model-downloaded && !refine-asr-enabled : Rectangle {
-                                        border-radius: 6px; background: #f3f4f6;
-                                        border-width: 1px; border-color: #d1d5db;
-                                        HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            padding-top: 3px; padding-bottom: 3px;
-                                            Text { text: "已停用"; color: #6b7280; font-size: 11px; font-weight: 700; vertical-alignment: center; }
-                                        }
-                                    }
-                                    if refine-model-downloading : Rectangle {
-                                        border-radius: 6px; background: #eff6ff;
-                                        border-width: 1px; border-color: #93c5fd;
-                                        HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            padding-top: 3px; padding-bottom: 3px;
-                                            Text { text: "下载中"; color: #1d4ed8; font-size: 11px; font-weight: 700; vertical-alignment: center; }
-                                        }
-                                    }
-                                    if !refine-model-downloaded && !refine-model-downloading : Rectangle {
-                                        border-radius: 6px; background: #fef3c7;
-                                        border-width: 1px; border-color: #fcd34d;
-                                        HorizontalLayout {
-                                            padding-left: 8px; padding-right: 8px;
-                                            padding-top: 3px; padding-bottom: 3px;
-                                            Text { text: "未下载"; color: #92400e; font-size: 11px; font-weight: 700; vertical-alignment: center; }
+                                        Rectangle {
+                                            width: 16px; height: 16px; border-radius: 8px;
+                                            background: #ffffff;
+                                            x: refine-asr-enabled ? 18px : 2px; y: 2px;
                                         }
                                     }
                                 }
@@ -1232,39 +1059,21 @@ export component AppWindow inherits Window {
                                     InfoPill { label: "大小"; value: refine-model-size-text;    }
                                     InfoPill { label: "语言"; value: refine-model-language-text; }
                                 }
-                                if refine-model-downloaded : HorizontalLayout {
-                                    spacing: 10px;
-                                    Text {
-                                        text: "纠正功能"; color: #374151;
-                                        font-size: 13px; font-weight: 600;
-                                        vertical-alignment: center; horizontal-stretch: 1;
-                                    }
-                                    Rectangle {
-                                        width: 44px; height: 24px; border-radius: 12px;
-                                        background: refine-asr-enabled ? #22c55e : #d1d5db;
-                                        compact-refine-toggle-ta := TouchArea {
-                                            clicked => { root.toggle-refine-asr-requested(); }
-                                        }
-                                        Rectangle {
-                                            width: 20px; height: 20px; border-radius: 10px;
-                                            background: #ffffff;
-                                            x: refine-asr-enabled ? 22px : 2px; y: 2px;
-                                        }
-                                    }
-                                }
+                                // green: enabled + downloaded
                                 if refine-model-downloaded && refine-asr-enabled : Rectangle {
                                     border-radius: 10px; background: #dff6e8; height: 40px;
                                     Text {
-                                        text: "✓  纠正已启用"; color: #1a7f45;
+                                        text: "模型已启用已下载"; color: #1a7f45;
                                         horizontal-alignment: center; vertical-alignment: center;
                                         font-size: 13px; font-weight: 700;
                                     }
                                 }
+                                // orange: downloaded + not enabled
                                 if refine-model-downloaded && !refine-asr-enabled : Rectangle {
-                                    border-radius: 10px; background: #f3f4f6;
-                                    border-width: 1px; border-color: #e5e7eb; height: 40px;
+                                    border-radius: 10px; background: #fff7ed;
+                                    border-width: 1px; border-color: #fed7aa; height: 40px;
                                     Text {
-                                        text: "—  纠正已停用"; color: #6b7280;
+                                        text: "模型未启用已下载"; color: #c2410c;
                                         horizontal-alignment: center; vertical-alignment: center;
                                         font-size: 13px; font-weight: 700;
                                     }
@@ -1277,13 +1086,24 @@ export component AppWindow inherits Window {
                                         Rectangle { height: 8px; border-radius: 4px; background: #f59e0b; x: 0; width: parent.width * root.refine-model-download-progress; }
                                     }
                                 }
-                                if !refine-model-downloaded && !refine-model-downloading : Rectangle {
+                                // download button: enabled but not downloaded
+                                if !refine-model-downloaded && !refine-model-downloading && refine-asr-enabled : Rectangle {
                                     border-radius: 10px;
                                     background: crdl-ta.has-hover ? #dbeafe : #eff6ff;
                                     border-width: 1px; border-color: #93c5fd; height: 40px;
                                     crdl-ta := TouchArea { clicked => { root.download-refine-model-requested(); } }
                                     Text {
                                         text: "↓  下载模型"; color: #1d4ed8;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                        font-size: 13px; font-weight: 700;
+                                    }
+                                }
+                                // gray: not enabled, not downloaded
+                                if !refine-model-downloaded && !refine-model-downloading && !refine-asr-enabled : Rectangle {
+                                    border-radius: 10px; background: #f3f4f6;
+                                    border-width: 1px; border-color: #e5e7eb; height: 40px;
+                                    Text {
+                                        text: "模型未启用"; color: #6b7280;
                                         horizontal-alignment: center; vertical-alignment: center;
                                         font-size: 13px; font-weight: 700;
                                     }
@@ -1307,7 +1127,7 @@ export component AppWindow inherits Window {
                                 alignment: start; padding: 18px; spacing: 10px;
                                 HorizontalLayout {
                                     spacing: 7px; height: 22px;
-                                    SectionIcon { label: "~"; icon-color: #3b82f6; }
+                                    SvgIcon { commands: Icons.mic; icon-color: #3b82f6; }
                                     Text { text: "麦克风授权"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
                                     Text { text: "●"; color: mic-ready ? #22c55e : #ef4444; font-size: 9px; vertical-alignment: center; }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }

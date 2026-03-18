@@ -78,6 +78,15 @@ impl PlatformRuntime {
 }
 
 fn hotkey_signature(config: &HotkeyConfig) -> String {
+    #[cfg(target_os = "macos")]
+    {
+        return format!(
+            "{}|{}",
+            config.push_to_talk, config.push_to_talk_hold_delay_ms
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
     [
         config.toggle_recording.as_str(),
         config.push_to_talk.as_str(),

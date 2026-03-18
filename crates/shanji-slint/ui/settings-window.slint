@@ -1,4 +1,6 @@
 import { Button, ScrollView, ListView, LineEdit, TextEdit, CheckBox, ComboBox } from "std-widgets.slint";
+import { Icons } from "icons.slint";
+import { CustomSelector } from "form.slint";
 
 // ── 配色 Palette（浅色模式，in-out 支持将来深色模式切换）─────────────────
 global Palette {
@@ -44,6 +46,7 @@ export struct HotwordLibraryCard {
 // ── 可复用：侧边栏菜单项 ──────────────────────────────────────────────────
 component NavItem inherits Rectangle {
     in property <string> label;
+    in property <string> icon-path;
     in property <bool> active: false;
     callback clicked;
 
@@ -61,6 +64,26 @@ component NavItem inherits Rectangle {
         padding-right: 12px;
         alignment: start;
         spacing: 8px;
+
+        // Icon (16×16, vertically centred in the 38px row)
+        Rectangle {
+            width: 16px;
+            height: 38px;
+            background: transparent;
+
+            Path {
+                x: 0;
+                y: (parent.height - self.height) / 2;
+                width: 16px;
+                height: 16px;
+                viewbox-width: 24;
+                viewbox-height: 24;
+                commands: root.icon-path;
+                stroke: root.active ? Palette.text-primary : Palette.text-secondary;
+                stroke-width: 1.8px;
+                fill: transparent;
+            }
+        }
 
         Text {
             text: root.label;
@@ -151,8 +174,13 @@ export component SettingsPage inherits Rectangle {
     // ── LLM 页属性 ──
     in-out property <bool>   llm-enabled: false;
     in-out property <string> llm-base-url: "https://api.openai.com/v1";
+    in-out property <bool>   llm-api-key-saved: false;
     in-out property <string> llm-model-name: "gpt-4o-mini";
     in-out property <string> llm-system-prompt: "";
+    in-out property <string> llm-test-status-text: "";
+    // 0=未测试/测试中  1=成功  2=失败
+    in-out property <int>    llm-test-status-type: 0;
+    in-out property <bool>   llm-testing: false;
 
     // ── Output 页属性 ──
     in-out property <string> punct-style-text: "zh";
@@ -191,6 +219,7 @@ export component SettingsPage inherits Rectangle {
     callback set-llm-api-key(string);
     callback set-llm-model-name(string);
     callback set-llm-system-prompt(string);
+    callback test-llm-api-requested();
     // Output
     callback cycle-punct-style-requested();
     callback cycle-append-content-requested();
@@ -212,10 +241,19 @@ export component SettingsPage inherits Rectangle {
     callback clear-session-requested();
     callback back-requested();
 
+    defocus-scope := FocusScope { x: 0; y: 0; width: 0; height: 0; }
+
     Rectangle {
         width: parent.width;
         height: parent.height;
         background: Palette.content-bg;
+
+        // 背景点击区域：点击任意空白处让输入框失焦
+        TouchArea {
+            x: 0; y: 0; width: parent.width; height: parent.height;
+            mouse-cursor: default;
+            clicked => { defocus-scope.focus(); }
+        }
 
         HorizontalLayout {
 
@@ -236,37 +274,59 @@ export component SettingsPage inherits Rectangle {
                 VerticalLayout {
                     padding: 0px;
 
-                    // App 信息区
+                    // ── 头部（单一区域）──────────────────────────────────────
                     Rectangle {
                         height: 62px;
+
                         HorizontalLayout {
-                            padding-left: 12px;
+                            padding-left: 16px;
                             padding-right: 16px;
                             alignment: center;
                             spacing: 10px;
 
                             if root.show-back-button: Rectangle {
-                                width: 30px;
-                                height: 30px;
-                                border-radius: 8px;
-                                background: back-touch.has-hover ? Palette.nav-active-bg : transparent;
+                                background: back-ta.has-hover ? Palette.nav-active-bg : transparent;
+                                border-radius: 10px;
+                                horizontal-stretch: 1;
 
-                                back-touch := TouchArea {
+                                back-ta := TouchArea {
                                     clicked => { root.back-requested(); }
                                     mouse-cursor: pointer;
                                 }
 
-                                Text {
-                                    text: "←";
-                                    color: Palette.text-primary;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                    font-size: 16px;
-                                    font-weight: 700;
+                                HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    alignment: start;
+                                    spacing: 8px;
+
+                                    Rectangle {
+                                        width: 20px; height: 62px;
+                                        background: transparent;
+
+                                        Path {
+                                            x: 0;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 20px; height: 20px;
+                                            viewbox-width: 24; viewbox-height: 24;
+                                            commands: Icons.house;
+                                            stroke: Palette.text-primary;
+                                            stroke-width: 2px;
+                                            fill: transparent;
+                                        }
+                                    }
+
+                                    Text {
+                                        text: "返回主页";
+                                        color: Palette.text-primary;
+                                        font-size: 15px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
+                                    }
                                 }
                             }
 
-                            VerticalLayout {
+                            if !root.show-back-button: VerticalLayout {
                                 alignment: center;
                                 spacing: 3px;
                                 Text {
@@ -282,6 +342,7 @@ export component SettingsPage inherits Rectangle {
                                 }
                             }
                         }
+
                         // 底部分割线
                         Rectangle {
                             y: parent.height - 1px;
@@ -299,7 +360,8 @@ export component SettingsPage inherits Rectangle {
                         padding-right: 8px;
                         NavItem {
                             horizontal-stretch: 1;
-                            label: "🎙 语音识别";
+                            icon-path: Icons.mic;
+                            label: "语音识别";
                             active: root.active-section == SettingsSection.Asr;
                             clicked => { root.active-section = SettingsSection.Asr; }
                         }
@@ -310,7 +372,8 @@ export component SettingsPage inherits Rectangle {
                         padding-right: 8px;
                         NavItem {
                             horizontal-stretch: 1;
-                            label: "✨ LLM 润色";
+                            icon-path: Icons.sparkles;
+                            label: "LLM 润色";
                             active: root.active-section == SettingsSection.Llm;
                             clicked => { root.active-section = SettingsSection.Llm; }
                         }
@@ -321,7 +384,8 @@ export component SettingsPage inherits Rectangle {
                         padding-right: 8px;
                         NavItem {
                             horizontal-stretch: 1;
-                            label: "⌨️ 输出";
+                            icon-path: Icons.send;
+                            label: "输出";
                             active: root.active-section == SettingsSection.Output;
                             clicked => { root.active-section = SettingsSection.Output; }
                         }
@@ -332,7 +396,8 @@ export component SettingsPage inherits Rectangle {
                         padding-right: 8px;
                         NavItem {
                             horizontal-stretch: 1;
-                            label: "🔑 快捷键";
+                            icon-path: Icons.keyboard;
+                            label: "快捷键";
                             active: root.active-section == SettingsSection.Hotkeys;
                             clicked => { root.active-section = SettingsSection.Hotkeys; }
                         }
@@ -343,7 +408,8 @@ export component SettingsPage inherits Rectangle {
                         padding-right: 8px;
                         NavItem {
                             horizontal-stretch: 1;
-                            label: "🌐 网络";
+                            icon-path: Icons.globe;
+                            label: "网络";
                             active: root.active-section == SettingsSection.Network;
                             clicked => { root.active-section = SettingsSection.Network; }
                         }
@@ -354,7 +420,8 @@ export component SettingsPage inherits Rectangle {
                         padding-right: 8px;
                         NavItem {
                             horizontal-stretch: 1;
-                            label: "🕑 历史记录";
+                            icon-path: Icons.clock;
+                            label: "历史记录";
                             active: root.active-section == SettingsSection.History;
                             clicked => { root.active-section = SettingsSection.History; }
                         }
@@ -374,7 +441,8 @@ export component SettingsPage inherits Rectangle {
                         padding-right: 8px;
                         NavItem {
                             horizontal-stretch: 1;
-                            label: "ℹ️ 关于";
+                            icon-path: Icons.info;
+                            label: "关于";
                             active: root.active-section == SettingsSection.About;
                             clicked => { root.active-section = SettingsSection.About; }
                         }
@@ -396,6 +464,7 @@ if root.active-section == SettingsSection.Asr: ScrollView {
     VerticalLayout {
         padding: 24px;
         spacing: 20px;
+        alignment: start;
 
         VerticalLayout {
             spacing: 4px;
@@ -409,6 +478,7 @@ if root.active-section == SettingsSection.Asr: ScrollView {
             SectionLabel { label: "实时识别模型"; }
             Rectangle {
             border-radius: 10px;
+            clip: true;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
@@ -425,20 +495,33 @@ if root.active-section == SettingsSection.Asr: ScrollView {
                             Text { text: root.live-model-id; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
                             Text { text: "边说边转录，流式推理，低延迟实时识别"; color: Palette.text-secondary; font-size: 12px; }
                         }
+                        // 状态标签：包裹在透明容器里以实现垂直居中
                         if root.live-model-downloaded && !root.live-model-downloading: Rectangle {
-                            border-radius: 5px; background: #f0fdf4; border-width: 1px; border-color: #bbf7d0;
-                            height: 24px; width: 72px;
-                            Text { text: "✓ 已加载"; color: #16a34a; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            width: 72px; background: transparent;
+                            Rectangle {
+                                width: 72px; height: 24px;
+                                x: 0; y: (parent.height - self.height) / 2;
+                                border-radius: 5px; background: #f0fdf4; border-width: 1px; border-color: #bbf7d0;
+                                Text { text: "✓ 已加载"; color: #16a34a; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
                         }
                         if root.live-model-downloading: Rectangle {
-                            border-radius: 5px; background: #eff6ff; border-width: 1px; border-color: #bfdbfe;
-                            height: 24px; width: 64px;
-                            Text { text: "下载中…"; color: #2563eb; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            width: 64px; background: transparent;
+                            Rectangle {
+                                width: 64px; height: 24px;
+                                x: 0; y: (parent.height - self.height) / 2;
+                                border-radius: 5px; background: #eff6ff; border-width: 1px; border-color: #bfdbfe;
+                                Text { text: "下载中…"; color: #2563eb; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
                         }
                         if !root.live-model-downloaded && !root.live-model-downloading: Rectangle {
-                            border-radius: 5px; background: #fef2f2; border-width: 1px; border-color: #fecaca;
-                            height: 24px; width: 56px;
-                            Text { text: "未下载"; color: Palette.danger; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            width: 56px; background: transparent;
+                            Rectangle {
+                                width: 56px; height: 24px;
+                                x: 0; y: (parent.height - self.height) / 2;
+                                border-radius: 5px; background: #fef2f2; border-width: 1px; border-color: #fecaca;
+                                Text { text: "未下载"; color: Palette.danger; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
                         }
                     }
                     Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
@@ -470,11 +553,10 @@ if root.active-section == SettingsSection.Asr: ScrollView {
                         }
                     }
                 }
-                // 已下载：元数据 footer
+                // 已下载：元数据 footer（无 border-radius，由外层 clip 处理圆角）
                 if root.live-model-downloaded && !root.live-model-downloading: Rectangle {
                     height: 34px;
                     background: #fafafa;
-                    border-radius: 10px;
                     HorizontalLayout {
                         padding-left: 16px; padding-right: 16px;
                         spacing: 20px;
@@ -493,6 +575,7 @@ if root.active-section == SettingsSection.Asr: ScrollView {
             SectionLabel { label: "离线纠正模型"; }
             Rectangle {
             border-radius: 10px;
+            clip: true;
             background: Palette.card-bg;
             border-width: 1px;
             border-color: Palette.border;
@@ -513,9 +596,14 @@ if root.active-section == SettingsSection.Asr: ScrollView {
                                 horizontal-stretch: 1;
                             }
                         }
-                        ToggleSwitch {
-                            checked: root.refine-asr-enabled;
-                            toggled(v) => { root.toggle-refine-asr-requested(); }
+                        // ToggleSwitch 垂直居中
+                        Rectangle {
+                            width: 36px; background: transparent;
+                            ToggleSwitch {
+                                x: 0; y: (parent.height - self.height) / 2;
+                                checked: root.refine-asr-enabled;
+                                toggled(v) => { root.toggle-refine-asr-requested(); }
+                            }
                         }
                     }
                     Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
@@ -531,20 +619,33 @@ if root.active-section == SettingsSection.Asr: ScrollView {
                             Text { text: root.refine-model-id; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
                             Text { text: "整体推理模型，精度高于流式版本"; color: Palette.text-muted; font-size: 11px; }
                         }
+                        // 状态标签：包裹在透明容器里以实现垂直居中
                         if root.refine-model-downloaded && !root.refine-model-downloading: Rectangle {
-                            border-radius: 5px; background: #f0fdf4; border-width: 1px; border-color: #bbf7d0;
-                            height: 24px; width: 72px;
-                            Text { text: "✓ 已加载"; color: #16a34a; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            width: 72px; background: transparent;
+                            Rectangle {
+                                width: 72px; height: 24px;
+                                x: 0; y: (parent.height - self.height) / 2;
+                                border-radius: 5px; background: #f0fdf4; border-width: 1px; border-color: #bbf7d0;
+                                Text { text: "✓ 已加载"; color: #16a34a; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
                         }
                         if root.refine-model-downloading: Rectangle {
-                            border-radius: 5px; background: #eff6ff; border-width: 1px; border-color: #bfdbfe;
-                            height: 24px; width: 64px;
-                            Text { text: "下载中…"; color: #2563eb; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            width: 64px; background: transparent;
+                            Rectangle {
+                                width: 64px; height: 24px;
+                                x: 0; y: (parent.height - self.height) / 2;
+                                border-radius: 5px; background: #eff6ff; border-width: 1px; border-color: #bfdbfe;
+                                Text { text: "下载中…"; color: #2563eb; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
                         }
                         if !root.refine-model-downloaded && !root.refine-model-downloading: Rectangle {
-                            border-radius: 5px; background: #fef2f2; border-width: 1px; border-color: #fecaca;
-                            height: 24px; width: 56px;
-                            Text { text: "未下载"; color: Palette.danger; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            width: 56px; background: transparent;
+                            Rectangle {
+                                width: 56px; height: 24px;
+                                x: 0; y: (parent.height - self.height) / 2;
+                                border-radius: 5px; background: #fef2f2; border-width: 1px; border-color: #fecaca;
+                                Text { text: "未下载"; color: Palette.danger; font-size: 11px; horizontal-alignment: center; vertical-alignment: center; }
+                            }
                         }
                     }
                     Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
@@ -700,11 +801,18 @@ if root.active-section == SettingsSection.Asr: ScrollView {
                             Text { text: "输入设备"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
                             Text { text: "选择用于语音输入的麦克风设备"; color: Palette.text-muted; font-size: 11px; }
                         }
-                        ComboBox {
-                            model: root.audio-devices;
-                            current-index: root.audio-device-index;
-                            selected(device-name) => {
-                                root.select-audio-device-requested(self.current-index);
+                        Rectangle {
+                            min-width: 160px;
+                            min-height: 30px;
+                            VerticalLayout {
+                                alignment: center;
+                                CustomSelector {
+                                    model: root.audio-devices;
+                                    current-index: root.audio-device-index;
+                                    selected(index) => {
+                                        root.select-audio-device-requested(index);
+                                    }
+                                }
                             }
                         }
                     }
@@ -720,7 +828,14 @@ if root.active-section == SettingsSection.Asr: ScrollView {
                             color: Palette.text-primary;
                             font-size: 12px; vertical-alignment: center;
                         }
-                        Button { text: "测试麦克风"; clicked => { root.test-mic-requested(); } }
+                        Rectangle {
+                            min-width: 88px;
+                            min-height: 30px;
+                            VerticalLayout {
+                                alignment: center;
+                                Button { text: "测试麦克风"; clicked => { root.test-mic-requested(); } }
+                            }
+                        }
                     }
                 }
             }
@@ -736,95 +851,184 @@ if root.active-section == SettingsSection.Llm: ScrollView {
     VerticalLayout {
         padding: 24px;
         spacing: 20px;
+        alignment: start;
 
+        // 页面标题
         VerticalLayout {
             spacing: 4px;
             Text { text: "LLM 润色"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
             Text { text: "通过大模型对转录文本进行改写"; color: Palette.text-muted; font-size: 13px; }
         }
 
-        Rectangle {
-            border-radius: 10px;
-            background: Palette.card-bg;
-            border-width: 1px;
-            border-color: Palette.border;
-            height: 54px;
-            HorizontalLayout {
-                padding-left: 16px; padding-right: 16px;
-                alignment: space-between;
-                VerticalLayout {
-                    alignment: center; spacing: 2px;
-                    Text { text: "启用 LLM 润色"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
-                    Text { text: "关闭时直接输出 ASR 原始结果"; color: Palette.text-muted; font-size: 12px; }
-                }
-                ToggleSwitch {
-                    checked: root.llm-enabled;
-                    toggled(v) => { root.toggle-rewrite-requested(); }
-                }
-            }
-        }
-
-        SectionLabel { label: "API 配置"; }
-        Rectangle {
-            border-radius: 10px;
-            background: Palette.card-bg;
-            border-width: 1px;
-            border-color: Palette.border;
-            VerticalLayout {
-                padding-top: 14px;
-                padding-bottom: 14px;
-                padding-left: 16px;
-                padding-right: 16px;
-                spacing: 12px;
-
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "API Base URL"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 13px; font-weight: 400; }
-                    LineEdit {
-                        text: root.llm-base-url;
-                        enabled: root.llm-enabled;
-                        edited(v) => { root.set-llm-base-url(v); }
+        // ① 功能开关
+        VerticalLayout {
+            spacing: 6px;
+            SectionLabel { label: "功能开关"; }
+            Rectangle {
+                border-radius: 10px;
+                clip: true;
+                background: Palette.card-bg;
+                border-width: 1px;
+                border-color: Palette.border;
+                height: 62px;
+                HorizontalLayout {
+                    padding-left: 16px; padding-right: 16px;
+                    alignment: space-between;
+                    VerticalLayout {
+                        alignment: center; spacing: 3px;
+                        Text { text: "启用 LLM 润色"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                        Text { text: "关闭时直接输出 ASR 原始结果"; color: Palette.text-muted; font-size: 12px; }
                     }
-                }
-                VerticalLayout {
-                    spacing: 4px;
-                    HorizontalLayout {
-                        alignment: space-between;
-                        Text { text: "API Key"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 13px; font-weight: 400; }
-                        Text { text: "存储在系统钥匙串"; color: Palette.text-muted; font-size: 11px; vertical-alignment: center; }
-                    }
-                    LineEdit {
-                        input-type: InputType.password;
-                        placeholder-text: "sk-...";
-                        enabled: root.llm-enabled;
-                        accepted(v) => { root.set-llm-api-key(v); }
-                    }
-                }
-                VerticalLayout {
-                    spacing: 4px;
-                    Text { text: "模型名称"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 13px; font-weight: 400; }
-                    LineEdit {
-                        text: root.llm-model-name;
-                        enabled: root.llm-enabled;
-                        edited(v) => { root.set-llm-model-name(v); }
+                    Rectangle {
+                        width: 36px; background: transparent;
+                        ToggleSwitch {
+                            x: 0; y: (parent.height - self.height) / 2;
+                            checked: root.llm-enabled;
+                            toggled(v) => { root.toggle-rewrite-requested(); defocus-scope.focus(); }
+                        }
                     }
                 }
             }
         }
 
-        SectionLabel { label: "润色提示词"; }
-        Rectangle {
-            border-radius: 10px;
-            background: Palette.card-bg;
-            border-width: 1px;
-            border-color: Palette.border;
-            height: 120px;
-            TextEdit {
-                width: 100%;
-                height: 100%;
-                text: root.llm-system-prompt;
-                enabled: root.llm-enabled;
-                edited(v) => { root.set-llm-system-prompt(v); }
+        // ② API 配置
+        VerticalLayout {
+            spacing: 6px;
+            SectionLabel { label: "API 配置"; }
+            Rectangle {
+                border-radius: 10px;
+                clip: true;
+                background: Palette.card-bg;
+                border-width: 1px;
+                border-color: Palette.border;
+                height: api-card.min-height;
+                api-card := VerticalLayout {
+                    // API Base URL 行
+                    Rectangle {
+                        height: 54px;
+                        HorizontalLayout {
+                            padding-left: 16px; padding-right: 16px; spacing: 12px;
+                            Text {
+                                text: "API Base URL";
+                                width: 90px;
+                                color: root.llm-enabled ? Palette.text-primary : Palette.text-muted;
+                                font-size: 13px; vertical-alignment: center;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; background: transparent;
+                                LineEdit {
+                                    width: parent.width;
+                                    y: (parent.height - self.height) / 2;
+                                    text: root.llm-base-url;
+                                    enabled: root.llm-enabled;
+                                    edited(v) => { root.set-llm-base-url(v); }
+                                }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                    }
+                    // API Key 行
+                    Rectangle {
+                        height: 54px;
+                        HorizontalLayout {
+                            padding-left: 16px; padding-right: 16px; spacing: 12px;
+                            Rectangle {
+                                width: 90px; background: transparent;
+                                VerticalLayout {
+                                    alignment: center; spacing: 2px;
+                                    Text { text: "API Key"; color: root.llm-enabled ? Palette.text-primary : Palette.text-muted; font-size: 13px; }
+                                    Text { text: "本地加密存储"; color: Palette.text-muted; font-size: 11px; }
+                                }
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; background: transparent;
+                                LineEdit {
+                                    width: parent.width;
+                                    y: (parent.height - self.height) / 2;
+                                    input-type: InputType.password;
+                                    placeholder-text: root.llm-api-key-saved ? "••••••••••••••••••• (已保存，输入新值覆盖)" : "sk-...";
+                                    enabled: root.llm-enabled;
+                                    edited(v) => {
+                                        if v != "" { root.set-llm-api-key(v); }
+                                    }
+                                }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                    }
+                    // 模型名称行
+                    Rectangle {
+                        height: 54px;
+                        HorizontalLayout {
+                            padding-left: 16px; padding-right: 16px; spacing: 12px;
+                            Text {
+                                text: "模型名称";
+                                width: 90px;
+                                color: root.llm-enabled ? Palette.text-primary : Palette.text-muted;
+                                font-size: 13px; vertical-alignment: center;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1; background: transparent;
+                                LineEdit {
+                                    width: parent.width;
+                                    y: (parent.height - self.height) / 2;
+                                    text: root.llm-model-name;
+                                    enabled: root.llm-enabled;
+                                    edited(v) => { root.set-llm-model-name(v); }
+                                }
+                            }
+                        }
+                        Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                    }
+                    // 测试连接行
+                    Rectangle {
+                        height: 46px;
+                        background: #fafafa;
+                        HorizontalLayout {
+                            padding-left: 16px; padding-right: 16px;
+                            alignment: space-between;
+                            Text {
+                                text: root.llm-test-status-text == "" ? "尚未测试" : root.llm-test-status-text;
+                                color: root.llm-test-status-type == 1 ? #22c55e
+                                     : root.llm-test-status-type == 2 ? #ef4444
+                                     : Palette.text-muted;
+                                font-size: 12px; vertical-alignment: center;
+                            }
+                            Rectangle {
+                                min-width: 88px; min-height: 30px;
+                                VerticalLayout {
+                                    alignment: center;
+                                    Button {
+                                        text: root.llm-testing ? "测试中…" : "测试连接";
+                                        enabled: root.llm-enabled && !root.llm-testing;
+                                        clicked => { root.test-llm-api-requested(); defocus-scope.focus(); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ③ 润色提示词
+        VerticalLayout {
+            spacing: 6px;
+            SectionLabel { label: "润色提示词"; }
+            Rectangle {
+                border-radius: 10px;
+                clip: true;
+                background: Palette.card-bg;
+                border-width: 1px;
+                border-color: Palette.border;
+                height: 140px;
+                TextEdit {
+                    width: 100%;
+                    height: 100%;
+                    text: root.llm-system-prompt;
+                    enabled: root.llm-enabled;
+                    edited(v) => { root.set-llm-system-prompt(v); }
+                }
             }
         }
     }
@@ -837,6 +1041,7 @@ if root.active-section == SettingsSection.Output: ScrollView {
     VerticalLayout {
         padding: 24px;
         spacing: 20px;
+        alignment: start;
 
         VerticalLayout {
             spacing: 4px;
@@ -915,6 +1120,7 @@ if root.active-section == SettingsSection.Hotkeys: ScrollView {
     VerticalLayout {
         padding: 24px;
         spacing: 20px;
+        alignment: start;
 
         VerticalLayout {
             spacing: 4px;
@@ -950,6 +1156,7 @@ if root.active-section == SettingsSection.Network: ScrollView {
     VerticalLayout {
         padding: 24px;
         spacing: 20px;
+        alignment: start;
 
         VerticalLayout {
             spacing: 4px;
@@ -1102,6 +1309,7 @@ if root.active-section == SettingsSection.About: ScrollView {
     VerticalLayout {
         padding: 24px;
         spacing: 20px;
+        alignment: start;
 
         VerticalLayout {
             spacing: 4px;

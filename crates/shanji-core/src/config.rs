@@ -76,6 +76,9 @@ impl Default for AudioConfig {
         Self {
             device_name: None,
             gain: 1.0,
+            #[cfg(target_os = "macos")]
+            recording_mode: "push-to-talk".to_string(),
+            #[cfg(not(target_os = "macos"))]
             recording_mode: "toggle".to_string(),
             vad_threshold: 0.45,
             vad_end_threshold: 0.3,
@@ -120,6 +123,13 @@ pub struct LlmProvider {
     pub name: String,
     pub base_url: String,
     pub model: String,
+    #[serde(default)]
+    pub api_key_encrypted: String,
+    /// 0=未测试 1=成功 2=失败
+    #[serde(default)]
+    pub test_status: i32,
+    #[serde(default)]
+    pub test_status_text: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,9 +193,23 @@ impl Default for OutputConfig {
 pub struct HotkeyConfig {
     pub toggle_recording: String,
     pub push_to_talk: String,
+    #[serde(default = "default_push_to_talk_hold_delay_ms")]
+    pub push_to_talk_hold_delay_ms: u32,
     pub toggle_rewrite: String,
     pub open_history: String,
     pub open_main: String,
+}
+
+fn default_push_to_talk_hold_delay_ms() -> u32 {
+    #[cfg(target_os = "macos")]
+    {
+        return 500;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        0
+    }
 }
 
 impl Default for HotkeyConfig {
@@ -193,11 +217,12 @@ impl Default for HotkeyConfig {
         #[cfg(target_os = "macos")]
         {
             Self {
-                toggle_recording: "Cmd+Shift+Space".to_string(),
-                push_to_talk: "Option+Space".to_string(),
-                toggle_rewrite: "Cmd+Shift+R".to_string(),
-                open_history: "Cmd+Shift+H".to_string(),
-                open_main: "Cmd+Shift+S".to_string(),
+                toggle_recording: String::new(),
+                push_to_talk: "RightCommand".to_string(),
+                push_to_talk_hold_delay_ms: 500,
+                toggle_rewrite: String::new(),
+                open_history: String::new(),
+                open_main: String::new(),
             }
         }
         #[cfg(not(target_os = "macos"))]
@@ -205,6 +230,7 @@ impl Default for HotkeyConfig {
             Self {
                 toggle_recording: "Alt+Space".to_string(),
                 push_to_talk: "Alt+R".to_string(),
+                push_to_talk_hold_delay_ms: 0,
                 toggle_rewrite: "Ctrl+Shift+R".to_string(),
                 open_history: "Ctrl+Shift+H".to_string(),
                 open_main: "Ctrl+Shift+S".to_string(),

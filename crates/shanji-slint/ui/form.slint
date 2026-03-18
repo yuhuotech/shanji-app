@@ -1,0 +1,117 @@
+// ── form.slint — 自定义表单组件库 ────────────────────────────────────────────
+// 用于替换 Slint 内置控件，保持全局视觉风格一致。
+
+// ── CustomSelector: 风格统一的下拉选择框 ────────────────────────────────────
+// 替代内置 ComboBox，消除平台默认样式差异。
+export component CustomSelector inherits Rectangle {
+    in property <[string]> model;
+    in-out property <int> current-index: 0;
+    callback selected(int);
+
+    min-width: 148px;
+    height: 28px;
+    border-radius: 9px;
+    background: sel-touch.has-hover ? #f1f5f9 : #f7f9fc;
+    border-width: 1px;
+    border-color: sel-touch.has-hover ? #98a7bb : #d6dee8;
+
+    sel-touch := TouchArea {
+        clicked => { sel-popup.show(); }
+    }
+
+    // 当前选中项文字
+    Text {
+        x: 12px;
+        y: (parent.height - self.height) / 2;
+        width: parent.width - 46px;
+        text: root.model.length > 0
+            ? root.model[max(0, min(root.current-index, root.model.length - 1))]
+            : "";
+        color: #334155;
+        font-size: 11px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    // 右侧 chevron 按钮
+    Rectangle {
+        x: parent.width - self.width - 8px;
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        border-radius: 5px;
+        background: sel-touch.has-hover ? #dbeafe : #e7eef7;
+
+        Path {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 10px;
+            height: 6px;
+            viewbox-width: 10;
+            viewbox-height: 6;
+            commands: "M 1 1 L 5 5 L 9 1";
+            stroke: #2563eb;
+            stroke-width: 1.4px;
+            fill: transparent;
+        }
+    }
+
+    // 弹出列表
+    sel-popup := PopupWindow {
+        x: 0;
+        y: root.height + 6px;
+        width: root.width;
+        height: min(root.model.length * 36px + 10px, 220px);
+
+        Rectangle {
+            border-radius: 12px;
+            background: #ffffff;
+            border-width: 1px;
+            border-color: #d6dee8;
+
+            VerticalLayout {
+                padding: 5px;
+                spacing: 2px;
+
+                for value[index] in root.model: Rectangle {
+                    height: 36px;
+                    border-radius: 8px;
+                    background: item-touch.has-hover || index == root.current-index
+                        ? #eef4ff : #ffffff;
+
+                    HorizontalLayout {
+                        padding-left: 12px;
+                        padding-right: 10px;
+                        spacing: 8px;
+
+                        Text {
+                            text: value;
+                            color: index == root.current-index ? #1d4ed8 : #334155;
+                            font-size: 12px;
+                            font-weight: index == root.current-index ? 600 : 500;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+
+                        if index == root.current-index: Text {
+                            text: "✓";
+                            color: #2563eb;
+                            font-size: 12px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                        }
+                    }
+
+                    item-touch := TouchArea {
+                        clicked => {
+                            root.current-index = index;
+                            root.selected(index);
+                            sel-popup.close();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

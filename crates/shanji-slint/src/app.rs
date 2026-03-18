@@ -280,8 +280,11 @@ pub struct SettingsWindowSnapshot {
     pub config_path_text: String,
     pub llm_enabled: bool,
     pub llm_base_url: String,
+    pub llm_api_key_saved: bool,
     pub llm_model_name: String,
     pub llm_system_prompt: String,
+    pub llm_test_status: i32,
+    pub llm_test_status_text: String,
     pub overlay_enabled: bool,
     // ASR — live model
     pub live_model_id: String,
@@ -410,7 +413,7 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         crate::model_downloader::is_downloading(&cfg.asr.refine_model_id);
     let audio_devices = cached_audio_devices();
     let selected_device = selected_audio_device_name(&cfg, &audio_devices);
-    let hotkey_display = cfg.hotkeys.toggle_recording.clone();
+    let hotkey_display = primary_hotkey_display(&cfg);
     let audio_level = runtime.audio_level.clamp(0.0, 1.0);
 
     Ok(UiSnapshot {
@@ -419,7 +422,10 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         status_text: runtime.status_message.clone(),
         hotkey_hint_title: "按下快捷键开始语音输入".to_string(),
         hotkey_hint_body: match cfg.audio.recording_mode.as_str() {
-            "push-to-talk" => "把光标放到目标输入框，按住说话，松开后自动转写并粘贴".to_string(),
+            "push-to-talk" => format!(
+                "把光标放到目标输入框，按住说话超过 {}ms 后开始录音，松开后自动转写并粘贴",
+                cfg.hotkeys.push_to_talk_hold_delay_ms
+            ),
             _ => "把光标放到目标输入框，按一次开始说话，再按一次结束转写并粘贴".to_string(),
         },
         hotkey_display_text: hotkey_display,
@@ -655,6 +661,12 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
             .first()
             .map(|p| p.base_url.clone())
             .unwrap_or_default(),
+        llm_api_key_saved: cfg
+            .rewrite
+            .providers
+            .first()
+            .map(|p| !p.api_key_encrypted.is_empty())
+            .unwrap_or(false),
         llm_model_name: cfg
             .rewrite
             .providers
@@ -670,6 +682,8 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
                 .map(|p| p.system_prompt.clone())
                 .unwrap_or_default()
         },
+        llm_test_status: cfg.rewrite.providers.first().map(|p| p.test_status).unwrap_or(0),
+        llm_test_status_text: cfg.rewrite.providers.first().map(|p| p.test_status_text.clone()).unwrap_or_default(),
         overlay_enabled: runtime.overlay_visible,
         // live model
         live_model_id: cfg.asr.live_model_id.clone(),
@@ -776,6 +790,11 @@ pub struct MainWindowDownloadSnapshot {
     pub model_download_progress: f32,
     pub model_download_status_text: String,
     pub model_download_error_text: String,
+    pub refine_model_ready: bool,
+    pub refine_model_downloading: bool,
+    pub refine_model_download_progress: f32,
+    pub refine_model_download_status_text: String,
+    pub refine_model_download_error_text: String,
 }
 
 pub fn get_main_window_download_progress() -> Option<MainWindowDownloadSnapshot> {
@@ -786,6 +805,7 @@ pub fn get_main_window_download_progress() -> Option<MainWindowDownloadSnapshot>
     let paths = resolve_app_paths();
     let cfg = config::get_config(&paths).ok()?;
     let live_model = active_live_model_info(&paths, &cfg);
+    let refine_model = refine_model_info(&paths, &cfg);
 
     Some(MainWindowDownloadSnapshot {
         model_ready: live_model
@@ -799,6 +819,21 @@ pub fn get_main_window_download_progress() -> Option<MainWindowDownloadSnapshot>
         ),
         model_download_error_text: crate::model_downloader::get_last_error(&cfg.asr.live_model_id)
             .unwrap_or_default(),
+        refine_model_ready: refine_model
+            .as_ref()
+            .map(|m| m.is_downloaded)
+            .unwrap_or(false),
+        refine_model_downloading: crate::model_downloader::is_downloading(&cfg.asr.refine_model_id),
+        refine_model_download_progress: crate::model_downloader::get_progress(
+            &cfg.asr.refine_model_id,
+        ),
+        refine_model_download_status_text: crate::model_downloader::get_status_text(
+            &cfg.asr.refine_model_id,
+        ),
+        refine_model_download_error_text: crate::model_downloader::get_last_error(
+            &cfg.asr.refine_model_id,
+        )
+        .unwrap_or_default(),
     })
 }
 
@@ -985,16 +1020,35 @@ pub fn retranscribe_history(record_id: i32) -> Result<(), String> {
     open_path_in_system(&audio_path)
 }
 
+fn reset_llm_test_status(cfg: &mut shanji_core::config::AppConfig) {
+    if let Some(p) = cfg.rewrite.providers.first_mut() {
+        p.test_status = 0;
+        p.test_status_text = String::new();
+    }
+}
+
+fn ensure_custom_provider(cfg: &mut shanji_core::config::AppConfig) {
+    if cfg.rewrite.providers.is_empty() {
+        cfg.rewrite.providers.push(shanji_core::config::LlmProvider {
+            id: "custom".to_string(),
+            name: "自定义".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            api_key_encrypted: String::new(),
+            test_status: 0,
+            test_status_text: String::new(),
+        });
+        cfg.rewrite.active_provider_id = "custom".to_string();
+    }
+}
+
 pub fn set_llm_base_url(url: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    let provider = cfg
-        .rewrite
-        .providers
-        .first_mut()
-        .ok_or_else(|| "No LLM provider configured".to_string())?;
-    provider.base_url = url;
+    ensure_custom_provider(&mut cfg);
+    cfg.rewrite.providers[0].base_url = url;
+    reset_llm_test_status(&mut cfg);
     shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
 }
 
@@ -1002,28 +1056,20 @@ pub fn set_llm_model_name(model: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    let provider = cfg
-        .rewrite
-        .providers
-        .first_mut()
-        .ok_or_else(|| "No LLM provider configured".to_string())?;
-    provider.model = model;
+    ensure_custom_provider(&mut cfg);
+    cfg.rewrite.providers[0].model = model;
+    reset_llm_test_status(&mut cfg);
     shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
 }
 
 pub fn set_llm_api_key(key: String) -> Result<(), String> {
     let paths = resolve_app_paths();
-    let cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    let provider_id = cfg
-        .rewrite
-        .providers
-        .first()
-        .map(|p| p.id.clone())
-        .unwrap_or_else(|| cfg.rewrite.active_provider_id.clone());
-    if provider_id.is_empty() {
-        return Err("No LLM provider configured".to_string());
-    }
-    shanji_core::llm::save_api_key(&provider_id, &key).map_err(|e| e.to_string())
+    shanji_core::config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
+    ensure_custom_provider(&mut cfg);
+    cfg.rewrite.providers[0].api_key_encrypted = shanji_core::llm::encrypt_api_key(&key);
+    reset_llm_test_status(&mut cfg);
+    shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
 }
 
 pub fn set_llm_system_prompt(prompt: String) -> Result<(), String> {
@@ -1055,6 +1101,42 @@ pub fn set_llm_system_prompt(prompt: String) -> Result<(), String> {
         cfg.rewrite.active_prompt_id = "custom".to_string();
     }
     shanji_core::config::save_config(&paths, &cfg).map_err(|e| e.to_string())
+}
+
+pub fn test_llm_api() -> Result<(), String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+
+    // 打印调试信息到终端
+    let provider = cfg.rewrite.providers.first();
+    eprintln!("[LLM test] provider count: {}", cfg.rewrite.providers.len());
+    if let Some(p) = provider {
+        eprintln!("[LLM test] base_url: {}", p.base_url);
+        eprintln!("[LLM test] model: {}", p.model);
+        eprintln!("[LLM test] provider_id: {}", p.id);
+    }
+    let api_key_len = cfg.rewrite.providers.first()
+        .map(|p| shanji_core::llm::decrypt_api_key(&p.api_key_encrypted).len())
+        .unwrap_or(0);
+    eprintln!("[LLM test] api_key present: {}, len: {}", api_key_len > 0, api_key_len);
+
+    let client = shanji_core::llm::create_client_from_settings(&cfg.rewrite)
+        .map_err(|e| { eprintln!("[LLM test] create_client error: {}", e); e.to_string() })?;
+    let result = client.rewrite("hi")
+        .map(|_| ())
+        .map_err(|e| { eprintln!("[LLM test] rewrite error: {}", e); e.to_string() });
+
+    // 持久化测试结果
+    if let Some(p) = cfg.rewrite.providers.first_mut() {
+        match &result {
+            Ok(_) => { p.test_status = 1; p.test_status_text = "✓ 连接正常".to_string(); }
+            Err(e) => { p.test_status = 2; p.test_status_text = format!("✗ {}", e); }
+        }
+        let _ = shanji_core::config::save_config(&paths, &cfg);
+    }
+
+    result
 }
 
 pub fn start_model_download() -> Result<UiSnapshot, String> {
@@ -1306,6 +1388,19 @@ fn load_hotkey_inventory(cfg: &AppConfig) -> String {
     hotkeys::summarize_hotkeys(&cfg.hotkeys).inventory_text()
 }
 
+fn primary_hotkey_display(cfg: &AppConfig) -> String {
+    match cfg.audio.recording_mode.as_str() {
+        "push-to-talk" if !cfg.hotkeys.push_to_talk.trim().is_empty() => {
+            cfg.hotkeys.push_to_talk.clone()
+        }
+        _ if !cfg.hotkeys.toggle_recording.trim().is_empty() => {
+            cfg.hotkeys.toggle_recording.clone()
+        }
+        _ if !cfg.hotkeys.push_to_talk.trim().is_empty() => cfg.hotkeys.push_to_talk.clone(),
+        _ => "Unavailable".to_string(),
+    }
+}
+
 fn load_tray_inventory(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
     tray::build_tray_menu(
         "Shanji",
@@ -1337,7 +1432,6 @@ fn refine_model_info(paths: &AppPaths, cfg: &AppConfig) -> Option<shanji_core::m
                 .find(|entry| entry.id == cfg.asr.refine_model_id)
         })
 }
-
 
 fn selected_audio_device_name(
     cfg: &AppConfig,

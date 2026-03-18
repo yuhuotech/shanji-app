@@ -533,6 +533,34 @@ fn main() -> Result<(), slint::PlatformError> {
         let _ = app::set_llm_system_prompt(prompt.to_string());
     });
 
+    let weak = app.as_weak();
+    app.on_test_llm_api_requested(move || {
+        if let Some(app) = weak.upgrade() {
+            app.set_llm_test_status_text("".into());
+            app.set_llm_test_status_type(0);
+            app.set_llm_testing(true);
+            let weak2 = weak.clone();
+            std::thread::spawn(move || {
+                let result = app::test_llm_api();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(app) = weak2.upgrade() {
+                        app.set_llm_testing(false);
+                        match result {
+                            Ok(_) => {
+                                app.set_llm_test_status_text("✓ 连接正常".into());
+                                app.set_llm_test_status_type(1);
+                            }
+                            Err(e) => {
+                                app.set_llm_test_status_text(format!("✗ {}", e).into());
+                                app.set_llm_test_status_type(2);
+                            }
+                        }
+                    }
+                }).ok();
+            });
+        }
+    });
+
     app.on_record_hotkey_requested(move || {
         // TODO: implement hotkey recording UI flow
         log::info!("Hotkey recording requested from settings");
@@ -548,6 +576,30 @@ fn main() -> Result<(), slint::PlatformError> {
             sync_platform_runtime();
         },
     );
+
+    #[cfg(target_os = "macos")]
+    let native_hotkey_timer = slint::Timer::default();
+    #[cfg(target_os = "macos")]
+    {
+        let weak = app.as_weak();
+        let weak_overlay = overlay.as_weak();
+        native_hotkey_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(16),
+            move || {
+                let events = shanji_platform::hotkeys::drain_native_events();
+                if events.is_empty() {
+                    return;
+                }
+
+                if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
+                    for event in events {
+                        handle_platform_hotkey_event(&app, &overlay, event);
+                    }
+                }
+            },
+        );
+    }
 
     app.show()?;
 
@@ -743,6 +795,11 @@ fn apply_app_download_progress_only(app: &AppWindow, snapshot: app::MainWindowDo
     app.set_model_download_progress(snapshot.model_download_progress);
     app.set_model_download_status_text(snapshot.model_download_status_text.into());
     app.set_model_download_error_text(snapshot.model_download_error_text.into());
+    app.set_refine_model_downloaded(snapshot.refine_model_ready);
+    app.set_refine_model_downloading(snapshot.refine_model_downloading);
+    app.set_refine_model_download_progress(snapshot.refine_model_download_progress);
+    app.set_refine_model_download_status_text(snapshot.refine_model_download_status_text.into());
+    app.set_refine_model_download_error_text(snapshot.refine_model_download_error_text.into());
 }
 
 fn apply_settings_snapshot(
@@ -758,8 +815,11 @@ fn apply_settings_snapshot(
             settings.set_config_path_text(snapshot.config_path_text.into());
             settings.set_llm_enabled(snapshot.llm_enabled);
             settings.set_llm_base_url(snapshot.llm_base_url.into());
+            settings.set_llm_api_key_saved(snapshot.llm_api_key_saved);
             settings.set_llm_model_name(snapshot.llm_model_name.into());
             settings.set_llm_system_prompt(snapshot.llm_system_prompt.into());
+            settings.set_llm_test_status_type(snapshot.llm_test_status);
+            settings.set_llm_test_status_text(snapshot.llm_test_status_text.into());
             settings.set_overlay_visible(snapshot.overlay_enabled);
             // live model
             settings.set_live_model_id(snapshot.live_model_id.into());

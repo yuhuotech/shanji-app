@@ -600,6 +600,9 @@ fn collapse_repeated_chars(text: &str) -> String {
 
 fn collapse_repeated_phrases(text: &str) -> String {
     let chars = text.chars().collect::<Vec<_>>();
+    if is_standalone_short_phrase_repetition(&chars) {
+        return text.to_string();
+    }
     let mut idx = 0usize;
     let mut out = String::new();
 
@@ -626,6 +629,33 @@ fn collapse_repeated_phrases(text: &str) -> String {
     }
 
     out
+}
+
+fn is_standalone_short_phrase_repetition(chars: &[char]) -> bool {
+    if chars.len() < 4 {
+        return false;
+    }
+
+    for width in 2..=4 {
+        if chars.len() < width * 2 || chars.len() % width != 0 {
+            continue;
+        }
+
+        let phrase = &chars[..width];
+        if !is_phrase_duplicate_candidate(phrase)
+            || phrase
+                .iter()
+                .any(|ch| ch.is_whitespace() || is_boundary_punctuation(*ch))
+        {
+            continue;
+        }
+
+        if chars.chunks_exact(width).all(|chunk| chunk == phrase) {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn normalize_ascii_tokens(text: &str, hotwords: &[Hotword]) -> String {
@@ -1068,6 +1098,17 @@ mod tests {
         let text = "嗯 我我我觉得这个这个方案还还可以";
         let result = normalize_transcript(text);
         assert_eq!(result, "我觉得这个方案还可以");
+    }
+
+    #[test]
+    fn normalize_keeps_standalone_short_phrase_repetitions() {
+        assert_eq!(normalize_transcript("测试测试"), "测试测试");
+        assert_eq!(normalize_transcript("测试测试测试"), "测试测试测试");
+    }
+
+    #[test]
+    fn normalize_still_collapses_embedded_phrase_repetitions() {
+        assert_eq!(normalize_transcript("这个这个方案还可以"), "这个方案还可以");
     }
 
     #[test]

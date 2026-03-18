@@ -2108,7 +2108,7 @@ fn maybe_rewrite_text(config: &AppConfig, text: &str) -> Option<String> {
     state::set_state(AppState::Rewriting);
     state::set_status_message("正在运行 LLM 润色");
 
-    match llm::create_client(&config.rewrite.active_provider_id, &config.rewrite) {
+    match llm::create_client_from_settings(&config.rewrite) {
         Ok(client) => match client.rewrite(text) {
             Ok(rewritten) if !rewritten.is_empty() => Some(rewritten),
             Ok(_) => None,
