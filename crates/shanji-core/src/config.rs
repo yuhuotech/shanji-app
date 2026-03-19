@@ -7,6 +7,12 @@ use std::sync::{Mutex, OnceLock, RwLock};
 static CONFIG_CACHE: OnceLock<RwLock<Option<AppConfig>>> = OnceLock::new();
 static CONFIG_EVENT_LISTENERS: OnceLock<Mutex<Vec<Sender<()>>>> = OnceLock::new();
 
+pub const LEGACY_DEFAULT_REWRITE_PROMPT_NAME: &str = "语音输入润色";
+pub const DEFAULT_REWRITE_PROMPT_NAME: &str = "轻度语音润色";
+pub const LEGACY_DEFAULT_REWRITE_SYSTEM_PROMPT: &str =
+    "请将以下语音输入文本整理为适合直接输入或粘贴的最终文本：修正明显识别错误，去除语气词、口吃和重复表达，补全自然标点，保留原意，不要无端扩写。只输出整理后的文本。";
+pub const DEFAULT_REWRITE_SYSTEM_PROMPT: &str = "请对以下语音输入做轻度整理：只修正非常确定的识别错误、口头语、重复和标点；尽量保留原有句式、顺序、信息粒度和措辞。不要总结，不要改写成说明文，不要补充原文未明确说出的术语全称、示例、背景知识、模型名、产品名或数字。对拿不准的内容宁可保留原样。只输出整理后的文本。";
+
 fn config_cache() -> &'static RwLock<Option<AppConfig>> {
     CONFIG_CACHE.get_or_init(|| RwLock::new(None))
 }
@@ -110,7 +116,7 @@ impl Default for AsrConfig {
             refine_model_id: "paraformer-zh".to_string(),
             insert_punct: true,
             punct_style: "zh".to_string(),
-            comma_pause_ms: 1_200,
+            comma_pause_ms: 800,
             sentence_pause_ms: 2_800,
         }
     }
@@ -162,8 +168,8 @@ impl Default for RewriteConfig {
             active_prompt_id: "default".to_string(),
             prompts: vec![PromptPreset {
                 id: "default".to_string(),
-                name: "语音输入润色".to_string(),
-                system_prompt: "请将以下语音输入文本整理为适合直接输入或粘贴的最终文本：修正明显识别错误，去除语气词、口吃和重复表达，补全自然标点，保留原意，不要无端扩写。只输出整理后的文本。".to_string(),
+                name: DEFAULT_REWRITE_PROMPT_NAME.to_string(),
+                system_prompt: DEFAULT_REWRITE_SYSTEM_PROMPT.to_string(),
                 is_builtin: true,
             }],
         }
@@ -306,7 +312,7 @@ fn default_version() -> u32 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: 7,
+            version: 9,
             general: GeneralConfig::default(),
             audio: AudioConfig::default(),
             asr: AsrConfig::default(),
@@ -425,6 +431,59 @@ impl AppConfig {
             modified = true;
         }
 
+        if self.version < 8 {
+            if self.rewrite.active_prompt_id.trim().is_empty() {
+                self.rewrite.active_prompt_id = "default".to_string();
+            }
+
+            if self.rewrite.prompts.is_empty() {
+                self.rewrite.prompts.push(PromptPreset {
+                    id: "default".to_string(),
+                    name: DEFAULT_REWRITE_PROMPT_NAME.to_string(),
+                    system_prompt: DEFAULT_REWRITE_SYSTEM_PROMPT.to_string(),
+                    is_builtin: true,
+                });
+            }
+
+            if let Some(preset) = self
+                .rewrite
+                .prompts
+                .iter_mut()
+                .find(|preset| preset.id == "default" && preset.is_builtin)
+            {
+                if preset.system_prompt.trim().is_empty()
+                    || preset.system_prompt == LEGACY_DEFAULT_REWRITE_SYSTEM_PROMPT
+                {
+                    preset.name = DEFAULT_REWRITE_PROMPT_NAME.to_string();
+                    preset.system_prompt = DEFAULT_REWRITE_SYSTEM_PROMPT.to_string();
+                } else if preset.name == LEGACY_DEFAULT_REWRITE_PROMPT_NAME {
+                    preset.name = DEFAULT_REWRITE_PROMPT_NAME.to_string();
+                }
+            }
+
+            self.version = 8;
+            modified = true;
+        }
+
+        if self.version < 9 {
+            let used_legacy_pause_defaults =
+                self.asr.comma_pause_ms == 1_200 && self.asr.sentence_pause_ms == 2_800;
+            if used_legacy_pause_defaults {
+                self.asr.comma_pause_ms = AsrConfig::default().comma_pause_ms;
+            }
+
+            if self.asr.sentence_pause_ms <= self.asr.comma_pause_ms {
+                self.asr.sentence_pause_ms = self
+                    .asr
+                    .comma_pause_ms
+                    .saturating_add(1_000)
+                    .max(AsrConfig::default().sentence_pause_ms);
+            }
+
+            self.version = 9;
+            modified = true;
+        }
+
         modified
     }
 }
@@ -515,11 +574,11 @@ mod tests {
         config.audio.min_speech_frames = 3;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 7);
+        assert_eq!(config.version, 9);
         assert!(approx_eq(config.audio.vad_threshold, 0.45));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
         assert_eq!(config.audio.min_speech_frames, 2);
-        assert_eq!(config.asr.comma_pause_ms, 1_200);
+        assert_eq!(config.asr.comma_pause_ms, 800);
         assert_eq!(config.asr.sentence_pause_ms, 2_800);
     }
 
@@ -534,7 +593,7 @@ mod tests {
         config.asr.sentence_pause_ms = 2_400;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 7);
+        assert_eq!(config.version, 9);
         assert!(approx_eq(config.audio.vad_threshold, 0.55));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.25));
         assert_eq!(config.audio.min_speech_frames, 4);
@@ -551,7 +610,7 @@ mod tests {
         config.audio.min_speech_frames = 1;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 7);
+        assert_eq!(config.version, 9);
         assert!(approx_eq(config.audio.vad_threshold, 0.45));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
         assert_eq!(config.audio.min_speech_frames, 2);
@@ -565,7 +624,73 @@ mod tests {
         config.asr.sentence_pause_ms = 1_000;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 7);
+        assert_eq!(config.version, 9);
         assert!(config.asr.sentence_pause_ms > config.asr.comma_pause_ms);
+    }
+
+    #[test]
+    fn migrate_updates_legacy_default_rewrite_prompt() {
+        let mut config = AppConfig::default();
+        config.version = 7;
+        config.rewrite.prompts = vec![PromptPreset {
+            id: "default".to_string(),
+            name: LEGACY_DEFAULT_REWRITE_PROMPT_NAME.to_string(),
+            system_prompt: LEGACY_DEFAULT_REWRITE_SYSTEM_PROMPT.to_string(),
+            is_builtin: true,
+        }];
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 9);
+        assert_eq!(config.rewrite.prompts[0].name, DEFAULT_REWRITE_PROMPT_NAME);
+        assert_eq!(
+            config.rewrite.prompts[0].system_prompt,
+            DEFAULT_REWRITE_SYSTEM_PROMPT
+        );
+    }
+
+    #[test]
+    fn migrate_preserves_custom_rewrite_prompt() {
+        let mut config = AppConfig::default();
+        config.version = 7;
+        config.rewrite.prompts = vec![PromptPreset {
+            id: "default".to_string(),
+            name: "我的自定义润色".to_string(),
+            system_prompt: "请把语气整理得更轻松，但不要改我的内容".to_string(),
+            is_builtin: true,
+        }];
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 9);
+        assert_eq!(config.rewrite.prompts[0].name, "我的自定义润色");
+        assert_eq!(
+            config.rewrite.prompts[0].system_prompt,
+            "请把语气整理得更轻松，但不要改我的内容"
+        );
+    }
+
+    #[test]
+    fn migrate_updates_legacy_pause_defaults_to_lower_comma_threshold() {
+        let mut config = AppConfig::default();
+        config.version = 8;
+        config.asr.comma_pause_ms = 1_200;
+        config.asr.sentence_pause_ms = 2_800;
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 9);
+        assert_eq!(config.asr.comma_pause_ms, 800);
+        assert_eq!(config.asr.sentence_pause_ms, 2_800);
+    }
+
+    #[test]
+    fn migrate_preserves_custom_pause_thresholds() {
+        let mut config = AppConfig::default();
+        config.version = 8;
+        config.asr.comma_pause_ms = 900;
+        config.asr.sentence_pause_ms = 2_400;
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 9);
+        assert_eq!(config.asr.comma_pause_ms, 900);
+        assert_eq!(config.asr.sentence_pause_ms, 2_400);
     }
 }

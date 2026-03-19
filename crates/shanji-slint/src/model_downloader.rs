@@ -93,7 +93,7 @@ pub fn start(paths: AppPaths, model_id: String) -> Result<(), String> {
         loop {
             attempt += 1;
 
-            let result = shanji_core::model::download_model_with_progress(
+            let result = shanji_core::model::download_model_bundle_with_progress(
                 &paths,
                 &model_id,
                 |downloaded, total| {
@@ -122,6 +122,22 @@ pub fn start(paths: AppPaths, model_id: String) -> Result<(), String> {
                         s.progress = 1.0;
                         s.last_error = None;
                         s.status_text = "下载完成，正在加载...".to_string();
+                    });
+                    // Trigger model preloading after download completes
+                    let preload_paths = paths.clone();
+                    let downloaded_model = model_id.clone();
+                    std::thread::spawn(move || {
+                        let config = match shanji_core::config::get_config(&preload_paths) {
+                            Ok(c) => c,
+                            Err(_) => return,
+                        };
+                        if downloaded_model == config.asr.live_model_id {
+                            crate::audio_transcriber::preload_live(preload_paths);
+                        } else if downloaded_model == config.asr.refine_model_id
+                            && config.asr.refine_enabled
+                        {
+                            crate::audio_transcriber::preload_refine(preload_paths);
+                        }
                     });
                     break;
                 }

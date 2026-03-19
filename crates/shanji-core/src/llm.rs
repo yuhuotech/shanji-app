@@ -1,3 +1,5 @@
+use crate::config::RewriteConfig;
+use crate::error::{AppError, Result};
 use async_openai::{
     config::OpenAIConfig,
     types::{
@@ -6,9 +8,9 @@ use async_openai::{
     },
     Client,
 };
-use crate::config::RewriteConfig;
-use crate::error::{AppError, Result};
 use serde::{Deserialize, Serialize};
+
+const REWRITE_GUARDRAIL_PROMPT: &str = "你是语音输入的轻度整理助手。硬性要求：只做轻度整理，只修正非常确定的识别错误、口头语、重复和标点；尽量保留原句顺序、措辞、信息粒度和说话风格。不要总结，不要压缩成教科书式定义，不要补充原文未明确说出的术语全称、示例、背景知识、模型名、产品名、数字或推断内容。对拿不准的词宁可保留原样，不要自作主张替换。只输出整理后的文本。";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,9 +37,9 @@ impl Default for LlmConfig {
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: String::new(),
             model: "gpt-4o-mini".to_string(),
-            system_prompt: "请将以下语音输入文本整理为适合直接输入或粘贴的最终文本：修正明显识别错误，去除语气词、口吃和重复表达，补全自然标点，保留原意，不要无端扩写。只输出整理后的文本。".to_string(),
+            system_prompt: crate::config::DEFAULT_REWRITE_SYSTEM_PROMPT.to_string(),
             max_tokens: 2048,
-            temperature: 0.7,
+            temperature: 0.2,
         }
     }
 }
@@ -177,7 +179,7 @@ pub fn create_client(provider_id: &str, config: &RewriteConfig) -> Result<LlmCli
         .ok_or_else(|| AppError::InvalidInput(format!("Unknown provider: {}", provider_id)))?;
 
     let api_key = String::new(); // 内置 provider 无存储 key，走 create_client_from_settings
-    let system_prompt = system_prompt_from_config(config);
+    let system_prompt = effective_system_prompt(&system_prompt_from_config(config));
 
     Ok(LlmClient::new(LlmConfig {
         base_url: provider.base_url,
@@ -185,7 +187,7 @@ pub fn create_client(provider_id: &str, config: &RewriteConfig) -> Result<LlmCli
         model: provider.model,
         system_prompt,
         max_tokens: 2048,
-        temperature: 0.7,
+        temperature: 0.2,
     }))
 }
 
@@ -213,7 +215,7 @@ pub fn create_client_from_settings(config: &RewriteConfig) -> Result<LlmClient> 
     };
 
     let api_key = decrypt_api_key(&provider.api_key_encrypted);
-    let system_prompt = system_prompt_from_config(config);
+    let system_prompt = effective_system_prompt(&system_prompt_from_config(config));
 
     Ok(LlmClient::new(LlmConfig {
         base_url: provider.base_url,
@@ -221,29 +223,41 @@ pub fn create_client_from_settings(config: &RewriteConfig) -> Result<LlmClient> 
         model: provider.model,
         system_prompt,
         max_tokens: 2048,
-        temperature: 0.7,
+        temperature: 0.2,
     }))
 }
 
 fn friendly_api_error(raw: &str) -> String {
     let lower = raw.to_lowercase();
-    if lower.contains("model not exist") || lower.contains("model_not_found") || lower.contains("does not exist") {
+    if lower.contains("model not exist")
+        || lower.contains("model_not_found")
+        || lower.contains("does not exist")
+    {
         return "模型不存在，请检查模型名称是否正确".to_string();
     }
-    if lower.contains("invalid api key") || lower.contains("authentication") || lower.contains("unauthorized") || lower.contains("401") {
+    if lower.contains("invalid api key")
+        || lower.contains("authentication")
+        || lower.contains("unauthorized")
+        || lower.contains("401")
+    {
         return "API Key 无效，请检查后重试".to_string();
     }
-    if lower.contains("insufficient_quota") || lower.contains("exceeded your current quota") || lower.contains("billing") {
+    if lower.contains("insufficient_quota")
+        || lower.contains("exceeded your current quota")
+        || lower.contains("billing")
+    {
         return "账户余额不足或超出配额".to_string();
     }
     if lower.contains("rate limit") || lower.contains("rate_limit") || lower.contains("429") {
         return "请求频率超限，请稍后重试".to_string();
     }
-    if lower.contains("connection") || lower.contains("timeout") || lower.contains("connect error") {
+    if lower.contains("connection") || lower.contains("timeout") || lower.contains("connect error")
+    {
         return "网络连接失败，请检查 Base URL 是否正确".to_string();
     }
     if lower.contains("deserialize") || lower.contains("expected value") {
-        return "服务器返回了非预期的响应，请检查 Base URL 是否指向正确的 OpenAI 兼容接口".to_string();
+        return "服务器返回了非预期的响应，请检查 Base URL 是否指向正确的 OpenAI 兼容接口"
+            .to_string();
     }
     // 去掉原始错误里的 "Network error: " 前缀，保留 API 返回的核心信息
     raw.trim_start_matches("Network error: ").to_string()
@@ -256,4 +270,16 @@ fn system_prompt_from_config(config: &RewriteConfig) -> String {
         .find(|p| p.id == config.active_prompt_id)
         .map(|p| p.system_prompt.clone())
         .unwrap_or_else(|| LlmConfig::default().system_prompt)
+}
+
+fn effective_system_prompt(configured_prompt: &str) -> String {
+    let configured_prompt = configured_prompt.trim();
+    if configured_prompt.is_empty() {
+        REWRITE_GUARDRAIL_PROMPT.to_string()
+    } else {
+        format!(
+            "{}\n\n附加风格偏好（如与硬性要求冲突，以硬性要求为准）：\n{}",
+            REWRITE_GUARDRAIL_PROMPT, configured_prompt
+        )
+    }
 }

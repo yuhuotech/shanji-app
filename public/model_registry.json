@@ -1,7 +1,87 @@
 {
     "version": 1,
-    "updated_at": "2026-03-15",
+    "updated_at": "2026-03-18",
     "models": [
+        {
+            "id": "fsmn-vad",
+            "name": "FSMN VAD 共享辅助模型",
+            "language": "zh",
+            "description": "Paraformer 共享语音活动检测模型，供实时识别分段使用",
+            "backend": "auxiliary",
+            "sizeBytes": 516597,
+            "downloadUrl": "https://modelscope.cn/models/iic/speech_fsmn_vad_zh-cn-16k-common-onnx/resolve/master",
+            "sha256": "",
+            "version": "master",
+            "artifacts": [
+                {
+                    "role": "meanVariance",
+                    "fileName": "am.mvn",
+                    "sizeBytes": 8040,
+                    "sha256": "6820fef9687708c4fc3fab2530179c8fcea6262daa25514380056cd8f6eb1754"
+                },
+                {
+                    "role": "config",
+                    "fileName": "config.yaml",
+                    "sizeBytes": 1215,
+                    "sha256": "2ef334f2d7776edd86ed696296774f87550206c256bfabc597872ad861831589"
+                },
+                {
+                    "role": "metadata",
+                    "fileName": "configuration.json",
+                    "sizeBytes": 598,
+                    "sha256": "f62fcbcebbaade798714b34c521cad87d869ee6a327ceed948e01ff2336bbfc0"
+                },
+                {
+                    "role": "modelQuant",
+                    "fileName": "model_quant.onnx",
+                    "sizeBytes": 506744,
+                    "sha256": "5289eb2aa3c9af2d7a4284bcfa7c3ceb81d360814ed4203239b6c5d0569da8a1"
+                }
+            ]
+        },
+        {
+            "id": "ct-punc",
+            "name": "CT Punc 共享辅助模型",
+            "language": "zh,en",
+            "description": "Paraformer 共享中英标点恢复模型，供最终转写结果加标点使用",
+            "backend": "auxiliary",
+            "sizeBytes": 292008356,
+            "downloadUrl": "https://modelscope.cn/models/manyeyes/alicttransformerpunc-zh-en-onnx/resolve/master",
+            "sha256": "",
+            "version": "master",
+            "artifacts": [
+                {
+                    "role": "metadata",
+                    "fileName": "configuration.json",
+                    "sizeBytes": 44,
+                    "sha256": "03f12b86ba1fdee0ca7af80840cb6e21bfaf2ceb48da8e096f894e600b9e4ad5"
+                },
+                {
+                    "role": "model",
+                    "fileName": "model.onnx",
+                    "sizeBytes": 292007354,
+                    "sha256": "0ea12dbe78ad0ec44834d3bf4a43937a30f24431f8537fdd812a91eee8b6d0fa"
+                },
+                {
+                    "role": "metadata",
+                    "fileName": "punc.json",
+                    "sizeBytes": 552,
+                    "sha256": "97ca70954b4f25932e5c7cb7ef4b81d5379eaadc742ebda5d7b62bc45fb5dfb6"
+                },
+                {
+                    "role": "config",
+                    "fileName": "punc.yaml",
+                    "sizeBytes": 406,
+                    "sha256": "0c1e9173ccdec7cadf3fbb0db20506ec0c8dece4464066819814882eb99abeb6"
+                },
+                {
+                    "role": "vocab",
+                    "fileName": "tokens.txt",
+                    "sizeBytes": 1301188,
+                    "sha256": "77808ef6f1d061ad18d8fd54f345b9957e04dbdd783b8dfd719b1cc1a8f0b994"
+                }
+            ]
+        },
         {
             "id": "paraformer-zh",
             "name": "Paraformer 离线中文",
@@ -12,6 +92,10 @@
             "downloadUrl": "https://github.com/yuhuotech/paraformer-zh/releases/download/models",
             "sha256": "",
             "version": "v1.0.0",
+            "dependencies": [
+                "fsmn-vad",
+                "ct-punc"
+            ],
             "artifacts": [
                 {
                     "role": "meanVariance",
@@ -49,6 +133,10 @@
             "downloadUrl": "https://github.com/yuhuotech/paraformer-zh/releases/download/models",
             "sha256": "",
             "version": "v1.0.0",
+            "dependencies": [
+                "fsmn-vad",
+                "ct-punc"
+            ],
             "artifacts": [
                 {
                     "role": "meanVariance",

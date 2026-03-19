@@ -46,6 +46,46 @@ const CONNECTIVE_MARKERS: &[&str] = &[
     "不过如果",
 ];
 
+const FINAL_SENTENCE_MARKERS: &[&str] = &[
+    "首先",
+    "其次",
+    "再次",
+    "最后",
+    "总之",
+    "另外",
+    "另一方面",
+    "另一点",
+    "里面有个概念叫",
+    "这里有个概念叫",
+    "system一是",
+    "system二是",
+    "一是",
+    "二是",
+    "三是",
+    "第一",
+    "第二",
+    "第三",
+];
+
+const FINAL_COMMA_MARKERS: &[&str] = &[
+    "就是",
+    "然后",
+    "所以",
+    "因此",
+    "但是",
+    "不过",
+    "因为",
+    "比如",
+    "例如",
+    "其实",
+    "同时",
+    "并且",
+    "而且",
+    "接着",
+    "有个概念叫",
+    "挺",
+];
+
 const PREDICATE_CLAUSE_MARKERS: &[&str] = &[
     "适合",
     "更适合",
@@ -87,6 +127,10 @@ const TIGHT_BOUNDARY_PHRASES: &[&str] = &[
     "中文流式语音识别",
 ];
 
+const FINAL_SENTENCE_BOUNDARY_MIN_CHARS: usize = 10;
+const FINAL_SENTENCE_BOUNDARY_FORCE_CHARS: usize = 28;
+const FINAL_COMMA_BOUNDARY_MIN_CHARS: usize = 5;
+
 #[derive(Clone, Debug)]
 pub struct TextProcessingConfig {
     pub punct_style: String,
@@ -101,7 +145,7 @@ impl Default for TextProcessingConfig {
         Self {
             punct_style: "zh".to_string(),
             insert_punct: true,
-            comma_pause_ms: 1_200,
+            comma_pause_ms: 800,
             sentence_pause_ms: 2_800,
             hotwords: Vec::new(),
         }
@@ -197,6 +241,30 @@ pub fn finalize_transcript_text(text: &str, config: &TextProcessingConfig) -> St
     match config.punct_style.as_str() {
         "en" => finalize_english_text(&normalized),
         _ => finalize_chinese_text(&normalized),
+    }
+}
+
+pub fn finalize_existing_punctuation_text(text: &str, config: &TextProcessingConfig) -> String {
+    let normalized = normalize_transcript_with_hotwords(text, &config.hotwords);
+    if normalized.is_empty() || !config.insert_punct {
+        return normalized;
+    }
+
+    match config.punct_style.as_str() {
+        "en" => finalize_existing_english_punctuation(&normalized),
+        _ => finalize_existing_chinese_punctuation(&normalized),
+    }
+}
+
+pub fn normalize_existing_punctuation_text(text: &str, config: &TextProcessingConfig) -> String {
+    let normalized = normalize_transcript_with_hotwords(text, &config.hotwords);
+    if normalized.is_empty() || !config.insert_punct {
+        return normalized;
+    }
+
+    match config.punct_style.as_str() {
+        "en" => normalize_existing_english_punctuation(&normalized),
+        _ => normalize_existing_chinese_punctuation(&normalized),
     }
 }
 
@@ -423,6 +491,10 @@ fn ends_with_any(text: &str, suffixes: &[&str]) -> bool {
     suffixes.iter().any(|suffix| text.ends_with(suffix))
 }
 
+fn starts_with_any(text: &str, prefixes: &[&str]) -> bool {
+    prefixes.iter().any(|prefix| text.starts_with(prefix))
+}
+
 fn boundary_matches_phrase(previous_text: &str, next_text: &str, phrase: &str) -> bool {
     let phrase_chars = phrase.chars().collect::<Vec<_>>();
     for split in 1..phrase_chars.len() {
@@ -437,6 +509,7 @@ fn boundary_matches_phrase(previous_text: &str, next_text: &str, phrase: &str) -
 
 fn finalize_chinese_text(text: &str) -> String {
     let mut text = refine_chinese_clause(text, true);
+    text = refine_final_chinese_boundaries(&text);
     if text.is_empty() {
         return text;
     }
@@ -451,6 +524,135 @@ fn finalize_chinese_text(text: &str) -> String {
     text
 }
 
+fn refine_final_chinese_boundaries(text: &str) -> String {
+    refine_chinese_boundaries(text, true)
+}
+
+fn refine_existing_chinese_boundaries(text: &str) -> String {
+    refine_chinese_boundaries(text, false)
+}
+
+fn refine_chinese_boundaries(text: &str, allow_title_like_comma: bool) -> String {
+    let chars = text.chars().collect::<Vec<_>>();
+    if chars.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    let mut idx = 0usize;
+    let mut since_punct = 0usize;
+
+    while idx < chars.len() {
+        let ch = chars[idx];
+        let suffix = chars[idx..].iter().collect::<String>();
+        if !is_boundary_punctuation(ch) && !out.is_empty() && !ends_with_punctuation(&out) {
+            if should_insert_final_sentence_boundary(&out, &suffix, since_punct) {
+                out.push('。');
+                since_punct = 0;
+            } else if should_insert_final_comma_boundary(
+                &out,
+                &suffix,
+                since_punct,
+                allow_title_like_comma,
+            ) {
+                out.push('，');
+                since_punct = 0;
+            }
+        }
+
+        out.push(ch);
+        if is_boundary_punctuation(ch) {
+            since_punct = 0;
+        } else {
+            since_punct += 1;
+        }
+        idx += 1;
+    }
+
+    out
+}
+
+fn should_insert_final_sentence_boundary(
+    previous_text: &str,
+    next_text: &str,
+    since_punct: usize,
+) -> bool {
+    if since_punct < FINAL_SENTENCE_BOUNDARY_MIN_CHARS {
+        return false;
+    }
+
+    let previous_text = trim_boundary_edges(previous_text);
+    let next_text = trim_boundary_edges(next_text);
+    if previous_text.is_empty() || next_text.is_empty() {
+        return false;
+    }
+
+    if forms_tight_boundary_phrase(previous_text, next_text)
+        || ends_with_any(previous_text, OPEN_ENDED_SUFFIXES)
+    {
+        return false;
+    }
+
+    if starts_with_any(next_text, FINAL_SENTENCE_MARKERS)
+        && is_likely_complete_clause(previous_text)
+    {
+        return true;
+    }
+
+    if since_punct >= FINAL_SENTENCE_BOUNDARY_FORCE_CHARS
+        && is_likely_complete_clause(previous_text)
+        && starts_new_sentence_candidate(next_text)
+    {
+        return true;
+    }
+
+    false
+}
+
+fn should_insert_final_comma_boundary(
+    previous_text: &str,
+    next_text: &str,
+    since_punct: usize,
+    allow_title_like_comma: bool,
+) -> bool {
+    if since_punct < FINAL_COMMA_BOUNDARY_MIN_CHARS {
+        return false;
+    }
+
+    let previous_text = trim_boundary_edges(previous_text);
+    let next_text = trim_boundary_edges(next_text);
+    if previous_text.is_empty() || next_text.is_empty() {
+        return false;
+    }
+
+    if forms_tight_boundary_phrase(previous_text, next_text)
+        || ends_with_any(previous_text, OPEN_ENDED_SUFFIXES)
+    {
+        return false;
+    }
+
+    if starts_connective_marker(next_text) || starts_with_any(next_text, FINAL_COMMA_MARKERS) {
+        return true;
+    }
+
+    if starts_predicate_clause(previous_text, next_text) {
+        return true;
+    }
+
+    if allow_title_like_comma
+        && next_text.starts_with("叫")
+        && since_punct >= 6
+        && ends_with_any(
+            previous_text,
+            &["书", "概念", "模型", "术语", "方法", "章节"],
+        )
+    {
+        return true;
+    }
+
+    false
+}
+
 fn finalize_english_text(text: &str) -> String {
     let mut result = text.trim().to_string();
     if result.is_empty() {
@@ -461,6 +663,68 @@ fn finalize_english_text(text: &str) -> String {
         result.push('.');
     }
     result
+}
+
+fn dedupe_boundary_punctuation(text: &str) -> String {
+    let mut out = String::new();
+    let mut previous_punctuation = false;
+
+    for ch in text.chars() {
+        if is_boundary_punctuation(ch) {
+            if previous_punctuation {
+                continue;
+            }
+            previous_punctuation = true;
+        } else if !ch.is_whitespace() {
+            previous_punctuation = false;
+        }
+
+        out.push(ch);
+    }
+
+    out.trim().to_string()
+}
+
+fn normalize_existing_chinese_punctuation(text: &str) -> String {
+    let out = dedupe_boundary_punctuation(text);
+    if out.is_empty() {
+        return out;
+    }
+
+    refine_chinese_clause(&out, false)
+}
+
+fn finalize_existing_chinese_punctuation(text: &str) -> String {
+    let mut out = normalize_existing_chinese_punctuation(text);
+    if out.is_empty() {
+        return out;
+    }
+
+    out = refine_existing_chinese_boundaries(&out);
+    if !ends_with_punctuation(&out) {
+        let terminal = match out.chars().last() {
+            Some('吗' | '么' | '呢') => '？',
+            _ => '。',
+        };
+        out.push(terminal);
+    }
+
+    out
+}
+
+fn normalize_existing_english_punctuation(text: &str) -> String {
+    dedupe_boundary_punctuation(text)
+}
+
+fn finalize_existing_english_punctuation(text: &str) -> String {
+    let mut out = normalize_existing_english_punctuation(text);
+    if out.is_empty() {
+        return out;
+    }
+    if !ends_with_punctuation(&out) {
+        out.push('.');
+    }
+    out
 }
 
 fn refine_chinese_clause(text: &str, is_final: bool) -> String {
@@ -498,6 +762,7 @@ fn refine_chinese_clause(text: &str, is_final: bool) -> String {
             && since_punct >= 28
             && idx + 1 < chars.len()
             && !ends_with_punctuation(&out)
+            && !is_boundary_punctuation(chars[idx + 1])
             && matches!(
                 ch,
                 '是' | '要'
@@ -1185,6 +1450,28 @@ mod tests {
     }
 
     #[test]
+    fn segmented_chinese_does_not_duplicate_existing_boundary_punctuation() {
+        let result = render_segmented_transcript(
+            &[TranscriptChunk {
+                text: "面有个概念叫system一和system二system一是，",
+                leading_pause_ms: 0,
+            }],
+            None,
+            Some(TranscriptChunk {
+                text: "快速直觉反应",
+                leading_pause_ms: 1_532,
+            }),
+            &zh_config(),
+            false,
+        );
+
+        assert_eq!(
+            result,
+            "面有个概念叫system一和system二system一是，快速直觉反应"
+        );
+    }
+
+    #[test]
     fn segmented_chinese_sentence_pause_is_configurable() {
         let mut config = zh_config();
         config.sentence_pause_ms = 1_400;
@@ -1246,5 +1533,52 @@ mod tests {
             result,
             "中文流式语音识别模型，适合低延迟实时转写。中文流式语音识别模型，适合低延迟实时转写。"
         );
+    }
+
+    #[test]
+    fn normalize_existing_punctuation_text_repairs_missing_internal_chinese_boundary() {
+        let result = normalize_existing_punctuation_text(
+            "中文流式语音识别模型适合低延迟实时转写。",
+            &zh_config(),
+        );
+
+        assert_eq!(result, "中文流式语音识别模型，适合低延迟实时转写。");
+    }
+
+    #[test]
+    fn finalize_existing_punctuation_text_repairs_missing_internal_chinese_boundary() {
+        let result = finalize_existing_punctuation_text(
+            "中文流式语音识别模型适合低延迟实时转写。",
+            &zh_config(),
+        );
+
+        assert_eq!(result, "中文流式语音识别模型，适合低延迟实时转写。");
+    }
+
+    #[test]
+    fn finalize_existing_punctuation_text_keeps_completely_controllable_phrase_intact() {
+        let result = finalize_existing_punctuation_text(
+            "音频在本地处理不上传任何语音数据隐私完全可控。",
+            &zh_config(),
+        );
+
+        assert_eq!(result, "音频在本地处理不上传任何语音数据隐私完全可控。");
+    }
+
+    #[test]
+    fn finalize_chinese_text_splits_long_monologue_more_intelligently() {
+        let result = finalize_transcript_text(
+            "最近在看一本书叫思考快与慢就是科尼曼写的那本讲人的两种思维模式里面有个概念叫system一和system二system一是快速直觉反应system二是慢速理性思考挺有意思的",
+            &zh_config(),
+        );
+
+        assert!(result.matches('，').count() >= 2);
+        assert!(result.matches('。').count() >= 3);
+        assert!(result.contains("一本书，叫思考快与慢，就是"));
+        assert!(result.contains("思维模式。里面有个概念，叫"));
+        assert!(result.contains("system一和system二。"));
+        assert!(result.contains("system一是快速直觉反应"));
+        assert!(result.contains("system二是慢速理性思考"));
+        assert!(result.ends_with('。'));
     }
 }

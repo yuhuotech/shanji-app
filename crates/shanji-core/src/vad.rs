@@ -39,7 +39,10 @@ const SAMPLE_RATE: i64 = 16000;
 #[derive(Debug)]
 pub enum VadEvent {
     /// 语音帧，携带需送入 ASR 的 samples（含回放的前置缓冲帧）
-    Speech(Vec<f32>),
+    Speech {
+        samples: Vec<f32>,
+        leading_pause_ms: u32,
+    },
     /// 静音帧
     Silence,
 }
@@ -64,6 +67,7 @@ pub struct VadDetector {
     pre_buffer: VecDeque<Vec<f32>>,
     startup_buffer: Vec<Vec<f32>>,
     speech_frames: usize,
+    pause_frames: usize,
     tail_remaining: usize,
     tail_frames: usize,
     frame_buffer: Vec<f32>,
@@ -93,6 +97,7 @@ impl VadDetector {
             pre_buffer: VecDeque::with_capacity(PRE_BUFFER_FRAMES + 1),
             startup_buffer: Vec::with_capacity(PRE_BUFFER_FRAMES + 4),
             speech_frames: 0,
+            pause_frames: 0,
             tail_remaining: 0,
             tail_frames,
             frame_buffer: Vec::with_capacity(FRAME_SIZE * 2),
@@ -132,9 +137,10 @@ impl VadDetector {
 
                     if self.min_speech_frames <= 1 {
                         self.vad_state = VadState::Speaking;
-                        return Ok(VadEvent::Speech(
-                            self.take_startup_speech(self.speech_frames, prob),
-                        ));
+                        return Ok(VadEvent::Speech {
+                            samples: self.take_startup_speech(self.speech_frames, prob),
+                            leading_pause_ms: 0,
+                        });
                     }
 
                     Ok(VadEvent::Silence)
@@ -150,9 +156,10 @@ impl VadDetector {
 
                     if self.speech_frames >= self.min_speech_frames {
                         self.vad_state = VadState::Speaking;
-                        Ok(VadEvent::Speech(
-                            self.take_startup_speech(self.speech_frames, prob),
-                        ))
+                        Ok(VadEvent::Speech {
+                            samples: self.take_startup_speech(self.speech_frames, prob),
+                            leading_pause_ms: 0,
+                        })
                     } else {
                         Ok(VadEvent::Silence)
                     }
@@ -170,19 +177,32 @@ impl VadDetector {
                 if prob < self.end_threshold {
                     self.vad_state = VadState::SpeechEnding;
                     self.tail_remaining = self.tail_frames;
+                    self.pause_frames = 1;
                 }
-                Ok(VadEvent::Speech(frame))
+                Ok(VadEvent::Speech {
+                    samples: frame,
+                    leading_pause_ms: 0,
+                })
             }
 
             VadState::SpeechEnding => {
                 if prob >= self.start_threshold {
+                    let leading_pause_ms = (self.pause_frames as u32) * 32;
                     self.vad_state = VadState::Speaking;
-                    return Ok(VadEvent::Speech(frame));
+                    self.pause_frames = 0;
+                    return Ok(VadEvent::Speech {
+                        samples: frame,
+                        leading_pause_ms,
+                    });
                 }
 
+                self.pause_frames += 1;
                 if self.tail_remaining > 0 {
                     self.tail_remaining -= 1;
-                    Ok(VadEvent::Speech(frame))
+                    Ok(VadEvent::Speech {
+                        samples: frame,
+                        leading_pause_ms: 0,
+                    })
                 } else {
                     log::debug!("VAD segment boundary reached, resetting recurrent state");
                     self.reset_segment_state();
@@ -223,6 +243,7 @@ impl VadDetector {
         self.pre_buffer.clear();
         self.startup_buffer.clear();
         self.speech_frames = 0;
+        self.pause_frames = 0;
         self.tail_remaining = 0;
     }
 

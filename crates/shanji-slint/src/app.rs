@@ -1,11 +1,15 @@
+use hound::{SampleFormat, WavReader};
 use shanji_core::audio::{self, AudioInputDevice};
 use shanji_core::config::{self, AppConfig, AppState};
-use shanji_core::history::HistoryDb;
+use shanji_core::history::{HistoryDb, HistoryRecord};
 use shanji_core::hotwords;
 use shanji_core::model;
+use shanji_core::offline_transcribe::OfflineTranscriber;
 use shanji_core::paths::AppPaths;
 use shanji_core::state::{self, RuntimeSnapshot};
+use shanji_core::text_processing::TextProcessingConfig;
 use shanji_platform::{hotkeys, tray};
+use std::collections::BTreeSet;
 use std::io::BufReader;
 use std::sync::{mpsc, Mutex, OnceLock};
 
@@ -16,6 +20,7 @@ static HISTORY_PLAYBACK_COMMAND_TX: OnceLock<mpsc::Sender<HistoryPlaybackCommand
 static HISTORY_PLAYBACK_EVENT_BUS: OnceLock<Mutex<Vec<mpsc::Sender<HistoryPlaybackEvent>>>> =
     OnceLock::new();
 static HISTORY_PLAYBACK_ACTIVE_RECORD: OnceLock<Mutex<Option<i32>>> = OnceLock::new();
+static HISTORY_RETRANSCRIBING_RECORDS: OnceLock<Mutex<BTreeSet<i32>>> = OnceLock::new();
 
 enum HistoryPlaybackCommand {
     Play { record_id: i32, audio_path: String },
@@ -37,6 +42,10 @@ fn history_playback_event_bus() -> &'static Mutex<Vec<mpsc::Sender<HistoryPlayba
 
 fn history_playback_active_record() -> &'static Mutex<Option<i32>> {
     HISTORY_PLAYBACK_ACTIVE_RECORD.get_or_init(|| Mutex::new(None))
+}
+
+fn history_retranscribing_records() -> &'static Mutex<BTreeSet<i32>> {
+    HISTORY_RETRANSCRIBING_RECORDS.get_or_init(|| Mutex::new(BTreeSet::new()))
 }
 
 fn notify_history_playback_event() {
@@ -152,6 +161,27 @@ pub fn subscribe_history_playback_events() -> mpsc::Receiver<HistoryPlaybackEven
 
 pub fn active_history_playback_record_id() -> Option<i32> {
     *history_playback_active_record().lock().unwrap()
+}
+
+pub fn begin_history_retranscribing(record_id: i32) -> bool {
+    history_retranscribing_records()
+        .lock()
+        .unwrap()
+        .insert(record_id)
+}
+
+pub fn finish_history_retranscribing(record_id: i32) {
+    history_retranscribing_records()
+        .lock()
+        .unwrap()
+        .remove(&record_id);
+}
+
+pub fn is_history_retranscribing_record_id(record_id: i32) -> bool {
+    history_retranscribing_records()
+        .lock()
+        .unwrap()
+        .contains(&record_id)
 }
 
 /// 刷新音频设备缓存（设置窗口打开时调用）
@@ -548,16 +578,8 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         paste_ready: shanji_core::output::is_auto_paste_supported(),
         default_device_text: selected_device,
         transcribe_card_title: "语音转写测试".to_string(),
-        transcribe_button_text: if crate::audio_transcriber::is_running() {
-            "停止测试录音".to_string()
-        } else {
-            "点击测试录音".to_string()
-        },
-        transcribe_body_text: if crate::audio_transcriber::is_running() {
-            "正在通过真实麦克风和当前模型进行转写".to_string()
-        } else {
-            "测试转写功能是否正常".to_string()
-        },
+        transcribe_button_text: transcribe_button_text(&runtime),
+        transcribe_body_text: transcribe_body_text(&runtime),
         audio_level_text: format!("{}%", (audio_level * 100.0).round() as u32),
         audio_level_value: audio_level,
         monitor_button_text: if crate::audio_monitor::is_running() {
@@ -682,8 +704,18 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
                 .map(|p| p.system_prompt.clone())
                 .unwrap_or_default()
         },
-        llm_test_status: cfg.rewrite.providers.first().map(|p| p.test_status).unwrap_or(0),
-        llm_test_status_text: cfg.rewrite.providers.first().map(|p| p.test_status_text.clone()).unwrap_or_default(),
+        llm_test_status: cfg
+            .rewrite
+            .providers
+            .first()
+            .map(|p| p.test_status)
+            .unwrap_or(0),
+        llm_test_status_text: cfg
+            .rewrite
+            .providers
+            .first()
+            .map(|p| p.test_status_text.clone())
+            .unwrap_or_default(),
         overlay_enabled: runtime.overlay_visible,
         // live model
         live_model_id: cfg.asr.live_model_id.clone(),
@@ -727,16 +759,8 @@ pub fn refresh_runtime_ui() -> Result<RuntimeUiSnapshot, String> {
 
     Ok(RuntimeUiSnapshot {
         status_text: runtime.status_message.clone(),
-        transcribe_button_text: if crate::audio_transcriber::is_running() {
-            "停止测试录音".to_string()
-        } else {
-            "点击测试录音".to_string()
-        },
-        transcribe_body_text: if crate::audio_transcriber::is_running() {
-            "正在通过真实麦克风和当前模型进行转写".to_string()
-        } else {
-            "测试转写功能是否正常".to_string()
-        },
+        transcribe_button_text: transcribe_button_text(&runtime),
+        transcribe_body_text: transcribe_body_text(&runtime),
         audio_level_text: format!("{}%", (audio_level * 100.0).round() as u32),
         audio_level_value: audio_level,
         monitor_button_text: if crate::audio_monitor::is_running() {
@@ -933,7 +957,17 @@ pub fn toggle_refine_asr() -> Result<UiSnapshot, String> {
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     cfg.asr.refine_enabled = !cfg.asr.refine_enabled;
     config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+    if cfg.asr.refine_enabled {
+        crate::audio_transcriber::preload_refine(paths);
+    } else {
+        crate::audio_transcriber::unload_refine();
+    }
     refresh_snapshot()
+}
+
+pub fn preload_models() {
+    let paths = resolve_app_paths();
+    crate::audio_transcriber::preload(paths);
 }
 
 pub fn clear_history() -> Result<UiSnapshot, String> {
@@ -984,15 +1018,108 @@ pub fn delete_history_record(record_id: i32) -> Result<(), String> {
 }
 
 fn history_audio_path(record_id: i32) -> Result<String, String> {
-    let paths = resolve_app_paths();
-    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
-    let record = db
-        .get(record_id as i64)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Record {} not found", record_id))?;
+    let record = history_record(record_id)?;
     record
         .audio_path
         .ok_or_else(|| format!("Record {} has no audio file", record_id))
+}
+
+fn history_record(record_id: i32) -> Result<HistoryRecord, String> {
+    let paths = resolve_app_paths();
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
+    db.get(record_id as i64)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Record {} not found", record_id))
+}
+
+fn load_history_wav_samples(audio_path: &str) -> Result<Vec<f32>, String> {
+    let mut reader = WavReader::open(audio_path)
+        .map_err(|e| format!("Failed to open audio file {}: {}", audio_path, e))?;
+    let spec = reader.spec();
+
+    if spec.channels == 0 {
+        return Err(format!("Audio file {} has zero channels", audio_path));
+    }
+    if spec.sample_rate != 16_000 {
+        return Err(format!(
+            "Audio file {} must be 16 kHz WAV, got {} Hz",
+            audio_path, spec.sample_rate
+        ));
+    }
+
+    let interleaved = match spec.sample_format {
+        SampleFormat::Float => reader
+            .samples::<f32>()
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to decode float WAV samples: {}", e))?,
+        SampleFormat::Int => match spec.bits_per_sample {
+            16 => reader
+                .samples::<i16>()
+                .map(|sample| sample.map(|value| value as f32 / i16::MAX as f32))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| format!("Failed to decode i16 WAV samples: {}", e))?,
+            bits => {
+                return Err(format!(
+                    "Audio file {} uses unsupported PCM width: {} bits",
+                    audio_path, bits
+                ));
+            }
+        },
+    };
+
+    if spec.channels == 1 {
+        return Ok(interleaved);
+    }
+
+    let channel_count = spec.channels as usize;
+    let mut mono = Vec::with_capacity(interleaved.len() / channel_count);
+    for frame in interleaved.chunks(channel_count) {
+        let sum = frame.iter().copied().sum::<f32>();
+        mono.push(sum / frame.len() as f32);
+    }
+    Ok(mono)
+}
+
+fn effective_history_retranscribe_model_id(config: &AppConfig) -> Result<String, String> {
+    let refine_model_id = config.asr.refine_model_id.trim();
+    if !refine_model_id.is_empty() {
+        return Ok(refine_model_id.to_string());
+    }
+
+    let live_model_id = config.asr.live_model_id.trim();
+    if !live_model_id.is_empty() {
+        return Ok(live_model_id.to_string());
+    }
+
+    Err("No ASR model configured for history retranscription".to_string())
+}
+
+fn history_text_processing_config(
+    config: &AppConfig,
+    hotword_inventory: &[shanji_core::hotwords::Hotword],
+) -> TextProcessingConfig {
+    TextProcessingConfig {
+        punct_style: config.asr.punct_style.clone(),
+        insert_punct: config.asr.insert_punct,
+        comma_pause_ms: config.asr.comma_pause_ms,
+        sentence_pause_ms: config.asr.sentence_pause_ms,
+        hotwords: hotword_inventory.to_vec(),
+    }
+}
+
+fn build_history_retranscriber(
+    paths: &AppPaths,
+    config: &AppConfig,
+    hotword_inventory: &[shanji_core::hotwords::Hotword],
+) -> Result<(OfflineTranscriber, String), String> {
+    let model_id = effective_history_retranscribe_model_id(config)?;
+    let transcriber = OfflineTranscriber::new(
+        paths,
+        &model_id,
+        history_text_processing_config(config, hotword_inventory),
+    )
+    .map_err(|e| e.to_string())?;
+    Ok((transcriber, model_id))
 }
 
 pub fn play_history_audio(record_id: i32) -> Result<(), String> {
@@ -1015,9 +1142,61 @@ pub fn play_history_audio(record_id: i32) -> Result<(), String> {
 }
 
 pub fn retranscribe_history(record_id: i32) -> Result<(), String> {
-    // Phase 1：仅打开音频文件（完整重新转录需要音频管道，暂留为占位实现）
+    let paths = resolve_app_paths();
+    let config = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
     let audio_path = history_audio_path(record_id)?;
-    open_path_in_system(&audio_path)
+    let samples = load_history_wav_samples(&audio_path)?;
+    if samples.is_empty() {
+        return Err(format!("Audio file {} contains no samples", audio_path));
+    }
+
+    let hotword_inventory = hotwords::load_all_enabled_with_paths(&paths).unwrap_or_else(|err| {
+        log::warn!(
+            "Failed to load hotword libraries for history retranscription, continuing without them: {}",
+            err
+        );
+        Vec::new()
+    });
+    let (mut transcriber, model_id) =
+        build_history_retranscriber(&paths, &config, &hotword_inventory)?;
+    let result = transcriber
+        .transcribe(&samples, true)
+        .map_err(|e| e.to_string())?;
+    let retranscribed = result.final_text.trim();
+    if retranscribed.is_empty() {
+        return Err("Offline retranscription returned empty text".to_string());
+    }
+
+    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
+    let updated = db
+        .update_retranscribed_text(
+            record_id as i64,
+            retranscribed,
+            Some(retranscribed),
+            Some(&model_id),
+            Some(&model_id),
+        )
+        .map_err(|e| e.to_string())?;
+    if !updated {
+        return Err(format!("Record {} not found", record_id));
+    }
+
+    log::info!(
+        "History record retranscribed: record_id={}, model_id={}, audio_path={}, audio_samples={}, segment_count={}, used_vad={}, used_punc={}, raw_text_len={}, text_len={}",
+        record_id,
+        model_id,
+        audio_path,
+        samples.len(),
+        result.segment_count,
+        result.used_vad,
+        result.used_punc,
+        result.raw_text.chars().count(),
+        retranscribed.chars().count()
+    );
+
+    state::set_status_message(format!("历史记录 {} 已使用离线模型重新转写", record_id));
+
+    Ok(())
 }
 
 fn reset_llm_test_status(cfg: &mut shanji_core::config::AppConfig) {
@@ -1029,15 +1208,17 @@ fn reset_llm_test_status(cfg: &mut shanji_core::config::AppConfig) {
 
 fn ensure_custom_provider(cfg: &mut shanji_core::config::AppConfig) {
     if cfg.rewrite.providers.is_empty() {
-        cfg.rewrite.providers.push(shanji_core::config::LlmProvider {
-            id: "custom".to_string(),
-            name: "自定义".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
-            model: "gpt-4o-mini".to_string(),
-            api_key_encrypted: String::new(),
-            test_status: 0,
-            test_status_text: String::new(),
-        });
+        cfg.rewrite
+            .providers
+            .push(shanji_core::config::LlmProvider {
+                id: "custom".to_string(),
+                name: "自定义".to_string(),
+                base_url: "https://api.openai.com/v1".to_string(),
+                model: "gpt-4o-mini".to_string(),
+                api_key_encrypted: String::new(),
+                test_status: 0,
+                test_status_text: String::new(),
+            });
         cfg.rewrite.active_provider_id = "custom".to_string();
     }
 }
@@ -1116,22 +1297,38 @@ pub fn test_llm_api() -> Result<(), String> {
         eprintln!("[LLM test] model: {}", p.model);
         eprintln!("[LLM test] provider_id: {}", p.id);
     }
-    let api_key_len = cfg.rewrite.providers.first()
+    let api_key_len = cfg
+        .rewrite
+        .providers
+        .first()
         .map(|p| shanji_core::llm::decrypt_api_key(&p.api_key_encrypted).len())
         .unwrap_or(0);
-    eprintln!("[LLM test] api_key present: {}, len: {}", api_key_len > 0, api_key_len);
+    eprintln!(
+        "[LLM test] api_key present: {}, len: {}",
+        api_key_len > 0,
+        api_key_len
+    );
 
-    let client = shanji_core::llm::create_client_from_settings(&cfg.rewrite)
-        .map_err(|e| { eprintln!("[LLM test] create_client error: {}", e); e.to_string() })?;
-    let result = client.rewrite("hi")
-        .map(|_| ())
-        .map_err(|e| { eprintln!("[LLM test] rewrite error: {}", e); e.to_string() });
+    let client = shanji_core::llm::create_client_from_settings(&cfg.rewrite).map_err(|e| {
+        eprintln!("[LLM test] create_client error: {}", e);
+        e.to_string()
+    })?;
+    let result = client.rewrite("hi").map(|_| ()).map_err(|e| {
+        eprintln!("[LLM test] rewrite error: {}", e);
+        e.to_string()
+    });
 
     // 持久化测试结果
     if let Some(p) = cfg.rewrite.providers.first_mut() {
         match &result {
-            Ok(_) => { p.test_status = 1; p.test_status_text = "✓ 连接正常".to_string(); }
-            Err(e) => { p.test_status = 2; p.test_status_text = format!("✗ {}", e); }
+            Ok(_) => {
+                p.test_status = 1;
+                p.test_status_text = "✓ 连接正常".to_string();
+            }
+            Err(e) => {
+                p.test_status = 2;
+                p.test_status_text = format!("✗ {}", e);
+            }
         }
         let _ = shanji_core::config::save_config(&paths, &cfg);
     }
@@ -1149,7 +1346,7 @@ pub fn start_live_model_download() -> Result<UiSnapshot, String> {
     let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     crate::model_downloader::start(paths, cfg.asr.live_model_id.clone())?;
     let mut snapshot = refresh_snapshot()?;
-    snapshot.status_text = format!("开始下载实时模型 {}", cfg.asr.live_model_id);
+    snapshot.status_text = format!("开始下载实时模型 {} 及共享依赖", cfg.asr.live_model_id);
     Ok(snapshot)
 }
 
@@ -1159,7 +1356,10 @@ pub fn start_refine_model_download() -> Result<UiSnapshot, String> {
     let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     crate::model_downloader::start(paths, cfg.asr.refine_model_id.clone())?;
     let mut snapshot = refresh_snapshot()?;
-    snapshot.status_text = format!("开始下载整体纠正模型 {}", cfg.asr.refine_model_id);
+    snapshot.status_text = format!(
+        "开始下载整体纠正模型 {} 及缺失依赖",
+        cfg.asr.refine_model_id
+    );
     Ok(snapshot)
 }
 
@@ -1191,17 +1391,29 @@ pub fn toggle_live_asr() -> Result<UiSnapshot, String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
 
+    if crate::audio_transcriber::is_stopping() {
+        let mut snapshot = refresh_snapshot()?;
+        snapshot.status_text = "正在生成最终结果，请稍候".to_string();
+        return Ok(snapshot);
+    }
+
     if !crate::audio_transcriber::is_running() && crate::audio_monitor::is_running() {
         let _ = crate::audio_monitor::stop();
     }
 
-    let started = crate::audio_transcriber::toggle(paths)?;
+    let started = if crate::audio_transcriber::is_running() {
+        crate::audio_transcriber::request_stop()?;
+        false
+    } else {
+        crate::audio_transcriber::start(paths)?;
+        true
+    };
 
     let mut snapshot = refresh_snapshot()?;
     snapshot.status_text = if started {
         "Native live ASR started".to_string()
     } else {
-        "Native live ASR stopped".to_string()
+        "Native live ASR is finalizing".to_string()
     };
     Ok(snapshot)
 }
@@ -1250,10 +1462,10 @@ fn format_state(state: AppState) -> String {
 
 fn format_overlay_state(runtime: &RuntimeSnapshot) -> String {
     match runtime.current_state {
-        AppState::Idle => "Overlay idle".to_string(),
-        AppState::Recording => "Recording".to_string(),
-        AppState::Transcribing => "Transcribing".to_string(),
-        AppState::Rewriting => "Rewriting".to_string(),
+        AppState::Idle => "语音输入".to_string(),
+        AppState::Recording => "正在聆听...".to_string(),
+        AppState::Transcribing => "语音识别中...".to_string(),
+        AppState::Rewriting => "LLM润色中...".to_string(),
     }
 }
 
@@ -1280,7 +1492,38 @@ fn format_overlay_body(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
                 "正在识别...".to_string()
             }
         }
-        AppState::Rewriting => runtime.rewrite_preview.clone(),
+        AppState::Rewriting => {
+            let source = rewrite_source_text(runtime);
+            if source.is_empty() {
+                "正在整理识别结果...".to_string()
+            } else {
+                source.to_string()
+            }
+        }
+    }
+}
+
+fn transcribe_button_text(runtime: &RuntimeSnapshot) -> String {
+    if matches!(runtime.current_state, AppState::Rewriting) {
+        return "处理中...".to_string();
+    }
+
+    if crate::audio_transcriber::is_running() {
+        "停止测试录音".to_string()
+    } else {
+        "点击测试录音".to_string()
+    }
+}
+
+fn transcribe_body_text(runtime: &RuntimeSnapshot) -> String {
+    if matches!(runtime.current_state, AppState::Rewriting) {
+        return "正在等待 LLM 润色完成并自动粘贴".to_string();
+    }
+
+    if crate::audio_transcriber::is_running() {
+        "正在通过真实麦克风和当前模型进行转写".to_string()
+    } else {
+        "测试转写功能是否正常".to_string()
     }
 }
 
@@ -1335,6 +1578,10 @@ fn load_live_asr_summary(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
         runtime.final_output.as_str()
     };
 
+    if matches!(runtime.current_state, AppState::Rewriting) {
+        return "Live ASR: rewriting final transcript".to_string();
+    }
+
     if crate::audio_transcriber::is_running()
         || matches!(
             runtime.current_state,
@@ -1350,10 +1597,6 @@ fn load_live_asr_summary(cfg: &AppConfig, runtime: &RuntimeSnapshot) -> String {
                 ""
             }
         );
-    }
-
-    if matches!(runtime.current_state, AppState::Rewriting) {
-        return "Live ASR: rewriting final transcript".to_string();
     }
 
     if source.is_empty() {
@@ -1752,14 +1995,18 @@ fn load_model_summary(paths: &AppPaths, cfg: &AppConfig) -> String {
     let Ok(models) = model::list_models_with_paths(paths) else {
         return "Models unavailable".to_string();
     };
+    let visible_models = models
+        .iter()
+        .filter(|model| !model.is_auxiliary())
+        .collect::<Vec<_>>();
 
-    let downloaded = models.iter().filter(|m| m.is_downloaded).count();
-    let live_name = models
+    let downloaded = visible_models.iter().filter(|m| m.is_downloaded).count();
+    let live_name = visible_models
         .iter()
         .find(|m| m.id == cfg.asr.live_model_id)
         .map(|m| m.name.clone())
         .unwrap_or_else(|| cfg.asr.live_model_id.clone());
-    let refine_name = models
+    let refine_name = visible_models
         .iter()
         .find(|m| m.id == cfg.asr.refine_model_id)
         .map(|m| m.name.clone())
@@ -1782,12 +2029,16 @@ fn load_model_inventory(paths: &AppPaths, cfg: &AppConfig) -> String {
     let Ok(models) = model::list_models_with_paths(paths) else {
         return "Model inventory unavailable".to_string();
     };
+    let visible_models = models
+        .into_iter()
+        .filter(|model| !model.is_auxiliary())
+        .collect::<Vec<_>>();
 
-    if models.is_empty() {
+    if visible_models.is_empty() {
         return "No models available in registry".to_string();
     }
 
-    models
+    visible_models
         .into_iter()
         .take(5)
         .map(|entry| {
@@ -1834,12 +2085,12 @@ fn format_live_session(runtime: &RuntimeSnapshot) -> String {
         ),
         AppState::Rewriting => format!(
             "Original\n{}\n\nRewrite preview\n{}",
-            if runtime.last_transcript.is_empty() {
-                runtime.live_transcript.as_str()
+            rewrite_source_text(runtime),
+            if runtime.rewrite_preview.is_empty() {
+                "LLM润色中..."
             } else {
-                runtime.last_transcript.as_str()
+                runtime.rewrite_preview.as_str()
             },
-            runtime.rewrite_preview
         ),
     }
 }
@@ -1870,7 +2121,35 @@ fn truncate(text: &str, max_chars: usize) -> String {
     }
 }
 
+fn rewrite_source_text(runtime: &RuntimeSnapshot) -> &str {
+    if runtime.last_transcript.is_empty() {
+        runtime.live_transcript.as_str()
+    } else {
+        runtime.last_transcript.as_str()
+    }
+}
+
 #[allow(dead_code)]
 fn _config_for_future_use(paths: &AppPaths) -> Result<AppConfig, String> {
     config::get_config(paths).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_overlay_body, format_overlay_state};
+    use shanji_core::config::{AppConfig, AppState};
+    use shanji_core::state::RuntimeSnapshot;
+
+    #[test]
+    fn overlay_rewriting_preserves_transcript_body() {
+        let cfg = AppConfig::default();
+        let runtime = RuntimeSnapshot {
+            current_state: AppState::Rewriting,
+            last_transcript: "这是原始转写".to_string(),
+            ..RuntimeSnapshot::default()
+        };
+
+        assert_eq!(format_overlay_state(&runtime), "LLM润色中...");
+        assert_eq!(format_overlay_body(&cfg, &runtime), "这是原始转写");
+    }
 }

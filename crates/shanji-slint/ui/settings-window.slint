@@ -28,6 +28,7 @@ export struct HistoryCardData {
     text: string,
     has-audio: bool,
     is-playing: bool,
+    is-retranscribing: bool,
     is-llm-rewritten: bool,
     was-pasted: bool,
 }
@@ -1251,7 +1252,8 @@ if root.active-section == SettingsSection.History: Rectangle {
                                     clicked => { root.play-audio-requested(card.record-id); }
                                 }
                                 if card.has-audio: Button {
-                                    text: "↻ 重新转录";
+                                    enabled: !card.is-retranscribing;
+                                    text: card.is-retranscribing ? "转写中..." : "↻ 重新转录";
                                     clicked => { root.retranscribe-requested(card.record-id); }
                                 }
                                 Button { text: "复制"; clicked => { root.copy-record-requested(card.record-id); } }

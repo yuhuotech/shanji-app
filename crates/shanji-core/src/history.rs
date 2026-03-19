@@ -368,6 +368,40 @@ impl HistoryDb {
         Ok(affected > 0)
     }
 
+    pub fn update_retranscribed_text(
+        &self,
+        id: i64,
+        transcribed: &str,
+        corrected_transcribed: Option<&str>,
+        model_id: Option<&str>,
+        refine_model_id: Option<&str>,
+    ) -> Result<bool> {
+        let conn = self.conn.lock().unwrap();
+        let affected = conn
+            .execute(
+                "UPDATE records
+                 SET transcribed = ?2,
+                     corrected_transcribed = ?3,
+                     rewritten = '',
+                     model_id = ?4,
+                     refine_model_id = ?5,
+                     refine_enabled = 1,
+                     provider_id = ''
+                 WHERE id = ?1",
+                (
+                    id,
+                    transcribed,
+                    corrected_transcribed.unwrap_or(""),
+                    model_id.unwrap_or(""),
+                    refine_model_id.unwrap_or(""),
+                ),
+            )
+            .map_err(|e| {
+                AppError::Internal(format!("Failed to update retranscribed record: {}", e))
+            })?;
+        Ok(affected > 0)
+    }
+
     /// 取最近 20 条记录并转换为 UI 卡片格式
     pub fn list_cards(&self, limit: u32) -> Result<(Vec<HistoryCardData>, u32)> {
         let total = self.count()?;
@@ -632,6 +666,54 @@ mod tests {
         db.insert(&record).unwrap();
         let (cards, _) = db.list_cards(20).unwrap();
         assert_eq!(cards[0].text, "corrected");
+        assert!(!cards[0].is_llm_rewritten);
+    }
+
+    #[test]
+    fn test_update_retranscribed_text_replaces_display_text_and_clears_rewrite() {
+        let db = create_test_db();
+        let record = HistoryRecord {
+            id: None,
+            created_at: 1000000000000,
+            transcribed: "raw".to_string(),
+            live_transcribed: Some("live".to_string()),
+            corrected_transcribed: Some("corrected-old".to_string()),
+            rewritten: Some("rewritten-old".to_string()),
+            duration_ms: Some(1000),
+            model_id: Some("live-model".to_string()),
+            live_model_id: Some("live-model".to_string()),
+            refine_model_id: Some("old-refine".to_string()),
+            refine_enabled: false,
+            provider_id: Some("provider".to_string()),
+            audio_path: Some("/tmp/test.wav".to_string()),
+        };
+
+        let id = db.insert(&record).unwrap();
+        assert!(db
+            .update_retranscribed_text(
+                id,
+                "retranscribed-final",
+                Some("retranscribed-final"),
+                Some("paraformer-zh"),
+                Some("paraformer-zh"),
+            )
+            .unwrap());
+
+        let updated = db.get(id).unwrap().unwrap();
+        assert_eq!(updated.transcribed, "retranscribed-final");
+        assert_eq!(
+            updated.corrected_transcribed,
+            Some("retranscribed-final".to_string())
+        );
+        assert_eq!(updated.live_transcribed, Some("live".to_string()));
+        assert_eq!(updated.rewritten, None);
+        assert_eq!(updated.model_id, Some("paraformer-zh".to_string()));
+        assert_eq!(updated.refine_model_id, Some("paraformer-zh".to_string()));
+        assert!(updated.refine_enabled);
+        assert_eq!(updated.provider_id, None);
+
+        let (cards, _) = db.list_cards(20).unwrap();
+        assert_eq!(cards[0].text, "retranscribed-final");
         assert!(!cards[0].is_llm_rewritten);
     }
 }

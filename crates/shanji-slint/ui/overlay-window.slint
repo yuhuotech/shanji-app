@@ -4,20 +4,39 @@ export component OverlayWindow inherits Window {
     in-out property <string> overlay-live-text: "";
 
     title: "Shanji Overlay";
-    width: 312px;
+    width: 220px;
     no-frame: true;
     always-on-top: true;
     background: transparent;
     default-font-family: "Hiragino Sans GB";
 
-    property <length> bar1-h: max(2px, overlay-audio-level * 0.60 * 14px);
-    property <length> bar2-h: max(4px, overlay-audio-level * 1.00 * 14px);
-    property <length> bar3-h: max(3px, overlay-audio-level * 0.80 * 14px);
-    property <length> bar4-h: max(3px, overlay-audio-level * 0.50 * 14px);
-    animate bar1-h { duration: 120ms; easing: ease-out; }
-    animate bar2-h { duration: 120ms; easing: ease-out; }
-    animate bar3-h { duration: 120ms; easing: ease-out; }
-    animate bar4-h { duration: 120ms; easing: ease-out; }
+    // Shorthand for audio level
+    property <float> lv: overlay-audio-level;
+
+    // Tick counter — only runs when audio is active, so zero CPU at idle
+    property <float> wave-t: 0.0;
+    Timer {
+        interval: 33ms;
+        running: lv > 0.02;
+        triggered => {
+            wave-t = wave-t + 1.0;
+        }
+    }
+
+    // Each bar has a unique frequency + phase → independent motion.
+    // Amplitude scales with lv: loud = tall, quiet = short, silent = flat dot.
+    property <length> bar1-h: lv > 0.02 ? max(3px, lv * (0.50 + 0.50 * sin(wave-t * 0.47rad + 0.0rad)) * 18px) : 2px;
+    property <length> bar2-h: lv > 0.02 ? max(3px, lv * (0.65 + 0.35 * sin(wave-t * 0.71rad + 1.3rad)) * 18px) : 2px;
+    property <length> bar3-h: lv > 0.02 ? max(3px, lv * (0.85 + 0.15 * sin(wave-t * 0.89rad + 2.6rad)) * 18px) : 2px;
+    property <length> bar4-h: lv > 0.02 ? max(3px, lv * (0.65 + 0.35 * sin(wave-t * 0.61rad + 0.9rad)) * 18px) : 2px;
+    property <length> bar5-h: lv > 0.02 ? max(3px, lv * (0.50 + 0.50 * sin(wave-t * 0.43rad + 2.1rad)) * 18px) : 2px;
+
+    // Shorter easing so bars track the oscillation crisply
+    animate bar1-h { duration: 40ms; easing: ease-out; }
+    animate bar2-h { duration: 32ms; easing: ease-out; }
+    animate bar3-h { duration: 25ms; easing: ease-out; }
+    animate bar4-h { duration: 32ms; easing: ease-out; }
+    animate bar5-h { duration: 40ms; easing: ease-out; }
 
     VerticalLayout {
         alignment: start;
@@ -29,9 +48,9 @@ export component OverlayWindow inherits Window {
             alignment: center;
 
             Rectangle {
-                width: 243px;
-                height: 34px;
-                border-radius: 17px;
+                width: 160px;
+                height: 30px;
+                border-radius: 15px;
                 background: #111111;
                 clip: true;
 
@@ -41,46 +60,61 @@ export component OverlayWindow inherits Window {
                     spacing: 0px;
                     alignment: center;
 
-                    Text {
-                        text: "语音输入";
-                        color: #ffffff;
-                        font-size: 11px;
-                        font-weight: 700;
-                        vertical-alignment: center;
+                    // ── Left: text zone, fixed width, text centered ──
+                    Rectangle {
+                        width: 95px;
+                        height: 30px;
+                        HorizontalLayout {
+                            alignment: center;
+                            Text {
+                                text: overlay-state-text;
+                                color: #ffffff;
+                                font-size: 10px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                                horizontal-alignment: center;
+                            }
+                        }
                     }
 
-                    Rectangle { width: 8px; }
-
+                    // ── Separator ──
                     VerticalLayout {
+                        width: 15px;
                         alignment: center;
                         Rectangle {
                             width: 1px;
                             height: 12px;
-                            background: #ffffff50;
+                            background: #ffffff40;
                         }
                     }
 
-                    Rectangle { width: 8px; }
-
-                    HorizontalLayout {
-                        spacing: 2px;
-                        alignment: center;
-
-                        VerticalLayout {
+                    // ── Right: wave zone, fixed width, bars centered ──
+                    Rectangle {
+                        width: 26px;
+                        height: 30px;
+                        HorizontalLayout {
                             alignment: center;
-                            Rectangle { width: 2px; height: bar1-h; border-radius: 1px; background: #ffffffcc; }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle { width: 2px; height: bar2-h; border-radius: 1px; background: #ffffffcc; }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle { width: 2px; height: bar3-h; border-radius: 1px; background: #ffffffcc; }
-                        }
-                        VerticalLayout {
-                            alignment: center;
-                            Rectangle { width: 2px; height: bar4-h; border-radius: 1px; background: #ffffffcc; }
+                            spacing: 2px;
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle { width: 2px; height: bar1-h; border-radius: 1px; background: #ffffff99; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle { width: 2px; height: bar2-h; border-radius: 1px; background: #ffffffbb; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle { width: 2px; height: bar3-h; border-radius: 1px; background: #ffffffff; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle { width: 2px; height: bar4-h; border-radius: 1px; background: #ffffffbb; }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                Rectangle { width: 2px; height: bar5-h; border-radius: 1px; background: #ffffff99; }
+                            }
                         }
                     }
                 }
@@ -92,7 +126,7 @@ export component OverlayWindow inherits Window {
             alignment: center;
 
             Rectangle {
-                width: 300px;
+                width: 200px;
                 border-radius: 12px;
                 background: #000000bb;
 

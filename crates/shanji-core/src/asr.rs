@@ -6,8 +6,9 @@ pub mod paraformer;
 pub mod tokenizer;
 
 use crate::error::{AppError, Result};
+use crate::hotwords::Hotword;
 use crate::model::{ModelBackend, ResolvedModelLayout};
-use crate::text_processing::normalize_transcript;
+use crate::text_processing::normalize_transcript_with_hotwords;
 use feature::{apply_lfr, CmvnStats, FBankConfig, FBankExtractor};
 use ort::session::Session;
 use paraformer::{StreamingParaformer, WholeModelParaformer};
@@ -36,7 +37,7 @@ pub struct AsrConfig {
     pub right_context: usize,
     pub insert_punct: bool,
     pub punct_style: String,
-    pub hotwords: Vec<(String, i32)>,
+    pub hotwords: Vec<Hotword>,
 }
 
 impl Default for AsrConfig {
@@ -137,6 +138,11 @@ impl AsrEngine {
                     runtime_config.predictor_tail_threshold,
                 )?)
             }
+            ModelBackend::Auxiliary => {
+                return Err(AppError::Asr(
+                    "Auxiliary models cannot be loaded as ASR backends".to_string(),
+                ));
+            }
         };
 
         let tokenizer = Tokenizer::from_vocab(&layout.vocab_path)?;
@@ -225,6 +231,7 @@ impl AsrEngine {
             .tokenizer
             .as_ref()
             .ok_or_else(|| AppError::Asr("Tokenizer not loaded".to_string()))?;
+        let hotwords = self.config.hotwords.clone();
 
         match self.backend.as_mut() {
             Some(AsrBackend::Streaming(streaming)) => {
@@ -303,7 +310,8 @@ impl AsrEngine {
                     if let Some(tokens) = streaming.process_features(&new_lfr_frames)? {
                         let text = tokenizer.decode(&tokens, true);
                         append_incremental_text(&mut self.partial_result, &text);
-                        let processed = normalize_transcript(&self.partial_result);
+                        let processed =
+                            normalize_transcript_with_hotwords(&self.partial_result, &hotwords);
                         log::info!(
                             "Streaming ASR partial: tokens={}, raw='{}', processed='{}'",
                             tokens.len(),
@@ -334,7 +342,8 @@ impl AsrEngine {
                 }
 
                 let tokens = model.infer(&features)?;
-                let processed = self.render_transcript(&tokenizer.decode(&tokens, true), false);
+                let processed =
+                    normalize_transcript_with_hotwords(&tokenizer.decode(&tokens, true), &hotwords);
                 if processed.is_empty() {
                     log::info!(
                         "Whole-model ASR partial empty: audio_samples={}, feature_frames={}",
@@ -347,7 +356,7 @@ impl AsrEngine {
                 // Whole-model partials should reflect the current best hypothesis,
                 // not append independent chunk decodes together.
                 self.partial_result = tokenizer.decode(&tokens, true);
-                let processed = self.render_transcript(&self.partial_result, false);
+                let processed = normalize_transcript_with_hotwords(&self.partial_result, &hotwords);
                 log::info!(
                     "Whole-model ASR partial: tokens={}, processed='{}'",
                     tokens.len(),
@@ -368,6 +377,7 @@ impl AsrEngine {
             .tokenizer
             .as_ref()
             .ok_or_else(|| AppError::Asr("Tokenizer not loaded".to_string()))?;
+        let hotwords = self.config.hotwords.clone();
 
         let result = match self.backend.as_mut() {
             Some(AsrBackend::Streaming(streaming)) => {
@@ -417,7 +427,7 @@ impl AsrEngine {
                     final_tokens.len(),
                     raw_text
                 );
-                self.render_transcript(&raw_text, false)
+                normalize_transcript_with_hotwords(&raw_text, &hotwords)
             }
             Some(AsrBackend::Whole(model)) => {
                 if !self.sample_buffer.is_empty() {
@@ -427,11 +437,11 @@ impl AsrEngine {
                 }
 
                 if self.whole_audio_buffer.is_empty() {
-                    self.render_transcript(&self.partial_result, false)
+                    normalize_transcript_with_hotwords(&self.partial_result, &hotwords)
                 } else {
                     let features = self.feature_extractor.extract(&self.whole_audio_buffer)?;
                     if features.is_empty() {
-                        self.render_transcript(&self.partial_result, false)
+                        normalize_transcript_with_hotwords(&self.partial_result, &hotwords)
                     } else {
                         let final_tokens = model.infer(&features)?;
                         let final_text = tokenizer.decode(&final_tokens, true);
@@ -441,7 +451,7 @@ impl AsrEngine {
                             final_text
                         };
                         log::info!("Whole-model ASR final: '{}'", best_effort);
-                        self.render_transcript(&best_effort, false)
+                        normalize_transcript_with_hotwords(&best_effort, &hotwords)
                     }
                 }
             }
@@ -465,10 +475,15 @@ impl AsrEngine {
         }
     }
 
+    pub fn reconfigure(&mut self, config: AsrConfig) {
+        self.config = config;
+    }
+
+    #[allow(dead_code)]
     fn render_transcript(&self, text: &str, is_final: bool) -> String {
         let _ = is_final;
         let _ = &self.config;
-        normalize_transcript(text)
+        normalize_transcript_with_hotwords(text, &self.config.hotwords)
     }
 }
 
@@ -729,6 +744,7 @@ impl Default for AsrEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hotwords::Hotword;
 
     #[test]
     fn online_streaming_prefers_stride_for_chunk_size() {
@@ -763,5 +779,28 @@ mod tests {
         append_incremental_text(&mut text, "模型，适合低延迟实时转写");
 
         assert_eq!(text, "中文流式语音识别模型，适合低延迟实时转写");
+    }
+
+    #[test]
+    fn render_transcript_uses_configured_hotwords() {
+        let engine = AsrEngine::new(AsrConfig {
+            hotwords: vec![
+                Hotword {
+                    word: "Chroma".to_string(),
+                    weight: 90,
+                },
+                Hotword {
+                    word: "Pinecone".to_string(),
+                    weight: 90,
+                },
+            ],
+            ..AsrConfig::default()
+        })
+        .expect("engine");
+
+        assert_eq!(
+            engine.render_transcript("chroma pinecone", false),
+            "Chroma Pinecone"
+        );
     }
 }

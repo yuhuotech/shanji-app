@@ -281,6 +281,7 @@ fn main() -> Result<(), slint::PlatformError> {
     install_history_playback_listener(app.as_weak());
 
     apply_snapshot(&app, &overlay, app::bootstrap_snapshot());
+    app::preload_models();
     refresh_settings_from_app(&app);
 
     let weak = app.as_weak();
@@ -511,8 +512,35 @@ fn main() -> Result<(), slint::PlatformError> {
         let _ = app::play_history_audio(id);
     });
 
+    let weak = app.as_weak();
     app.on_retranscribe_requested(move |id| {
-        let _ = app::retranscribe_history(id);
+        if !app::begin_history_retranscribing(id) {
+            return;
+        }
+
+        if let Some(app) = weak.upgrade() {
+            refresh_history_only(&app);
+            app.set_status_text(format!("正在使用离线模型重新转写历史记录 {}...", id).into());
+        }
+
+        let weak_done = weak.clone();
+        std::thread::spawn(move || {
+            let result = app::retranscribe_history(id);
+            app::finish_history_retranscribing(id);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(app) = weak_done.upgrade() {
+                    refresh_history_only(&app);
+                    match result {
+                        Ok(()) => {
+                            app.set_status_text(format!("历史记录 {} 已重新转写并回写", id).into())
+                        }
+                        Err(err) => app.set_status_text(
+                            format!("历史记录 {} 重新转写失败: {}", id, err).into(),
+                        ),
+                    }
+                }
+            });
+        });
     });
 
     // ── LLM config callbacks ───────────────────────────────────────────────
@@ -556,7 +584,8 @@ fn main() -> Result<(), slint::PlatformError> {
                             }
                         }
                     }
-                }).ok();
+                })
+                .ok();
             });
         }
     });
@@ -640,7 +669,7 @@ fn handle_platform_hotkey_event(
             apply_result(app, overlay, paths);
         }
         (HotkeyAction::PushToTalk, HotkeyEventState::Released) => {
-            let result = crate::audio_transcriber::stop()
+            let result = crate::audio_transcriber::request_stop()
                 .map(|_| ())
                 .map_err(|err| err.to_string())
                 .and_then(|_| app::refresh_snapshot());
@@ -905,6 +934,7 @@ fn refresh_history_only(settings: &AppWindow) {
                     text: c.text.into(),
                     has_audio: c.has_audio,
                     is_playing: active_record_id == Some(c.record_id),
+                    is_retranscribing: app::is_history_retranscribing_record_id(c.record_id),
                     is_llm_rewritten: c.is_llm_rewritten,
                     was_pasted: c.was_pasted,
                 })
