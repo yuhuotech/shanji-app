@@ -89,13 +89,10 @@
             "description": "语音输入完成后对整段结果使用离线模型进行校正，可以有效提升最终识别准确度",
             "backend": "whole",
             "sizeBytes": 864986937,
-            "downloadUrl": "https://github.com/yuhuotech/paraformer-zh/releases/download/models",
+            "downloadUrl": "https://modelscope.cn/models/yuhuotech/paraformer-zh/resolve/master",
             "sha256": "",
-            "version": "v1.0.0",
-            "dependencies": [
-                "fsmn-vad",
-                "ct-punc"
-            ],
+            "version": "master",
+            "dependencies": ["fsmn-vad", "ct-punc"],
             "artifacts": [
                 {
                     "role": "meanVariance",
@@ -127,16 +124,13 @@
             "id": "paraformer-zh-streaming",
             "name": "Paraformer 流式中文",
             "language": "zh",
-            "description": "实时流式语音识别，边说边转写，语音输入的核心必需模型",
+            "description": "实时流式语音识别，边说边转写，语音输入的核心必需模型（含VAD和PUNC模型）",
             "backend": "streaming",
             "sizeBytes": 864853318,
-            "downloadUrl": "https://github.com/yuhuotech/paraformer-zh/releases/download/models",
+            "downloadUrl": "https://modelscope.cn/models/yuhuotech/paraformer-zh/resolve/master",
             "sha256": "",
-            "version": "v1.0.0",
-            "dependencies": [
-                "fsmn-vad",
-                "ct-punc"
-            ],
+            "version": "master",
+            "dependencies": ["fsmn-vad", "ct-punc"],
             "artifacts": [
                 {
                     "role": "meanVariance",

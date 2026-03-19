@@ -437,6 +437,23 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let weak = app.as_weak();
     let weak_overlay = overlay.as_weak();
+    app.on_set_active_prompt_requested(move |id| {
+        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
+            apply_result(&app, &overlay, app::set_active_prompt(id.to_string()));
+            apply_settings_snapshot(&app, app::refresh_settings_window());
+        }
+    });
+
+    let weak = app.as_weak();
+    app.on_open_llm_settings_requested(move || {
+        if let Some(app) = weak.upgrade() {
+            app.set_show_settings_page(true);
+            app.set_active_section(SettingsSection::Llm);
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
     app.on_cycle_punct_style_requested(move || {
         if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
             apply_result(&app, &overlay, app::cycle_punct_style());
@@ -776,6 +793,9 @@ fn apply_snapshot(app: &AppWindow, overlay: &OverlayWindow, snapshot: app::UiSna
     app.set_monitor_button_text(snapshot.monitor_button_text.into());
     app.set_monitor_tip_text(snapshot.monitor_tip_text.into());
     app.set_rewrite_text(snapshot.rewrite_text.into());
+    app.set_llm_enabled(snapshot.llm_enabled);
+    app.set_llm_active_prompt_id(snapshot.llm_active_prompt_id.into());
+    app.set_llm_provider_summary(snapshot.llm_provider_summary.into());
     app.set_tray_summary_text(snapshot.tray_summary_text.into());
     app.set_live_asr_text(snapshot.live_asr_text.into());
     app.set_history_stats_text(snapshot.history_stats_text.into());
@@ -847,6 +867,7 @@ fn apply_settings_snapshot(
             settings.set_llm_api_key_saved(snapshot.llm_api_key_saved);
             settings.set_llm_model_name(snapshot.llm_model_name.into());
             settings.set_llm_system_prompt(snapshot.llm_system_prompt.into());
+            settings.set_llm_active_prompt_id(snapshot.llm_active_prompt_id.into());
             settings.set_llm_test_status_type(snapshot.llm_test_status);
             settings.set_llm_test_status_text(snapshot.llm_test_status_text.into());
             settings.set_overlay_visible(snapshot.overlay_enabled);

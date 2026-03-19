@@ -178,6 +178,7 @@ export component SettingsPage inherits Rectangle {
     in-out property <bool>   llm-api-key-saved: false;
     in-out property <string> llm-model-name: "gpt-4o-mini";
     in-out property <string> llm-system-prompt: "";
+    in-out property <string> llm-active-prompt-id: "default";
     in-out property <string> llm-test-status-text: "";
     // 0=未测试/测试中  1=成功  2=失败
     in-out property <int>    llm-test-status-type: 0;
@@ -216,6 +217,7 @@ export component SettingsPage inherits Rectangle {
     callback test-mic-requested();
     // LLM
     callback toggle-rewrite-requested();
+    callback set-active-prompt-requested(string);
     callback set-llm-base-url(string);
     callback set-llm-api-key(string);
     callback set-llm-model-name(string);
@@ -1012,10 +1014,109 @@ if root.active-section == SettingsSection.Llm: ScrollView {
             }
         }
 
-        // ③ 润色提示词
+        // ③ 润色风格
         VerticalLayout {
             spacing: 6px;
-            SectionLabel { label: "润色提示词"; }
+            SectionLabel { label: "润色风格"; }
+            Rectangle {
+                border-radius: 10px;
+                clip: true;
+                background: Palette.card-bg;
+                border-width: 1px;
+                border-color: Palette.border;
+                height: settings-style-card.min-height;
+                settings-style-card := VerticalLayout {
+                    padding: 12px;
+                    spacing: 8px;
+
+                    Text {
+                        text: "选择预设风格，或切换到【自定义】后在下方编辑提示词";
+                        color: root.llm-enabled ? Palette.text-muted : Palette.text-muted;
+                        font-size: 11px;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: start;
+
+                        for style-chip in [
+                            {id: "default", label: "结构化",  desc: "归纳总结，善用编号条目"},
+                            {id: "light",   label: "轻度整理", desc: "最少干预，忠实保留原意"},
+                            {id: "formal",  label: "书面化",  desc: "适合邮件/文档"}
+                        ]: Rectangle {
+                            property <bool> chip-active: root.llm-active-prompt-id == style-chip.id;
+                            border-radius: 8px;
+                            background: chip-active ? #ede9fe : (root.llm-enabled ? Palette.content-bg : #f9fafb);
+                            border-width: 1px;
+                            border-color: chip-active ? #c4b5fd : Palette.border;
+                            min-width: 80px;
+
+                            style-chip-ta := TouchArea {
+                                enabled: root.llm-enabled;
+                                clicked => { root.set-active-prompt-requested(style-chip.id); }
+                            }
+
+                            VerticalLayout {
+                                padding: 8px;
+                                spacing: 2px;
+                                Text {
+                                    text: style-chip.label;
+                                    color: chip-active ? #6d28d9 : (root.llm-enabled ? Palette.text-primary : Palette.text-muted);
+                                    font-size: 12px;
+                                    font-weight: chip-active ? 700 : 400;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: style-chip.desc;
+                                    color: chip-active ? #7c3aed : Palette.text-muted;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+
+                        // 自定义 chip
+                        Rectangle {
+                            property <bool> custom-active: root.llm-active-prompt-id == "custom";
+                            border-radius: 8px;
+                            background: custom-active ? #ede9fe : (root.llm-enabled ? Palette.content-bg : #f9fafb);
+                            border-width: 1px;
+                            border-color: custom-active ? #c4b5fd : Palette.border;
+                            min-width: 80px;
+
+                            custom-style-ta := TouchArea {
+                                enabled: root.llm-enabled;
+                                clicked => { root.set-active-prompt-requested("custom"); }
+                            }
+
+                            VerticalLayout {
+                                padding: 8px;
+                                spacing: 2px;
+                                Text {
+                                    text: "自定义";
+                                    color: custom-active ? #6d28d9 : (root.llm-enabled ? Palette.text-primary : Palette.text-muted);
+                                    font-size: 12px;
+                                    font-weight: custom-active ? 700 : 400;
+                                    horizontal-alignment: center;
+                                }
+                                Text {
+                                    text: "编辑下方提示词";
+                                    color: custom-active ? #7c3aed : Palette.text-muted;
+                                    font-size: 10px;
+                                    horizontal-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ④ 润色提示词
+        VerticalLayout {
+            spacing: 6px;
+            SectionLabel { label: "润色提示词（当前风格）"; }
             Rectangle {
                 border-radius: 10px;
                 clip: true;

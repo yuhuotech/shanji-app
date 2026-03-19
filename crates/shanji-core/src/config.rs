@@ -12,6 +12,13 @@ pub const DEFAULT_REWRITE_PROMPT_NAME: &str = "轻度语音润色";
 pub const LEGACY_DEFAULT_REWRITE_SYSTEM_PROMPT: &str =
     "请将以下语音输入文本整理为适合直接输入或粘贴的最终文本：修正明显识别错误，去除语气词、口吃和重复表达，补全自然标点，保留原意，不要无端扩写。只输出整理后的文本。";
 pub const DEFAULT_REWRITE_SYSTEM_PROMPT: &str = "请对以下语音输入做轻度整理：只修正非常确定的识别错误、口头语、重复和标点；尽量保留原有句式、顺序、信息粒度和措辞。不要总结，不要改写成说明文，不要补充原文未明确说出的术语全称、示例、背景知识、模型名、产品名或数字。对拿不准的内容宁可保留原样。只输出整理后的文本。";
+pub const STRUCTURED_REWRITE_PROMPT_NAME: &str = "结构化";
+pub const STRUCTURED_REWRITE_SYSTEM_PROMPT: &str = "请将以下语音输入整理为结构清晰的文本：归纳核心要点，按逻辑顺序组织内容，适当使用编号（1、2、3）或分点，使表达条理清晰；修正识别错误和标点，去除语气词和重复内容。只输出整理后的文本。";
+pub const LIGHT_REWRITE_PROMPT_NAME: &str = "轻度整理";
+pub const FORMAL_REWRITE_SYSTEM_PROMPT: &str = "请将以下语音输入整理为正式书面文本：修正识别错误，去除口头语和语气词，整理为完整句子，使用标准书面用语，补全标点。适合邮件、报告等正式场合。只输出整理后的文本。";
+// kept for v10 migration (not in defaults)
+pub const SPOKEN_REWRITE_SYSTEM_PROMPT: &str = "请对以下语音输入只做最小整理：仅修正明显识别错误和错别字，保留口语表达、语气词和原始句式，不改变说话风格。只输出整理后的文本。";
+pub const TECHNICAL_REWRITE_SYSTEM_PROMPT: &str = "请将以下语音输入整理为简洁准确的技术表述：修正识别错误，去除冗余措辞，保留专业术语和所有技术细节，不添加解释或背景信息。只输出整理后的文本。";
 
 fn config_cache() -> &'static RwLock<Option<AppConfig>> {
     CONFIG_CACHE.get_or_init(|| RwLock::new(None))
@@ -166,12 +173,26 @@ impl Default for RewriteConfig {
             active_provider_id: "".to_string(),
             providers: vec![],
             active_prompt_id: "default".to_string(),
-            prompts: vec![PromptPreset {
-                id: "default".to_string(),
-                name: DEFAULT_REWRITE_PROMPT_NAME.to_string(),
-                system_prompt: DEFAULT_REWRITE_SYSTEM_PROMPT.to_string(),
-                is_builtin: true,
-            }],
+            prompts: vec![
+                PromptPreset {
+                    id: "default".to_string(),
+                    name: STRUCTURED_REWRITE_PROMPT_NAME.to_string(),
+                    system_prompt: STRUCTURED_REWRITE_SYSTEM_PROMPT.to_string(),
+                    is_builtin: true,
+                },
+                PromptPreset {
+                    id: "light".to_string(),
+                    name: LIGHT_REWRITE_PROMPT_NAME.to_string(),
+                    system_prompt: DEFAULT_REWRITE_SYSTEM_PROMPT.to_string(),
+                    is_builtin: true,
+                },
+                PromptPreset {
+                    id: "formal".to_string(),
+                    name: "书面化".to_string(),
+                    system_prompt: FORMAL_REWRITE_SYSTEM_PROMPT.to_string(),
+                    is_builtin: true,
+                },
+            ],
         }
     }
 }
@@ -312,7 +333,7 @@ fn default_version() -> u32 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: 9,
+            version: 11,
             general: GeneralConfig::default(),
             audio: AudioConfig::default(),
             asr: AsrConfig::default(),
@@ -484,6 +505,60 @@ impl AppConfig {
             modified = true;
         }
 
+        if self.version < 10 {
+            let new_builtins = [
+                ("formal", "书面化润色", FORMAL_REWRITE_SYSTEM_PROMPT),
+                ("spoken", "口语保留", SPOKEN_REWRITE_SYSTEM_PROMPT),
+                ("technical", "技术简洁", TECHNICAL_REWRITE_SYSTEM_PROMPT),
+            ];
+            for (id, name, prompt) in &new_builtins {
+                if !self.rewrite.prompts.iter().any(|p| p.id == *id) {
+                    self.rewrite.prompts.push(PromptPreset {
+                        id: id.to_string(),
+                        name: name.to_string(),
+                        system_prompt: prompt.to_string(),
+                        is_builtin: true,
+                    });
+                }
+            }
+            self.version = 10;
+            modified = true;
+        }
+
+        if self.version < 11 {
+            // Update "default" builtin to 结构化 (only if it still has old light-editing prompt)
+            if let Some(p) = self.rewrite.prompts.iter_mut().find(|p| {
+                p.id == "default"
+                    && p.is_builtin
+                    && (p.system_prompt == DEFAULT_REWRITE_SYSTEM_PROMPT
+                        || p.system_prompt == LEGACY_DEFAULT_REWRITE_SYSTEM_PROMPT)
+            }) {
+                p.name = STRUCTURED_REWRITE_PROMPT_NAME.to_string();
+                p.system_prompt = STRUCTURED_REWRITE_SYSTEM_PROMPT.to_string();
+            }
+            // Add "light" preset if not present
+            if !self.rewrite.prompts.iter().any(|p| p.id == "light") {
+                self.rewrite.prompts.push(PromptPreset {
+                    id: "light".to_string(),
+                    name: LIGHT_REWRITE_PROMPT_NAME.to_string(),
+                    system_prompt: DEFAULT_REWRITE_SYSTEM_PROMPT.to_string(),
+                    is_builtin: true,
+                });
+            }
+            // Remove obsolete builtin presets
+            self.rewrite
+                .prompts
+                .retain(|p| !p.is_builtin || (p.id != "spoken" && p.id != "technical"));
+            // Reset active prompt if it pointed to removed presets
+            if self.rewrite.active_prompt_id == "spoken"
+                || self.rewrite.active_prompt_id == "technical"
+            {
+                self.rewrite.active_prompt_id = "default".to_string();
+            }
+            self.version = 11;
+            modified = true;
+        }
+
         modified
     }
 }
@@ -574,7 +649,7 @@ mod tests {
         config.audio.min_speech_frames = 3;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 9);
+        assert_eq!(config.version, 11);
         assert!(approx_eq(config.audio.vad_threshold, 0.45));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
         assert_eq!(config.audio.min_speech_frames, 2);
@@ -593,7 +668,7 @@ mod tests {
         config.asr.sentence_pause_ms = 2_400;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 9);
+        assert_eq!(config.version, 11);
         assert!(approx_eq(config.audio.vad_threshold, 0.55));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.25));
         assert_eq!(config.audio.min_speech_frames, 4);
@@ -610,7 +685,7 @@ mod tests {
         config.audio.min_speech_frames = 1;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 9);
+        assert_eq!(config.version, 11);
         assert!(approx_eq(config.audio.vad_threshold, 0.45));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
         assert_eq!(config.audio.min_speech_frames, 2);
@@ -624,7 +699,7 @@ mod tests {
         config.asr.sentence_pause_ms = 1_000;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 9);
+        assert_eq!(config.version, 11);
         assert!(config.asr.sentence_pause_ms > config.asr.comma_pause_ms);
     }
 
@@ -640,11 +715,11 @@ mod tests {
         }];
 
         assert!(config.migrate());
-        assert_eq!(config.version, 9);
-        assert_eq!(config.rewrite.prompts[0].name, DEFAULT_REWRITE_PROMPT_NAME);
+        assert_eq!(config.version, 11);
+        assert_eq!(config.rewrite.prompts[0].name, STRUCTURED_REWRITE_PROMPT_NAME);
         assert_eq!(
             config.rewrite.prompts[0].system_prompt,
-            DEFAULT_REWRITE_SYSTEM_PROMPT
+            STRUCTURED_REWRITE_SYSTEM_PROMPT
         );
     }
 
@@ -660,7 +735,7 @@ mod tests {
         }];
 
         assert!(config.migrate());
-        assert_eq!(config.version, 9);
+        assert_eq!(config.version, 11);
         assert_eq!(config.rewrite.prompts[0].name, "我的自定义润色");
         assert_eq!(
             config.rewrite.prompts[0].system_prompt,
@@ -676,7 +751,7 @@ mod tests {
         config.asr.sentence_pause_ms = 2_800;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 9);
+        assert_eq!(config.version, 11);
         assert_eq!(config.asr.comma_pause_ms, 800);
         assert_eq!(config.asr.sentence_pause_ms, 2_800);
     }
@@ -689,7 +764,7 @@ mod tests {
         config.asr.sentence_pause_ms = 2_400;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 9);
+        assert_eq!(config.version, 11);
         assert_eq!(config.asr.comma_pause_ms, 900);
         assert_eq!(config.asr.sentence_pause_ms, 2_400);
     }

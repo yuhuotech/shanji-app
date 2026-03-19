@@ -3,25 +3,6 @@ import { SettingsPage, SettingsSection, HotwordLibraryCard, HistoryCardData } fr
 import { Icons, SvgIcon } from "icons.slint";
 import { CustomSelector } from "form.slint";
 
-// ── Reusable: shield badge used in permission rows ────────────────────────────
-component ShieldBadge inherits Rectangle {
-    in property <bool> ok: true;
-
-    width: 28px;
-    height: 28px;
-    border-radius: 7px;
-    background: ok ? #d1fae5 : #fee2e2;
-
-    Text {
-        text: ok ? "✓" : "✗";
-        color: ok ? #059669 : #dc2626;
-        font-size: 13px;
-        font-weight: 700;
-        horizontal-alignment: center;
-        vertical-alignment: center;
-    }
-}
-
 // ── Reusable: ghost icon button (SVG path) ───────────────────────────────────
 component GhostIconButton inherits Rectangle {
     in property <string> icon-path;
@@ -152,6 +133,8 @@ export component AppWindow inherits Window {
     in-out property <bool>   llm-api-key-saved: false;
     in-out property <string> llm-model-name: "gpt-4o-mini";
     in-out property <string> llm-system-prompt: "";
+    in-out property <string> llm-active-prompt-id: "default";
+    in-out property <string> llm-provider-summary: "";
     in-out property <string> llm-test-status-text: "";
     in-out property <int>    llm-test-status-type: 0;
     in-out property <bool>   llm-testing: false;
@@ -186,6 +169,8 @@ export component AppWindow inherits Window {
     callback select-audio-device-requested(int);
     callback test-mic-requested();
     callback toggle-rewrite-requested();
+    callback set-active-prompt-requested(string);
+    callback open-llm-settings-requested();
     callback set-llm-base-url(string);
     callback set-llm-api-key(string);
     callback set-llm-model-name(string);
@@ -247,6 +232,7 @@ export component AppWindow inherits Window {
             llm-api-key-saved <=> root.llm-api-key-saved;
             llm-model-name <=> root.llm-model-name;
             llm-system-prompt <=> root.llm-system-prompt;
+            llm-active-prompt-id <=> root.llm-active-prompt-id;
             llm-test-status-text <=> root.llm-test-status-text;
             llm-test-status-type <=> root.llm-test-status-type;
             llm-testing <=> root.llm-testing;
@@ -270,6 +256,7 @@ export component AppWindow inherits Window {
             select-audio-device-requested(index) => { root.select-audio-device-requested(index); }
             test-mic-requested => { root.test-mic-requested(); }
             toggle-rewrite-requested => { root.toggle-rewrite-requested(); }
+            set-active-prompt-requested(id) => { root.set-active-prompt-requested(id); }
             set-llm-base-url(url) => { root.set-llm-base-url(url); }
             set-llm-api-key(key) => { root.set-llm-api-key(key); }
             set-llm-model-name(model) => { root.set-llm-model-name(model); }
@@ -416,6 +403,93 @@ export component AppWindow inherits Window {
                     }
 
                     // ════════════════════════════════════════════════════════
+                    // Mic / paste status strip (wide + compact)
+                    // ════════════════════════════════════════════════════════
+                    Rectangle {
+                        border-radius: 10px;
+                        background: mic-ready && paste-ready ? #f8fafc : #fff7ed;
+                        border-width: 1px;
+                        border-color: mic-ready && paste-ready ? #e2e8f0 : #fed7aa;
+                        height: 38px;
+
+                        HorizontalLayout {
+                            padding-left: 14px; padding-right: 14px;
+                            spacing: 16px;
+                            alignment: start;
+
+                            // 麦克风状态
+                            HorizontalLayout {
+                                spacing: 5px;
+                                alignment: center;
+                                Text {
+                                    text: "🎙";
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: mic-ready ? "麦克风已授权" : "麦克风未授权";
+                                    color: mic-ready ? #059669 : #dc2626;
+                                    font-size: 12px;
+                                    font-weight: mic-ready ? 400 : 700;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // 若麦克风未授权显示授权按钮
+                            if !mic-ready: VerticalLayout {
+                                alignment: center;
+                                Rectangle {
+                                    width: 72px; height: 24px;
+                                    border-radius: 5px;
+                                    background: mic-auth-strip-ta.has-hover ? #1d4ed8 : #2563eb;
+                                    mic-auth-strip-ta := TouchArea {
+                                        clicked => { root.request-mic-permission(); }
+                                    }
+                                    Text {
+                                        text: "前往授权";
+                                        color: #ffffff;
+                                        font-size: 11px;
+                                        font-weight: 700;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+                            }
+
+                            // 自动粘贴状态
+                            HorizontalLayout {
+                                spacing: 5px;
+                                alignment: center;
+                                Text {
+                                    text: paste-ready ? "✓" : "✗";
+                                    color: paste-ready ? #059669 : #dc2626;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: "自动粘贴";
+                                    color: paste-ready ? #059669 : #dc2626;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                            }
+
+                            // 默认设备
+                            HorizontalLayout {
+                                spacing: 5px;
+                                alignment: center;
+                                Text {
+                                    text: "默认音频设备：" + default-device-text;
+                                    color: #6b7280;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+
+                    // ════════════════════════════════════════════════════════
                     // Three status cards — wide layout
                     // ════════════════════════════════════════════════════════
                     if !root.compact-layout : HorizontalLayout {
@@ -430,7 +504,6 @@ export component AppWindow inherits Window {
                             width: card-col-width;
 
                             VerticalLayout {
-                                alignment: start;
                                 padding: 18px;
                                 spacing: 10px;
 
@@ -489,25 +562,6 @@ export component AppWindow inherits Window {
                                     InfoPill { label: "版本"; value: model-version-text; }
                                     InfoPill { label: "大小"; value: model-size-text;    }
                                     InfoPill { label: "语言"; value: model-language-text; }
-                                }
-
-                                if !model-ready : HorizontalLayout {
-                                    spacing: 8px;
-                                    Text {
-                                        text: "GitHub代理";
-                                        color: #667085;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
-                                    }
-                                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                                    CustomSelector {
-                                        model: ["ghfast.top", "gh-proxy.com", "不使用代理"];
-                                        width: 146px;
-                                        current-index: root.github-proxy-current-index;
-                                        selected(index) => {
-                                            root.github-proxy-selected(index);
-                                        }
-                                    }
                                 }
 
                                 // install badge — installed
@@ -583,6 +637,14 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                 }
+                                Rectangle { vertical-stretch: 1; background: transparent; }
+                                Text {
+                                    text: "软件运行必需依赖，下载后方可使用该软件";
+                                    color: #3b82f6;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                    horizontal-alignment: center;
+                                }
                             }
                         }
 
@@ -595,7 +657,6 @@ export component AppWindow inherits Window {
                             width: card-col-width;
 
                             VerticalLayout {
-                                alignment: start;
                                 padding: 18px;
                                 spacing: 10px;
 
@@ -754,10 +815,18 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                 }
+                                Rectangle { vertical-stretch: 1; background: transparent; }
+                                Text {
+                                    text: "离线模型可选择性下载，不影响软件使用";
+                                    color: #3b82f6;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                    horizontal-alignment: center;
+                                }
                             }
                         }
 
-                        // ── 麦克风授权 ────────────────────────────────────
+                        // ── LLM 润色 ──────────────────────────────────────
                         Rectangle {
                             border-radius: 18px;
                             background: #ffffff;
@@ -766,68 +835,139 @@ export component AppWindow inherits Window {
                             width: card-col-width;
 
                             VerticalLayout {
-                                alignment: start;
                                 padding: 18px;
                                 spacing: 10px;
 
-                                // title row
+                                // title row: icon + label + dot + toggle
                                 HorizontalLayout {
                                     spacing: 7px;
                                     height: 22px;
-                                    SvgIcon { commands: Icons.mic; icon-color: #3b82f6; }
-                                    Text { text: "麦克风授权"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
-                                    Text { text: "●"; color: mic-ready ? #22c55e : #ef4444; font-size: 9px; vertical-alignment: center; }
+                                    SvgIcon { commands: Icons.sparkles; icon-color: #7c3aed; }
+                                    Text { text: "LLM 润色（建议）"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
+                                    Text {
+                                        text: "●";
+                                        color: llm-enabled ? #22c55e : #9ca3af;
+                                        font-size: 9px; vertical-alignment: center;
+                                    }
                                     Rectangle { horizontal-stretch: 1; background: transparent; }
-                                }
-
-                                // mic permission
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    alignment: start;
-                                    ShieldBadge { ok: mic-ready; }
-                                    VerticalLayout {
-                                        spacing: 3px;
-                                        horizontal-stretch: 1;
-                                        Text { text: mic-permission-title; color: mic-ready ? #1f2937 : #dc2626; font-size: 13px; font-weight: 700; }
-                                        Text { text: mic-permission-body;  color: #667085; font-size: 12px; wrap: word-wrap; }
-                                        if !mic-ready: Rectangle {
-                                            height: 28px;
-                                            border-radius: 6px;
-                                            background: mic-auth-ta.has-hover ? #1d4ed8 : #2563eb;
-                                            width: 120px;
-                                            mic-auth-ta := TouchArea {
-                                                clicked => { root.request-mic-permission(); }
-                                            }
-                                            Text {
-                                                text: "前往系统设置授权";
-                                                color: #ffffff;
-                                                font-size: 11px;
-                                                font-weight: 700;
-                                                horizontal-alignment: center;
-                                                vertical-alignment: center;
-                                            }
+                                    Rectangle {
+                                        width: 36px; height: 20px; border-radius: 10px;
+                                        background: llm-enabled ? #7c3aed : #d1d5db;
+                                        llm-toggle-ta := TouchArea {
+                                            clicked => { root.toggle-rewrite-requested(); }
+                                        }
+                                        Rectangle {
+                                            width: 16px; height: 16px; border-radius: 8px;
+                                            background: #ffffff;
+                                            x: llm-enabled ? 18px : 2px; y: 2px;
                                         }
                                     }
                                 }
 
-                                // paste permission
-                                HorizontalLayout {
-                                    spacing: 10px;
-                                    alignment: start;
-                                    ShieldBadge { ok: paste-ready; }
-                                    VerticalLayout {
-                                        spacing: 3px;
-                                        horizontal-stretch: 1;
-                                        Text { text: paste-permission-title; color: #1f2937; font-size: 13px; font-weight: 700; }
-                                        Text { text: paste-permission-body;  color: #667085; font-size: 12px; wrap: word-wrap; }
+                                // provider name — big like model name
+                                VerticalLayout {
+                                    spacing: 3px;
+                                    Text {
+                                        text: llm-provider-summary == "" ? "模型未配置" : llm-provider-summary;
+                                        color: llm-enabled
+                                            ? (llm-provider-summary == "" ? #dc2626 : #1f2937)
+                                            : #9ca3af;
+                                        font-size: 17px;
+                                        font-weight: 700;
+                                    }
+                                    Text {
+                                        text: llm-enabled ? "大模型对转录文本进行智能润色改写" : "润色功能已关闭，将直接输出语音输入结果";
+                                        color: #667085;
+                                        font-size: 12px;
+                                        wrap: word-wrap;
                                     }
                                 }
 
-                                // default device
+                                // style selector row
                                 VerticalLayout {
-                                    spacing: 3px;
-                                    Text { text: "默认设备";       color: #9ca3af; font-size: 11px; }
-                                    Text { text: default-device-text; color: #1f2937; font-size: 15px; font-weight: 700; }
+                                    spacing: 5px;
+                                    Text {
+                                        text: "润色风格";
+                                        color: llm-enabled ? #9ca3af : #d1d5db;
+                                        font-size: 11px;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 5px;
+                                        alignment: start;
+
+                                        for chip-info in [
+                                            {id: "default", label: "结构化"},
+                                            {id: "light",   label: "轻度整理"},
+                                            {id: "formal",  label: "书面化"},
+                                            {id: "custom",  label: "自定义"}
+                                        ]: Rectangle {
+                                            property <bool> is-active: llm-active-prompt-id == chip-info.id;
+                                            border-radius: 7px;
+                                            background: is-active ? #7c3aed
+                                                : (llm-enabled ? #f3f4f6 : #f9fafb);
+                                            border-width: is-active ? 0px : 1px;
+                                            border-color: #e5e7eb;
+                                            height: 28px;
+
+                                            chip-ta := TouchArea {
+                                                enabled: llm-enabled;
+                                                clicked => { root.set-active-prompt-requested(chip-info.id); }
+                                                mouse-cursor: pointer;
+                                            }
+
+                                            HorizontalLayout {
+                                                padding-left: 9px; padding-right: 9px;
+                                                alignment: center;
+                                                Text {
+                                                    text: chip-info.label;
+                                                    color: is-active ? #ffffff
+                                                        : (llm-enabled ? #374151 : #d1d5db);
+                                                    font-size: 11px;
+                                                    font-weight: is-active ? 700 : 400;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        text: llm-active-prompt-id == "default" ? "归纳总结，结构化表达，善用编号条目"
+                                            : (llm-active-prompt-id == "light" ? "最少干预，修正标点错误，忠实保留原意"
+                                            : (llm-active-prompt-id == "formal" ? "适合邮件与文档，正式规范的书面风格"
+                                            : "使用下方自定义提示词"));
+                                        color: llm-enabled ? #9ca3af : #d1d5db;
+                                        font-size: 10px;
+                                    }
+                                }
+
+                                // settings link button — full width like model status badge
+                                Rectangle {
+                                    border-radius: 10px;
+                                    background: llm-goto-ta.has-hover ? #ede9fe : #f5f3ff;
+                                    border-width: 1px;
+                                    border-color: #ddd6fe;
+                                    height: 40px;
+
+                                    llm-goto-ta := TouchArea {
+                                        clicked => { root.open-llm-settings-requested(); }
+                                        mouse-cursor: pointer;
+                                    }
+
+                                    Text {
+                                        text: "配置 API 与提示词  →";
+                                        color: #6d28d9;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        font-size: 13px;
+                                        font-weight: 700;
+                                    }
+                                }
+                                Rectangle { vertical-stretch: 1; background: transparent; }
+                                Text {
+                                    text: "建议开启，可显著提升输入效率和准确性";
+                                    color: #3b82f6;
+                                    font-size: 11px;
+                                    wrap: word-wrap;
+                                    horizontal-alignment: center;
                                 }
                             }
                         }
@@ -904,7 +1044,7 @@ export component AppWindow inherits Window {
                         Rectangle {
                             border-radius: 18px; background: #ffffff;
                             border-width: 1px; border-color: #d7dee8;                            VerticalLayout {
-                                alignment: start; padding: 18px; spacing: 10px;
+                                padding: 18px; spacing: 10px;
                                 HorizontalLayout {
                                     spacing: 7px;
                                     SvgIcon { commands: Icons.zap; icon-color: #0d9488; }
@@ -956,24 +1096,6 @@ export component AppWindow inherits Window {
                                     InfoPill { label: "大小"; value: model-size-text;    }
                                     InfoPill { label: "语言"; value: model-language-text; }
                                 }
-                                if !model-ready : HorizontalLayout {
-                                    spacing: 8px;
-                                    Text {
-                                        text: "GitHub代理";
-                                        color: #667085;
-                                        font-size: 12px;
-                                        vertical-alignment: center;
-                                    }
-                                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                                    CustomSelector {
-                                        model: ["ghfast.top", "gh-proxy.com", "不使用代理"];
-                                        width: 146px;
-                                        current-index: root.github-proxy-current-index;
-                                        selected(index) => {
-                                            root.github-proxy-selected(index);
-                                        }
-                                    }
-                                }
                                 if model-ready : Rectangle {
                                     border-radius: 10px; background: #dff6e8; height: 40px;
                                     Text {
@@ -1013,6 +1135,12 @@ export component AppWindow inherits Window {
                                         }
                                     }
                                 }
+                                Rectangle { vertical-stretch: 1; background: transparent; }
+                                Text {
+                                    text: "软件运行必需依赖，下载后方可使用该软件";
+                                    color: #3b82f6; font-size: 11px; wrap: word-wrap;
+                                    horizontal-alignment: center;
+                                }
                             }
                         }
 
@@ -1021,7 +1149,7 @@ export component AppWindow inherits Window {
                             border-radius: 18px; background: #ffffff;
                             border-width: 1px; border-color: #d7dee8;
                             VerticalLayout {
-                                alignment: start; padding: 18px; spacing: 10px;
+                                padding: 18px; spacing: 10px;
                                 HorizontalLayout {
                                     spacing: 7px;
                                     SvgIcon { commands: Icons.layers; icon-color: #f59e0b; }
@@ -1116,55 +1244,124 @@ export component AppWindow inherits Window {
                                         Text { text: "下载失败：" + refine-model-download-error-text; color: #b91c1c; font-size: 11px; wrap: word-wrap; }
                                     }
                                 }
+                                Rectangle { vertical-stretch: 1; background: transparent; }
+                                Text {
+                                    text: "离线模型可选择性下载，不影响软件使用";
+                                    color: #3b82f6; font-size: 11px; wrap: word-wrap;
+                                    horizontal-alignment: center;
+                                }
                             }
                         }
 
-                        // 麦克风授权
+                        // LLM 润色（compact）
                         Rectangle {
                             border-radius: 18px; background: #ffffff;
                             border-width: 1px; border-color: #d7dee8;
                             VerticalLayout {
-                                alignment: start; padding: 18px; spacing: 10px;
+                                padding: 18px; spacing: 10px;
                                 HorizontalLayout {
                                     spacing: 7px; height: 22px;
-                                    SvgIcon { commands: Icons.mic; icon-color: #3b82f6; }
-                                    Text { text: "麦克风授权"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
-                                    Text { text: "●"; color: mic-ready ? #22c55e : #ef4444; font-size: 9px; vertical-alignment: center; }
-                                    Rectangle { horizontal-stretch: 1; background: transparent; }
-                                }
-                                HorizontalLayout {
-                                    spacing: 10px; alignment: start;
-                                    ShieldBadge { ok: mic-ready; }
-                                    VerticalLayout {
-                                        spacing: 3px; horizontal-stretch: 1;
-                                        Text { text: mic-permission-title; color: mic-ready ? #1f2937 : #dc2626; font-size: 13px; font-weight: 700; }
-                                        Text { text: mic-permission-body;  color: #667085; font-size: 12px; wrap: word-wrap; }
-                                        if !mic-ready: Rectangle {
-                                            height: 28px; border-radius: 6px;
-                                            background: mic-auth-ta2.has-hover ? #1d4ed8 : #2563eb;
-                                            width: 120px;
-                                            mic-auth-ta2 := TouchArea { clicked => { root.request-mic-permission(); } }
-                                            Text {
-                                                text: "前往系统设置授权"; color: #ffffff;
-                                                font-size: 11px; font-weight: 700;
-                                                horizontal-alignment: center; vertical-alignment: center;
-                                            }
-                                        }
+                                    SvgIcon { commands: Icons.sparkles; icon-color: #7c3aed; }
+                                    Text { text: "LLM 润色"; color: #1f2937; font-size: 14px; font-weight: 700; vertical-alignment: center; }
+                                    Text {
+                                        text: "●";
+                                        color: llm-enabled ? #22c55e : #9ca3af;
+                                        font-size: 9px; vertical-alignment: center;
                                     }
-                                }
-                                HorizontalLayout {
-                                    spacing: 10px; alignment: start;
-                                    ShieldBadge { ok: paste-ready; }
-                                    VerticalLayout {
-                                        spacing: 3px; horizontal-stretch: 1;
-                                        Text { text: paste-permission-title; color: #1f2937; font-size: 13px; font-weight: 700; }
-                                        Text { text: paste-permission-body;  color: #667085; font-size: 12px; wrap: word-wrap; }
+                                    Rectangle { horizontal-stretch: 1; background: transparent; }
+                                    Rectangle {
+                                        width: 36px; height: 20px; border-radius: 10px;
+                                        background: llm-enabled ? #7c3aed : #d1d5db;
+                                        compact-llm-toggle-ta := TouchArea {
+                                            clicked => { root.toggle-rewrite-requested(); }
+                                        }
+                                        Rectangle {
+                                            width: 16px; height: 16px; border-radius: 8px;
+                                            background: #ffffff;
+                                            x: llm-enabled ? 18px : 2px; y: 2px;
+                                        }
                                     }
                                 }
                                 VerticalLayout {
                                     spacing: 3px;
-                                    Text { text: "默认设备"; color: #9ca3af; font-size: 11px; }
-                                    Text { text: default-device-text; color: #1f2937; font-size: 15px; font-weight: 700; }
+                                    Text {
+                                        text: llm-provider-summary == "" ? "模型未配置" : llm-provider-summary;
+                                        color: llm-enabled
+                                            ? (llm-provider-summary == "" ? #dc2626 : #1f2937)
+                                            : #9ca3af;
+                                        font-size: 17px; font-weight: 700;
+                                    }
+                                    Text {
+                                        text: llm-enabled ? "大模型对转录文本进行智能润色改写" : "润色功能已关闭，将直接输出语音输入结果";
+                                        color: #667085; font-size: 12px; wrap: word-wrap;
+                                    }
+                                }
+                                VerticalLayout {
+                                    spacing: 5px;
+                                    Text {
+                                        text: "润色风格";
+                                        color: llm-enabled ? #9ca3af : #d1d5db;
+                                        font-size: 11px;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: 5px; alignment: start;
+                                        for chip-info2 in [
+                                            {id: "default", label: "结构化"},
+                                            {id: "light",   label: "轻度整理"},
+                                            {id: "formal",  label: "书面化"},
+                                            {id: "custom",  label: "自定义"}
+                                        ]: Rectangle {
+                                            property <bool> is-active2: llm-active-prompt-id == chip-info2.id;
+                                            border-radius: 7px;
+                                            background: is-active2 ? #7c3aed : (llm-enabled ? #f3f4f6 : #f9fafb);
+                                            border-width: is-active2 ? 0px : 1px;
+                                            border-color: #e5e7eb;
+                                            height: 28px;
+                                            chip-ta2 := TouchArea {
+                                                enabled: llm-enabled;
+                                                clicked => { root.set-active-prompt-requested(chip-info2.id); }
+                                                mouse-cursor: pointer;
+                                            }
+                                            HorizontalLayout {
+                                                padding-left: 9px; padding-right: 9px; alignment: center;
+                                                Text {
+                                                    text: chip-info2.label;
+                                                    color: is-active2 ? #ffffff : (llm-enabled ? #374151 : #d1d5db);
+                                                    font-size: 11px; font-weight: is-active2 ? 700 : 400;
+                                                    vertical-alignment: center;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Text {
+                                        text: llm-active-prompt-id == "default" ? "归纳总结，结构化表达，善用编号条目"
+                                            : (llm-active-prompt-id == "light" ? "最少干预，修正标点错误，忠实保留原意"
+                                            : (llm-active-prompt-id == "formal" ? "适合邮件与文档，正式规范的书面风格"
+                                            : "使用下方自定义提示词"));
+                                        color: llm-enabled ? #9ca3af : #d1d5db;
+                                        font-size: 10px;
+                                    }
+                                }
+                                Rectangle {
+                                    border-radius: 10px;
+                                    background: compact-llm-goto-ta.has-hover ? #ede9fe : #f5f3ff;
+                                    border-width: 1px; border-color: #ddd6fe;
+                                    height: 40px;
+                                    compact-llm-goto-ta := TouchArea {
+                                        clicked => { root.open-llm-settings-requested(); }
+                                        mouse-cursor: pointer;
+                                    }
+                                    Text {
+                                        text: "配置 API 与提示词  →";
+                                        color: #6d28d9; font-size: 13px; font-weight: 700;
+                                        horizontal-alignment: center; vertical-alignment: center;
+                                    }
+                                }
+                                Rectangle { vertical-stretch: 1; background: transparent; }
+                                Text {
+                                    text: "建议开启，可显著提升输入效率和准确性";
+                                    color: #3b82f6; font-size: 11px; wrap: word-wrap;
+                                    horizontal-alignment: center;
                                 }
                             }
                         }

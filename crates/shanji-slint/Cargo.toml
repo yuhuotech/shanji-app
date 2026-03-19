@@ -25,3 +25,10 @@ objc2-foundation = { version = "0.3", features = ["NSData"] }
 
 [build-dependencies]
 slint-build = "1"
+
+[package.metadata.bundle]
+identifier = "com.yuhuo.shanjiapp"
+name = "闪记"
+icon = ["assets/shanji_logo.png"]
+category = "public.app-category.utilities"
+short_description = "AI 语音输入工具"

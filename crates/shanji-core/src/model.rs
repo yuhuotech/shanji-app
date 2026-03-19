@@ -4,9 +4,6 @@ use crate::paths::AppPaths;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-const DEFAULT_REGISTRY_URL: &str =
-    "https://github.com/yuhuotech/paraformer-zh/releases/download/models/model_registry.json";
-const DEV_REGISTRY_URL: &str = "http://localhost:1420/model_registry.json";
 const GITHUB_PROXY_ENV: &str = "SHANJI_GITHUB_PROXY";
 const DEFAULT_GITHUB_PROXY: &str = "https://ghfast.top/";
 
@@ -110,14 +107,6 @@ pub fn default_registry() -> ModelRegistry {
     )
 }
 
-pub fn registry_url() -> String {
-    if cfg!(debug_assertions) {
-        DEV_REGISTRY_URL.to_string()
-    } else {
-        DEFAULT_REGISTRY_URL.to_string()
-    }
-}
-
 fn github_proxy_prefix_with_paths(paths: Option<&AppPaths>) -> Option<String> {
     if let Some(paths) = paths {
         if let Ok(cfg) = config::get_config(paths) {
@@ -165,66 +154,6 @@ pub fn list_models_with_paths(paths: &AppPaths) -> Result<Vec<ModelInfo>> {
     Ok(registry.models)
 }
 
-pub async fn fetch_registry_with_paths(paths: &AppPaths) -> Result<Vec<ModelInfo>> {
-    let direct_url = if let Ok(url) = std::env::var("SHANJI_MODEL_REGISTRY_URL") {
-        url
-    } else {
-        registry_url()
-    };
-    let proxy_prefix = github_proxy_prefix_with_paths(Some(paths));
-    let proxied_url = apply_github_proxy_with_prefix(&direct_url, proxy_prefix.as_deref());
-    let mut registry = match fetch_remote_registry(&proxied_url).await {
-        Ok(registry) => {
-            log::info!("Loaded model registry from {}", proxied_url);
-            registry
-        }
-        Err(error) => {
-            if proxied_url != direct_url {
-                log::warn!(
-                    "Failed to load model registry from proxy {}, retrying direct: {}",
-                    proxied_url,
-                    error
-                );
-                match fetch_remote_registry(&direct_url).await {
-                    Ok(registry) => {
-                        log::info!("Loaded model registry from {}", direct_url);
-                        registry
-                    }
-                    Err(direct_error) => {
-                        log::warn!(
-                            "Failed to load model registry from {}, falling back to bundled registry: {}",
-                            direct_url,
-                            direct_error
-                        );
-                        default_registry()
-                    }
-                }
-            } else {
-                log::warn!(
-                    "Failed to load model registry from {}, falling back to bundled registry: {}",
-                    proxied_url,
-                    error
-                );
-                default_registry()
-            }
-        }
-    };
-
-    if registry.models.is_empty() {
-        log::warn!("Model registry is empty");
-    }
-
-    apply_download_status_with_paths(paths, &mut registry);
-    Ok(registry.models)
-}
-
-pub async fn list_downloaded_with_paths(paths: &AppPaths) -> Result<Vec<ModelInfo>> {
-    let all_models = fetch_registry_with_paths(paths).await?;
-    Ok(all_models
-        .into_iter()
-        .filter(|model| model.is_downloaded)
-        .collect())
-}
 
 pub fn get_model_info(model_id: &str) -> Result<ModelInfo> {
     default_registry()
@@ -708,34 +637,6 @@ where
     }
 
     Ok(())
-}
-
-async fn fetch_remote_registry(url: &str) -> Result<ModelRegistry> {
-    let client = reqwest::Client::builder()
-        .user_agent("shanji-app/0.1 (+https://github.com/yuhuotech/shanji)")
-        .build()
-        .map_err(|e| AppError::Network(format!("Failed to build registry client: {}", e)))?;
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| AppError::Network(format!("Failed to fetch model registry: {}", e)))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(AppError::Network(format!(
-            "Model registry request failed: {}",
-            status
-        )));
-    }
-
-    let body = response
-        .text()
-        .await
-        .map_err(|e| AppError::Network(format!("Failed to read model registry: {}", e)))?;
-
-    serde_json::from_str(&body)
-        .map_err(|e| AppError::Config(format!("Failed to parse model registry: {}", e)))
 }
 
 fn apply_download_status_with_paths(paths: &AppPaths, registry: &mut ModelRegistry) {

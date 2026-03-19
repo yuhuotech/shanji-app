@@ -257,6 +257,9 @@ pub struct UiSnapshot {
     pub audio_device_text: String,
     pub recording_mode_text: String,
     pub rewrite_text: String,
+    pub llm_enabled: bool,
+    pub llm_active_prompt_id: String,
+    pub llm_provider_summary: String,
     pub punct_style_text: String,
     pub append_content_text: String,
     pub hotword_summary_text: String,
@@ -313,6 +316,7 @@ pub struct SettingsWindowSnapshot {
     pub llm_api_key_saved: bool,
     pub llm_model_name: String,
     pub llm_system_prompt: String,
+    pub llm_active_prompt_id: String,
     pub llm_test_status: i32,
     pub llm_test_status_text: String,
     pub overlay_enabled: bool,
@@ -399,6 +403,9 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
             audio_device_text: "Audio devices unavailable".to_string(),
             recording_mode_text: "Unavailable".to_string(),
             rewrite_text: "LLM polish: unavailable".to_string(),
+            llm_enabled: false,
+            llm_active_prompt_id: "default".to_string(),
+            llm_provider_summary: String::new(),
             punct_style_text: "Punct style: unavailable".to_string(),
             append_content_text: "Append content: unavailable".to_string(),
             hotword_summary_text: "Hotwords unavailable".to_string(),
@@ -473,7 +480,7 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
             .unwrap_or_else(|| "N/A".to_string()),
         model_size_text: active_model
             .as_ref()
-            .map(|model| human_readable_bytes(model.size_bytes))
+            .map(|model| human_readable_bytes(total_size_with_deps(model)))
             .unwrap_or_else(|| "N/A".to_string()),
         model_language_text: active_model
             .as_ref()
@@ -603,6 +610,14 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
                 "disabled"
             }
         ),
+        llm_enabled: cfg.rewrite.enabled,
+        llm_active_prompt_id: cfg.rewrite.active_prompt_id.clone(),
+        llm_provider_summary: cfg
+            .rewrite
+            .providers
+            .first()
+            .map(|p| p.model.clone())
+            .unwrap_or_default(),
         punct_style_text: format!("Punct style: {}", cfg.output.punct_style),
         append_content_text: format!("Append content: {}", cfg.output.append_content),
         hotword_summary_text: load_hotword_summary(&paths),
@@ -667,7 +682,7 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
     };
     let hotword_libraries = build_hotword_library_cards(&paths);
 
-    let live_size_bytes = live_model.as_ref().map(|m| m.size_bytes).unwrap_or(0);
+    let live_size_bytes = live_model.as_ref().map(|m| total_size_with_deps(m)).unwrap_or(0);
     let refine_size_bytes = refine_model.as_ref().map(|m| m.size_bytes).unwrap_or(0);
 
     Ok(SettingsWindowSnapshot {
@@ -704,6 +719,7 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
                 .map(|p| p.system_prompt.clone())
                 .unwrap_or_default()
         },
+        llm_active_prompt_id: cfg.rewrite.active_prompt_id.clone(),
         llm_test_status: cfg
             .rewrite
             .providers
@@ -876,6 +892,16 @@ pub fn toggle_rewrite_enabled() -> Result<UiSnapshot, String> {
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
     cfg.rewrite.enabled = !cfg.rewrite.enabled;
     config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+    refresh_snapshot()
+}
+
+pub fn set_active_prompt(id: String) -> Result<UiSnapshot, String> {
+    let paths = resolve_app_paths();
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    if cfg.rewrite.prompts.iter().any(|p| p.id == id) {
+        cfg.rewrite.active_prompt_id = id;
+        config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+    }
     refresh_snapshot()
 }
 
@@ -1826,6 +1852,17 @@ fn open_path_in_system(path: &str) -> Result<(), String> {
         .spawn()
         .map_err(|e| format!("Failed to open {}: {}", path, e))?;
     Ok(())
+}
+
+fn total_size_with_deps(model: &shanji_core::model::ModelInfo) -> u64 {
+    let registry = shanji_core::model::default_registry();
+    let dep_size: u64 = model
+        .dependencies
+        .iter()
+        .filter_map(|dep_id| registry.models.iter().find(|m| m.id == *dep_id))
+        .map(|m| m.size_bytes)
+        .sum();
+    model.size_bytes + dep_size
 }
 
 fn format_size_mb(bytes: u64) -> String {
