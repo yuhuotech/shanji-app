@@ -379,6 +379,8 @@ impl HotkeyRuntime {
             bindings,
             #[cfg(target_os = "macos")]
             _native: native,
+            #[cfg(not(target_os = "macos"))]
+            _native: native,
         })
     }
 
