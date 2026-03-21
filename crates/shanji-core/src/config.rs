@@ -256,7 +256,7 @@ impl Default for HotkeyConfig {
         {
             Self {
                 toggle_recording: "Alt+Space".to_string(),
-                push_to_talk: "Alt+R".to_string(),
+                push_to_talk: "RightAlt".to_string(),
                 push_to_talk_hold_delay_ms: 0,
                 toggle_rewrite: "Ctrl+Shift+R".to_string(),
                 open_history: "Ctrl+Shift+H".to_string(),
@@ -299,13 +299,31 @@ impl Default for OverlayConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct NetworkConfig {
-    pub github_proxy: String,
+    pub proxy_mode: String,
+    pub proxy_type: String,
+    pub proxy_host: String,
+    pub proxy_port: String,
+    pub proxy_username: String,
+    #[serde(default)]
+    pub proxy_password_encrypted: String,
+    /// 0=未测试 1=成功 2=失败
+    #[serde(default)]
+    pub proxy_test_status: i32,
+    #[serde(default)]
+    pub proxy_test_status_text: String,
 }
 
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            github_proxy: "https://ghfast.top/".to_string(),
+            proxy_mode: crate::network::PROXY_MODE_SYSTEM.to_string(),
+            proxy_type: crate::network::PROXY_TYPE_HTTP.to_string(),
+            proxy_host: "127.0.0.1".to_string(),
+            proxy_port: "7890".to_string(),
+            proxy_username: String::new(),
+            proxy_password_encrypted: String::new(),
+            proxy_test_status: 0,
+            proxy_test_status_text: String::new(),
         }
     }
 }
@@ -333,7 +351,7 @@ fn default_version() -> u32 {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            version: 11,
+            version: 13,
             general: GeneralConfig::default(),
             audio: AudioConfig::default(),
             asr: AsrConfig::default(),
@@ -389,9 +407,6 @@ impl AppConfig {
         }
 
         if self.version < 4 {
-            if self.network.github_proxy.trim().is_empty() {
-                self.network.github_proxy = NetworkConfig::default().github_proxy;
-            }
             self.version = 4;
             modified = true;
         }
@@ -559,6 +574,38 @@ impl AppConfig {
             modified = true;
         }
 
+        if self.version < 12 {
+            let default_network = NetworkConfig::default();
+            self.network.proxy_mode =
+                crate::network::normalize_proxy_mode(&self.network.proxy_mode).to_string();
+            self.network.proxy_type =
+                crate::network::normalize_proxy_type(&self.network.proxy_type).to_string();
+
+            if self.network.proxy_host.trim().is_empty() {
+                self.network.proxy_host = default_network.proxy_host;
+            }
+            if self.network.proxy_port.trim().is_empty() {
+                self.network.proxy_port = default_network.proxy_port;
+            }
+
+            self.version = 12;
+            modified = true;
+        }
+
+        if self.version < 13 {
+            #[cfg(not(target_os = "macos"))]
+            {
+                let normalized = self.hotkeys.push_to_talk.trim().to_ascii_lowercase();
+                if matches!(normalized.as_str(), "alt+r" | "option") {
+                    self.hotkeys.push_to_talk = HotkeyConfig::default().push_to_talk;
+                    modified = true;
+                }
+            }
+
+            self.version = 13;
+            modified = true;
+        }
+
         modified
     }
 }
@@ -649,7 +696,7 @@ mod tests {
         config.audio.min_speech_frames = 3;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 11);
+        assert_eq!(config.version, 13);
         assert!(approx_eq(config.audio.vad_threshold, 0.45));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
         assert_eq!(config.audio.min_speech_frames, 2);
@@ -668,7 +715,7 @@ mod tests {
         config.asr.sentence_pause_ms = 2_400;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 11);
+        assert_eq!(config.version, 13);
         assert!(approx_eq(config.audio.vad_threshold, 0.55));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.25));
         assert_eq!(config.audio.min_speech_frames, 4);
@@ -685,7 +732,7 @@ mod tests {
         config.audio.min_speech_frames = 1;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 11);
+        assert_eq!(config.version, 13);
         assert!(approx_eq(config.audio.vad_threshold, 0.45));
         assert!(approx_eq(config.audio.vad_end_threshold, 0.3));
         assert_eq!(config.audio.min_speech_frames, 2);
@@ -699,7 +746,7 @@ mod tests {
         config.asr.sentence_pause_ms = 1_000;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 11);
+        assert_eq!(config.version, 13);
         assert!(config.asr.sentence_pause_ms > config.asr.comma_pause_ms);
     }
 
@@ -715,8 +762,11 @@ mod tests {
         }];
 
         assert!(config.migrate());
-        assert_eq!(config.version, 11);
-        assert_eq!(config.rewrite.prompts[0].name, STRUCTURED_REWRITE_PROMPT_NAME);
+        assert_eq!(config.version, 13);
+        assert_eq!(
+            config.rewrite.prompts[0].name,
+            STRUCTURED_REWRITE_PROMPT_NAME
+        );
         assert_eq!(
             config.rewrite.prompts[0].system_prompt,
             STRUCTURED_REWRITE_SYSTEM_PROMPT
@@ -735,7 +785,7 @@ mod tests {
         }];
 
         assert!(config.migrate());
-        assert_eq!(config.version, 11);
+        assert_eq!(config.version, 13);
         assert_eq!(config.rewrite.prompts[0].name, "我的自定义润色");
         assert_eq!(
             config.rewrite.prompts[0].system_prompt,
@@ -751,7 +801,7 @@ mod tests {
         config.asr.sentence_pause_ms = 2_800;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 11);
+        assert_eq!(config.version, 13);
         assert_eq!(config.asr.comma_pause_ms, 800);
         assert_eq!(config.asr.sentence_pause_ms, 2_800);
     }
@@ -764,8 +814,37 @@ mod tests {
         config.asr.sentence_pause_ms = 2_400;
 
         assert!(config.migrate());
-        assert_eq!(config.version, 11);
+        assert_eq!(config.version, 13);
         assert_eq!(config.asr.comma_pause_ms, 900);
         assert_eq!(config.asr.sentence_pause_ms, 2_400);
+    }
+
+    #[test]
+    fn migrate_adds_new_global_proxy_defaults() {
+        let mut config = AppConfig::default();
+        config.version = 11;
+        config.network.proxy_mode.clear();
+        config.network.proxy_type.clear();
+        config.network.proxy_host.clear();
+        config.network.proxy_port.clear();
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 13);
+        assert_eq!(config.network.proxy_mode, crate::network::PROXY_MODE_SYSTEM);
+        assert_eq!(config.network.proxy_type, crate::network::PROXY_TYPE_HTTP);
+        assert_eq!(config.network.proxy_host, "127.0.0.1");
+        assert_eq!(config.network.proxy_port, "7890");
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn migrate_updates_legacy_push_to_talk_default_to_right_alt() {
+        let mut config = AppConfig::default();
+        config.version = 12;
+        config.hotkeys.push_to_talk = "Alt+R".to_string();
+
+        assert!(config.migrate());
+        assert_eq!(config.version, 13);
+        assert_eq!(config.hotkeys.push_to_talk, "RightAlt");
     }
 }

@@ -1,5 +1,5 @@
 import { Button, ScrollView } from "std-widgets.slint";
-import { SettingsPage, SettingsSection, HotwordLibraryCard, HistoryCardData } from "settings-window.slint";
+import { SettingsPage, SettingsSection, HotwordLibraryCard, HistoryCardData, ConfirmDialog } from "settings-window.slint";
 import { Icons, SvgIcon } from "icons.slint";
 import { CustomSelector } from "form.slint";
 
@@ -71,10 +71,8 @@ export component AppWindow inherits Window {
     in-out property <float>  model-download-progress: 0.0;
     in-out property <string> model-download-status-text: "";
     in-out property <string> model-download-error-text: "";
-    in-out property <int>    github-proxy-current-index: 0;
 
     callback download-model-requested();
-    callback github-proxy-selected(int);
 
     in-out property <string> mic-permission-title: "麦克风权限已获取";
     in-out property <string> mic-permission-body: "已检测到 1 个可用输入设备";
@@ -100,6 +98,7 @@ export component AppWindow inherits Window {
     in-out property <string> tray-summary-text: "";
     in-out property <string> live-asr-text: "";
     in-out property <bool> show-settings-page: false;
+    private property <bool> show-confirm-clear: false;
     in-out property <SettingsSection> active-section: SettingsSection.Asr;
 
     // settings page state
@@ -138,12 +137,19 @@ export component AppWindow inherits Window {
     in-out property <string> llm-test-status-text: "";
     in-out property <int>    llm-test-status-type: 0;
     in-out property <bool>   llm-testing: false;
-    in-out property <string> punct-style-text: "zh";
-    in-out property <string> append-content-text: "space";
-    in-out property <bool>   overlay-visible: false;
-    in-out property <string> theme-text: "system";
     in-out property <string> hotkey-summary-text: "未设置";
-    in-out property <int>    github-proxy-index: 0;
+    in-out property <string> hotkey-current-text: "未设置";
+    in-out property <string> hotkey-help-text: "默认快捷键";
+    in-out property <bool>   hotkey-recording: false;
+    in-out property <int>    network-proxy-mode-index: 0;
+    in-out property <int>    network-proxy-type-index: 0;
+    in-out property <string> network-proxy-host: "";
+    in-out property <string> network-proxy-port: "";
+    in-out property <string> network-proxy-username: "";
+    in-out property <bool>   network-proxy-password-saved: false;
+    in-out property <string> network-proxy-test-status-text: "";
+    in-out property <int>    network-proxy-test-status-type: 0;
+    in-out property <bool>   network-proxy-testing: false;
     in property  <[HistoryCardData]> history-records: [];
     in-out property <string> app-version-text: "v0.1";
     in-out property <string> config-path-text: "";
@@ -154,7 +160,6 @@ export component AppWindow inherits Window {
     property <length> card-col-width:
         (min(max(root.width - 40px, 360px), 1180px) - 68px) / 3;
 
-    callback refresh-requested();
     callback open-history-requested();
     callback open-settings-requested();
     callback close-settings-requested();
@@ -176,18 +181,22 @@ export component AppWindow inherits Window {
     callback set-llm-model-name(string);
     callback set-llm-system-prompt(string);
     callback test-llm-api-requested();
-    callback cycle-punct-style-requested();
-    callback cycle-append-content-requested();
-    callback toggle-overlay-requested();
-    callback cycle-theme-requested();
-    callback record-hotkey-requested();
-    callback cycle-github-proxy-requested();
+    callback set-network-proxy-mode-requested(int);
+    callback set-network-proxy-type-requested(int);
+    callback set-network-proxy-host-requested(string);
+    callback set-network-proxy-port-requested(string);
+    callback set-network-proxy-username-requested(string);
+    callback set-network-proxy-password-requested(string);
+    callback test-network-proxy-requested();
+    callback begin-hotkey-recording-requested();
+    callback cancel-hotkey-recording-requested();
+    callback hotkey-capture-key-pressed(string, bool, bool, bool, bool, bool);
+    callback hotkey-capture-key-released(string, bool, bool, bool, bool);
     callback refresh-history-requested();
     callback clear-history-requested();
     callback play-audio-requested(int);
     callback retranscribe-requested(int);
     callback copy-record-requested(int);
-    callback paste-record-requested(int);
     callback delete-record-requested(int);
     callback clear-session-requested();
 
@@ -236,12 +245,19 @@ export component AppWindow inherits Window {
             llm-test-status-text <=> root.llm-test-status-text;
             llm-test-status-type <=> root.llm-test-status-type;
             llm-testing <=> root.llm-testing;
-            punct-style-text <=> root.punct-style-text;
-            append-content-text <=> root.append-content-text;
-            overlay-visible <=> root.overlay-visible;
-            theme-text <=> root.theme-text;
             hotkey-summary-text <=> root.hotkey-summary-text;
-            github-proxy-index <=> root.github-proxy-index;
+            hotkey-current-text <=> root.hotkey-current-text;
+            hotkey-help-text <=> root.hotkey-help-text;
+            hotkey-recording <=> root.hotkey-recording;
+            network-proxy-mode-index <=> root.network-proxy-mode-index;
+            network-proxy-type-index <=> root.network-proxy-type-index;
+            network-proxy-host <=> root.network-proxy-host;
+            network-proxy-port <=> root.network-proxy-port;
+            network-proxy-username <=> root.network-proxy-username;
+            network-proxy-password-saved <=> root.network-proxy-password-saved;
+            network-proxy-test-status-text <=> root.network-proxy-test-status-text;
+            network-proxy-test-status-type <=> root.network-proxy-test-status-type;
+            network-proxy-testing <=> root.network-proxy-testing;
             history-records <=> root.history-records;
             history-stats-text <=> root.history-stats-text;
             app-version-text <=> root.app-version-text;
@@ -262,20 +278,40 @@ export component AppWindow inherits Window {
             set-llm-model-name(model) => { root.set-llm-model-name(model); }
             set-llm-system-prompt(prompt) => { root.set-llm-system-prompt(prompt); }
             test-llm-api-requested => { root.test-llm-api-requested(); }
-            cycle-punct-style-requested => { root.cycle-punct-style-requested(); }
-            cycle-append-content-requested => { root.cycle-append-content-requested(); }
-            toggle-overlay-requested => { root.toggle-overlay-requested(); }
-            cycle-theme-requested => { root.cycle-theme-requested(); }
-            record-hotkey-requested => { root.record-hotkey-requested(); }
-            cycle-github-proxy-requested => { root.cycle-github-proxy-requested(); }
+            set-network-proxy-mode-requested(index) => { root.set-network-proxy-mode-requested(index); }
+            set-network-proxy-type-requested(index) => { root.set-network-proxy-type-requested(index); }
+            set-network-proxy-host-requested(host) => { root.set-network-proxy-host-requested(host); }
+            set-network-proxy-port-requested(port) => { root.set-network-proxy-port-requested(port); }
+            set-network-proxy-username-requested(username) => { root.set-network-proxy-username-requested(username); }
+            set-network-proxy-password-requested(password) => { root.set-network-proxy-password-requested(password); }
+            test-network-proxy-requested => { root.test-network-proxy-requested(); }
+            begin-hotkey-recording-requested => { root.begin-hotkey-recording-requested(); }
+            cancel-hotkey-recording-requested => { root.cancel-hotkey-recording-requested(); }
+            hotkey-capture-key-pressed(text, alt, control, shift, meta, repeat) => {
+                root.hotkey-capture-key-pressed(text, alt, control, shift, meta, repeat);
+            }
+            hotkey-capture-key-released(text, alt, control, shift, meta) => {
+                root.hotkey-capture-key-released(text, alt, control, shift, meta);
+            }
             refresh-history-requested => { root.refresh-history-requested(); }
-            clear-history-requested => { root.clear-history-requested(); }
+            clear-history-requested => { root.show-confirm-clear = true; }
             play-audio-requested(id) => { root.play-audio-requested(id); }
             retranscribe-requested(id) => { root.retranscribe-requested(id); }
             copy-record-requested(id) => { root.copy-record-requested(id); }
-            paste-record-requested(id) => { root.paste-record-requested(id); }
             delete-record-requested(id) => { root.delete-record-requested(id); }
             clear-session-requested => { root.clear-session-requested(); }
+        }
+
+        if root.show-confirm-clear: ConfirmDialog {
+            title: "确认清空历史记录";
+            description: "将永久删除全部历史记录，此操作不可撤销。";
+            confirm-text: "清空全部";
+            danger: true;
+            confirmed => {
+                root.show-confirm-clear = false;
+                root.clear-history-requested();
+            }
+            cancelled => { root.show-confirm-clear = false; }
         }
 
         if !root.show-settings-page: ScrollView {
@@ -303,8 +339,11 @@ export component AppWindow inherits Window {
                         spacing: 10px;
 
                         Rectangle {
-                            width: 42px; height: 42px;
-                            border-radius: 12px;
+                            width: 46px; height: 46px;
+                            border-radius: 13px;
+                            border-width: 1.5px;
+                            border-color: #b8cce4;
+                            background: #ffffff;
                             clip: true;
 
                             Image {
@@ -327,10 +366,6 @@ export component AppWindow inherits Window {
                         HorizontalLayout {
                             alignment: end;
                             spacing: 4px;
-                            GhostIconButton {
-                                icon-path: Icons.refresh;
-                                clicked => { root.refresh-requested(); }
-                            }
                             GhostIconButton {
                                 icon-path: Icons.clock;
                                 clicked => { root.open-history-requested(); }
@@ -403,87 +438,169 @@ export component AppWindow inherits Window {
                     }
 
                     // ════════════════════════════════════════════════════════
-                    // Mic / paste status strip (wide + compact)
+                    // Mic / paste status strip
                     // ════════════════════════════════════════════════════════
-                    Rectangle {
+                    status-strip := Rectangle {
                         border-radius: 10px;
                         background: mic-ready && paste-ready ? #f8fafc : #fff7ed;
                         border-width: 1px;
                         border-color: mic-ready && paste-ready ? #e2e8f0 : #fed7aa;
-                        height: 38px;
+                        height: 44px;
+
+                        property <bool> mic-testing: false;
 
                         HorizontalLayout {
                             padding-left: 14px; padding-right: 14px;
-                            spacing: 16px;
-                            alignment: start;
+                            spacing: 0px;
 
-                            // 麦克风状态
+                            // ── 左侧：授权信息（靠左对齐）─────────────────
                             HorizontalLayout {
-                                spacing: 5px;
-                                alignment: center;
-                                Text {
-                                    text: "🎙";
-                                    font-size: 13px;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: mic-ready ? "麦克风已授权" : "麦克风未授权";
-                                    color: mic-ready ? #059669 : #dc2626;
-                                    font-size: 12px;
-                                    font-weight: mic-ready ? 400 : 700;
-                                    vertical-alignment: center;
-                                }
-                            }
+                                spacing: 8px;
+                                alignment: start;
 
-                            // 若麦克风未授权显示授权按钮
-                            if !mic-ready: VerticalLayout {
-                                alignment: center;
-                                Rectangle {
-                                    width: 72px; height: 24px;
-                                    border-radius: 5px;
-                                    background: mic-auth-strip-ta.has-hover ? #1d4ed8 : #2563eb;
-                                    mic-auth-strip-ta := TouchArea {
-                                        clicked => { root.request-mic-permission(); }
+                                Text {
+                                    text: "授权：";
+                                    color: #6b7280;
+                                    font-size: 12px;
+                                    font-weight: 700;
+                                    vertical-alignment: center;
+                                }
+
+                                // 麦克风状态
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    alignment: center;
+                                    Text {
+                                        text: mic-ready ? "✓" : "✗";
+                                        color: mic-ready ? #059669 : #dc2626;
+                                        font-size: 12px;
+                                        font-weight: 700;
+                                        vertical-alignment: center;
                                     }
                                     Text {
-                                        text: "前往授权";
-                                        color: #ffffff;
-                                        font-size: 11px;
+                                        text: mic-ready ? "麦克风已授权" : "麦克风未授权";
+                                        color: mic-ready ? #059669 : #dc2626;
+                                        font-size: 12px;
+                                        font-weight: mic-ready ? 400 : 700;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // 若麦克风未授权显示授权按钮
+                                if !mic-ready: VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 68px; height: 22px;
+                                        border-radius: 5px;
+                                        background: mic-auth-strip-ta.has-hover ? #1d4ed8 : #2563eb;
+                                        mic-auth-strip-ta := TouchArea {
+                                            clicked => { root.request-mic-permission(); }
+                                        }
+                                        Text {
+                                            text: "前往授权";
+                                            color: #ffffff;
+                                            font-size: 11px;
+                                            font-weight: 700;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // 竖线分隔
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 1px; height: 16px;
+                                        background: #d1d5db;
+                                    }
+                                }
+
+                                // 自动粘贴状态
+                                HorizontalLayout {
+                                    spacing: 4px;
+                                    alignment: center;
+                                    Text {
+                                        text: paste-ready ? "✓" : "✗";
+                                        color: paste-ready ? #059669 : #dc2626;
+                                        font-size: 12px;
                                         font-weight: 700;
-                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                    Text {
+                                        text: "自动粘贴";
+                                        color: paste-ready ? #059669 : #dc2626;
+                                        font-size: 12px;
                                         vertical-alignment: center;
                                     }
                                 }
                             }
 
-                            // 自动粘贴状态
-                            HorizontalLayout {
-                                spacing: 5px;
-                                alignment: center;
-                                Text {
-                                    text: paste-ready ? "✓" : "✗";
-                                    color: paste-ready ? #059669 : #dc2626;
-                                    font-size: 12px;
-                                    font-weight: 700;
-                                    vertical-alignment: center;
-                                }
-                                Text {
-                                    text: "自动粘贴";
-                                    color: paste-ready ? #059669 : #dc2626;
-                                    font-size: 12px;
-                                    vertical-alignment: center;
-                                }
-                            }
+                            // ── 弹性间距 ────────────────────────────────────
+                            Rectangle { horizontal-stretch: 1; background: transparent; }
 
-                            // 默认设备
+                            // ── 右侧：音频设备 + 测试按钮 + 竖向音量柱 ────
                             HorizontalLayout {
-                                spacing: 5px;
-                                alignment: center;
+                                spacing: 10px;
+                                alignment: end;
+
                                 Text {
-                                    text: "默认音频设备：" + default-device-text;
+                                    text: "音频设备：" + default-device-text;
                                     color: #6b7280;
                                     font-size: 12px;
                                     vertical-alignment: center;
+                                }
+
+                                // 测试 / 停止 按钮（描边风格）
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 48px; height: 22px;
+                                        border-radius: 5px;
+                                        border-width: 1px;
+                                        border-color: status-strip.mic-testing ? #fca5a5 : #93c5fd;
+                                        background: test-mic-ta.has-hover
+                                            ? (status-strip.mic-testing ? #fef2f2 : #eff6ff)
+                                            : (status-strip.mic-testing ? transparent : #f0f7ff);
+                                        test-mic-ta := TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => {
+                                                status-strip.mic-testing = !status-strip.mic-testing;
+                                                root.toggle-mic-monitor-requested();
+                                            }
+                                        }
+                                        Text {
+                                            text: status-strip.mic-testing ? "停止" : "测试";
+                                            color: status-strip.mic-testing ? #dc2626 : #2563eb;
+                                            font-size: 11px;
+                                            font-weight: 400;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
+                                    }
+                                }
+
+                                // 竖向音量柱（固定位置，始终显示）
+                                VerticalLayout {
+                                    alignment: center;
+                                    Rectangle {
+                                        width: 10px; height: 20px;
+                                        border-radius: 3px;
+                                        background: #e5e7eb;
+                                        // 填充块从底部向上增长
+                                        Rectangle {
+                                            width: 10px;
+                                            border-radius: 3px;
+                                            height: status-strip.mic-testing
+                                                ? parent.height * audio-level-value
+                                                : 0px;
+                                            y: parent.height - self.height;
+                                            background: status-strip.mic-testing
+                                                ? (audio-level-value > 0.7 ? #ef4444
+                                                    : (audio-level-value > 0.3 ? #f59e0b : #22c55e))
+                                                : transparent;
+                                        }
+                                    }
                                 }
                             }
                         }

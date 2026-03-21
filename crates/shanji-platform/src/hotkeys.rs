@@ -10,6 +10,12 @@ use std::sync::{Mutex, OnceLock, RwLock};
 #[path = "hotkeys_macos.rs"]
 mod hotkeys_macos;
 
+#[cfg(not(target_os = "macos"))]
+#[path = "hotkeys_native_non_macos.rs"]
+mod hotkeys_native_non_macos;
+
+const NATIVE_MODIFIER_GUARD_DELAY_MS: u32 = 150;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HotkeyAction {
     ToggleRecording,
@@ -129,6 +135,81 @@ pub fn summarize_hotkeys(config: &HotkeyConfig) -> HotkeySummary {
     }
 }
 
+pub fn effective_push_to_talk_hold_delay_ms(config: &HotkeyConfig) -> u32 {
+    let Some(normalized) = normalize_shortcut(&config.push_to_talk) else {
+        return config.push_to_talk_hold_delay_ms;
+    };
+
+    if is_native_only_binding(&normalized) {
+        config
+            .push_to_talk_hold_delay_ms
+            .max(NATIVE_MODIFIER_GUARD_DELAY_MS)
+    } else {
+        config.push_to_talk_hold_delay_ms
+    }
+}
+
+pub fn canonicalize_shortcut(shortcut: &str) -> Option<String> {
+    let cleaned = shortcut.trim();
+    if cleaned.is_empty() {
+        return None;
+    }
+
+    let mut parts = cleaned
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(normalize_token)
+        .collect::<Vec<_>>();
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    let key = parts.pop().unwrap_or_default();
+    parts.sort_by_key(|token| modifier_order(token));
+    parts.push(storage_token(&key).to_string());
+
+    Some(parts.join("+"))
+}
+
+pub fn validate_shortcut(shortcut: &str) -> Result<String, String> {
+    let normalized = normalize_shortcut(shortcut).ok_or_else(|| "快捷键不能为空".to_string())?;
+    let canonical = canonicalize_shortcut(shortcut).unwrap_or_else(|| shortcut.trim().to_string());
+    log::info!(
+        "validate_shortcut: raw={}, normalized={}, canonical={}",
+        shortcut,
+        normalized,
+        canonical
+    );
+
+    if is_modifier_only(&normalized) {
+        if supports_modifier_only(&normalized) {
+            log::info!(
+                "validate_shortcut: accepted modifier-only shortcut={}",
+                canonical
+            );
+            return Ok(canonical);
+        }
+        log::warn!(
+            "validate_shortcut: modifier-only shortcut is unsupported on this platform: {}",
+            canonical
+        );
+        return Err(format!("当前平台不支持单独使用 {}", canonical));
+    }
+
+    if parse_global_hotkey(&canonical).is_some() {
+        log::info!("validate_shortcut: accepted parsed shortcut={}", canonical);
+        Ok(canonical)
+    } else {
+        log::warn!(
+            "validate_shortcut: parse_global_hotkey rejected shortcut={}",
+            canonical
+        );
+        Err(format!("当前平台不支持 {}", canonical))
+    }
+}
+
 pub fn bindings_from_config(config: &HotkeyConfig) -> Vec<HotkeyBinding> {
     #[cfg(target_os = "macos")]
     let definitions = [(
@@ -203,6 +284,8 @@ pub struct HotkeyRuntime {
     bindings: HashMap<u32, RegisteredHotkey>,
     #[cfg(target_os = "macos")]
     _native: Option<hotkeys_macos::NativeHotkeyRuntime>,
+    #[cfg(not(target_os = "macos"))]
+    _native: Option<hotkeys_native_non_macos::NativeHotkeyRuntime>,
 }
 
 static ACTIVE_BINDINGS: OnceLock<RwLock<HashMap<u32, RegisteredHotkey>>> = OnceLock::new();
@@ -235,14 +318,28 @@ impl HotkeyRuntime {
         let mut bindings = HashMap::new();
         #[cfg(target_os = "macos")]
         let mut native = None;
+        #[cfg(not(target_os = "macos"))]
+        let mut native = None;
+        let effective_hold_delay_ms = effective_push_to_talk_hold_delay_ms(config);
 
         for binding in bindings_from_config(config) {
             #[cfg(target_os = "macos")]
             if is_native_only_binding(&binding.normalized) {
                 native = Some(hotkeys_macos::NativeHotkeyRuntime::new(
+                    binding.normalized.clone(),
                     binding.action,
                     binding.trigger,
-                    config.push_to_talk_hold_delay_ms,
+                    effective_hold_delay_ms,
+                )?);
+                continue;
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            if is_native_only_binding(&binding.normalized) {
+                native = Some(hotkeys_native_non_macos::NativeHotkeyRuntime::new(
+                    binding.action,
+                    binding.trigger,
+                    effective_hold_delay_ms,
                 )?);
                 continue;
             }
@@ -379,14 +476,27 @@ fn collect_conflicts(bindings: &[HotkeyBinding]) -> Vec<String> {
 fn collect_unsupported(bindings: &[HotkeyBinding]) -> Vec<String> {
     bindings
         .iter()
-        .filter(|binding| is_modifier_only(&binding.normalized))
-        .filter(|binding| !supports_modifier_only(&binding.normalized))
+        .filter(|binding| {
+            if is_modifier_only(&binding.normalized) {
+                !supports_modifier_only(&binding.normalized)
+            } else {
+                parse_global_hotkey(&binding.accelerator).is_none()
+            }
+        })
         .map(|binding| {
-            format!(
-                "{} uses modifier-only shortcut {}",
-                binding.action.label(),
-                binding.accelerator
-            )
+            if is_modifier_only(&binding.normalized) {
+                format!(
+                    "{} uses modifier-only shortcut {}",
+                    binding.action.label(),
+                    binding.accelerator
+                )
+            } else {
+                format!(
+                    "{} uses unsupported shortcut {}",
+                    binding.action.label(),
+                    binding.accelerator
+                )
+            }
         })
         .collect()
 }
@@ -395,10 +505,19 @@ fn is_modifier_only(normalized: &str) -> bool {
     matches!(
         normalized,
         "Command"
+            | "LeftCommand"
             | "Ctrl"
+            | "LeftCtrl"
             | "Option"
+            | "LeftOption"
             | "Shift"
+            | "LeftShift"
             | "RightCommand"
+            | "RightCtrl"
+            | "RightOption"
+            | "RightShift"
+            | "RightAlt"
+            | "Fn"
             | "Command+Shift"
             | "Command+Option"
             | "Ctrl+Shift"
@@ -407,22 +526,37 @@ fn is_modifier_only(normalized: &str) -> bool {
 
 #[cfg(target_os = "macos")]
 fn is_native_only_binding(normalized: &str) -> bool {
-    normalized == "RightCommand"
+    matches!(
+        normalized,
+        "Command"
+            | "LeftCommand"
+            | "RightCommand"
+            | "Option"
+            | "LeftOption"
+            | "RightOption"
+            | "Ctrl"
+            | "LeftCtrl"
+            | "RightCtrl"
+            | "Shift"
+            | "LeftShift"
+            | "RightShift"
+            | "Fn"
+    )
 }
 
 #[cfg(not(target_os = "macos"))]
 fn is_native_only_binding(_normalized: &str) -> bool {
-    false
+    _normalized == "RightAlt"
 }
 
 #[cfg(target_os = "macos")]
 fn supports_modifier_only(normalized: &str) -> bool {
-    normalized == "RightCommand"
+    is_native_only_binding(normalized)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn supports_modifier_only(_normalized: &str) -> bool {
-    false
+fn supports_modifier_only(normalized: &str) -> bool {
+    normalized == "RightAlt"
 }
 
 fn normalize_shortcut(shortcut: &str) -> Option<String> {
@@ -451,13 +585,33 @@ fn normalize_shortcut(shortcut: &str) -> Option<String> {
 
 fn normalize_token(token: &str) -> String {
     match token.to_ascii_lowercase().as_str() {
+        "leftcommand" | "left-command" | "left_cmd" | "leftcmd" | "lcmd" => {
+            "LeftCommand".to_string()
+        }
         "rightcommand" | "right-command" | "right_cmd" | "rightcmd" | "rcmd" => {
             "RightCommand".to_string()
         }
+        "leftctrl" | "left-control" | "leftcontrol" | "lctrl" | "lcontrol" => {
+            "LeftCtrl".to_string()
+        }
+        "rightctrl" | "right-control" | "rightcontrol" | "rctrl" | "rcontrol" => {
+            "RightCtrl".to_string()
+        }
+        "leftshift" | "left-shift" | "lshift" => "LeftShift".to_string(),
+        "rightshift" | "right-shift" | "rshift" => "RightShift".to_string(),
+        "leftoption" | "left-option" | "leftalt" | "left-alt" | "loption" | "lalt" => {
+            "LeftOption".to_string()
+        }
+        "rightoption" | "right-option" | "roption" => "RightOption".to_string(),
+        #[cfg(target_os = "macos")]
+        "rightalt" | "right-alt" | "ralt" | "altgr" => "RightOption".to_string(),
+        #[cfg(not(target_os = "macos"))]
+        "rightalt" | "right-alt" | "ralt" | "altgr" => "RightAlt".to_string(),
         "cmd" | "command" | "meta" | "super" => "Command".to_string(),
         "ctrl" | "control" => "Ctrl".to_string(),
         "alt" | "option" => "Option".to_string(),
         "shift" => "Shift".to_string(),
+        "fn" | "function" => "Fn".to_string(),
         "space" => "Space".to_string(),
         other => {
             let mut chars = other.chars();
@@ -488,16 +642,57 @@ fn parse_global_hotkey(shortcut: &str) -> Option<HotKey> {
     let mut code = None;
 
     for part in &parts {
-        match part.to_ascii_lowercase().as_str() {
-            "cmd" | "command" | "super" | "win" | "meta" => modifiers |= Modifiers::SUPER,
-            "ctrl" | "control" => modifiers |= Modifiers::CONTROL,
-            "alt" | "option" | "opt" => modifiers |= Modifiers::ALT,
-            "shift" => modifiers |= Modifiers::SHIFT,
-            token => code = parse_code(token),
+        match normalize_token(part).as_str() {
+            "Command" => modifiers |= Modifiers::SUPER,
+            "Ctrl" => modifiers |= Modifiers::CONTROL,
+            "Option" => modifiers |= Modifiers::ALT,
+            "Shift" => modifiers |= Modifiers::SHIFT,
+            "LeftCommand" | "RightCommand" | "LeftCtrl" | "RightCtrl" | "LeftOption"
+            | "RightOption" | "LeftShift" | "RightShift" | "Fn" | "RightAlt" => return None,
+            token => {
+                let parsed = parse_code(token)?;
+                if code.replace(parsed).is_some() {
+                    return None;
+                }
+            }
         }
     }
 
     code.map(|code| HotKey::new(Some(modifiers), code))
+}
+
+fn modifier_order(token: &str) -> u8 {
+    match token {
+        "Command" | "LeftCommand" | "RightCommand" => 0,
+        "Ctrl" | "LeftCtrl" | "RightCtrl" => 1,
+        "Option" | "LeftOption" | "RightOption" | "RightAlt" => 2,
+        "Shift" | "LeftShift" | "RightShift" => 3,
+        "Fn" => 4,
+        _ => 10,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn storage_token(token: &str) -> &str {
+    token
+}
+
+#[cfg(not(target_os = "macos"))]
+fn storage_token(token: &str) -> &str {
+    match token {
+        "Option" => "Alt",
+        other => other,
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn is_native_modifier_pressed(normalized: &str) -> bool {
+    hotkeys_macos::is_modifier_pressed(normalized)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn is_native_modifier_pressed(_normalized: &str) -> bool {
+    false
 }
 
 fn parse_code(key: &str) -> Option<Code> {
@@ -622,7 +817,7 @@ mod tests {
         let summary = summarize_hotkeys(&config);
 
         #[cfg(target_os = "macos")]
-        assert_eq!(summary.unsupported.len(), 1);
+        assert_eq!(summary.unsupported.len(), 0);
 
         #[cfg(not(target_os = "macos"))]
         assert_eq!(summary.unsupported.len(), 2);
@@ -645,5 +840,48 @@ mod tests {
         assert_eq!(summary.bindings.len(), 1);
         assert!(summary.unsupported.is_empty());
         assert_eq!(summary.bindings[0].normalized, "RightCommand");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accepts_option_as_supported_single_hotkey() {
+        let config = HotkeyConfig {
+            toggle_recording: String::new(),
+            push_to_talk: "Option".to_string(),
+            push_to_talk_hold_delay_ms: 500,
+            toggle_rewrite: String::new(),
+            open_history: String::new(),
+            open_main: String::new(),
+        };
+
+        let summary = summarize_hotkeys(&config);
+
+        assert_eq!(summary.bindings.len(), 1);
+        assert!(summary.unsupported.is_empty());
+        assert_eq!(summary.bindings[0].normalized, "Option");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn accepts_side_specific_modifier_only_hotkeys() {
+        for shortcut in ["LeftOption", "RightOption", "LeftCommand", "LeftCtrl", "Fn"] {
+            let config = HotkeyConfig {
+                toggle_recording: String::new(),
+                push_to_talk: shortcut.to_string(),
+                push_to_talk_hold_delay_ms: 500,
+                toggle_rewrite: String::new(),
+                open_history: String::new(),
+                open_main: String::new(),
+            };
+
+            let summary = summarize_hotkeys(&config);
+
+            assert_eq!(summary.bindings.len(), 1, "shortcut={shortcut}");
+            assert!(summary.unsupported.is_empty(), "shortcut={shortcut}");
+            assert_eq!(
+                summary.bindings[0].normalized, shortcut,
+                "shortcut={shortcut}"
+            );
+        }
     }
 }

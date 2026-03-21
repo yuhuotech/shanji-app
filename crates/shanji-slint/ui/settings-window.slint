@@ -19,7 +19,7 @@ global Palette {
 }
 
 // ── 页面枚举 ──────────────────────────────────────────────────────────────
-export enum SettingsSection { Asr, Llm, Output, Hotkeys, Network, History, About }
+export enum SettingsSection { Asr, Llm, Hotkeys, Network, History, About }
 
 // ── 历史卡片数据结构 ───────────────────────────────────────────────────────
 export struct HistoryCardData {
@@ -106,6 +106,38 @@ export component SectionLabel inherits Text {
     letter-spacing: 0.4px;
 }
 
+// ── 可复用：头部操作按钮（蓝色/危险色，固定高度）─────────────────────────
+component HeaderButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> danger: false;
+    callback clicked;
+
+    height: 28px;
+    min-width: 52px;
+    border-radius: 6px;
+    background: root.danger ? Palette.danger : Palette.accent;
+    opacity: ta.pressed ? 0.82 : 1.0;
+    animate opacity { duration: 80ms; }
+
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+        mouse-cursor: pointer;
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        Text {
+            text: root.text;
+            color: #ffffff;
+            font-size: 13px;
+            font-weight: 500;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
 // ── 可复用：开关控件 ───────────────────────────────────────────────────────
 export component ToggleSwitch inherits Rectangle {
     in-out property <bool> checked: false;
@@ -184,21 +216,44 @@ export component SettingsPage inherits Rectangle {
     in-out property <int>    llm-test-status-type: 0;
     in-out property <bool>   llm-testing: false;
 
-    // ── Output 页属性 ──
-    in-out property <string> punct-style-text: "zh";
-    in-out property <string> append-content-text: "space";
-    in-out property <bool>   overlay-visible: false;
-    in-out property <string> theme-text: "system";
-
     // ── Hotkeys 页属性 ──
     in-out property <string> hotkey-summary-text: "未设置";
+    in-out property <string> hotkey-current-text: "未设置";
+    in-out property <string> hotkey-help-text: "默认快捷键";
+    in-out property <bool>   hotkey-recording: false;
 
     // ── Network 页属性 ──
-    in-out property <int>    github-proxy-index: 0;
+    in-out property <int>    network-proxy-mode-index: 0;
+    in-out property <int>    network-proxy-type-index: 0;
+    in-out property <string> network-proxy-host: "";
+    in-out property <string> network-proxy-port: "";
+    in-out property <string> network-proxy-username: "";
+    in-out property <bool>   network-proxy-password-saved: false;
+    in-out property <string> network-proxy-test-status-text: "";
+    in-out property <int>    network-proxy-test-status-type: 0;
+    in-out property <bool>   network-proxy-testing: false;
 
     // ── History 页属性 ──
     in property  <[HistoryCardData]> history-records: [];
     in-out property <string> history-stats-text: "共 0 条";
+    private property <int>  copy-flash-id: -1;
+    private property <int>  confirm-delete-id: -1;
+
+    copy-flash-timer := Timer {
+        interval: 2000ms;
+        triggered => {
+            copy-flash-id = -1;
+            self.running = false;
+        }
+    }
+
+    confirm-delete-timer := Timer {
+        interval: 4000ms;
+        triggered => {
+            confirm-delete-id = -1;
+            self.running = false;
+        }
+    }
 
     // ── About 页属性 ──
     in-out property <string> app-version-text: "v0.1";
@@ -223,22 +278,25 @@ export component SettingsPage inherits Rectangle {
     callback set-llm-model-name(string);
     callback set-llm-system-prompt(string);
     callback test-llm-api-requested();
-    // Output
-    callback cycle-punct-style-requested();
-    callback cycle-append-content-requested();
-    callback toggle-overlay-requested();
-    callback cycle-theme-requested();
     // Hotkeys
-    callback record-hotkey-requested();
+    callback begin-hotkey-recording-requested();
+    callback cancel-hotkey-recording-requested();
+    callback hotkey-capture-key-pressed(string, bool, bool, bool, bool, bool);
+    callback hotkey-capture-key-released(string, bool, bool, bool, bool);
     // Network
-    callback cycle-github-proxy-requested();
+    callback set-network-proxy-mode-requested(int);
+    callback set-network-proxy-type-requested(int);
+    callback set-network-proxy-host-requested(string);
+    callback set-network-proxy-port-requested(string);
+    callback set-network-proxy-username-requested(string);
+    callback set-network-proxy-password-requested(string);
+    callback test-network-proxy-requested();
     // History
     callback refresh-history-requested();
     callback clear-history-requested();
     callback play-audio-requested(int);
     callback retranscribe-requested(int);
     callback copy-record-requested(int);
-    callback paste-record-requested(int);
     callback delete-record-requested(int);
     // About
     callback clear-session-requested();
@@ -255,7 +313,11 @@ export component SettingsPage inherits Rectangle {
         TouchArea {
             x: 0; y: 0; width: parent.width; height: parent.height;
             mouse-cursor: default;
-            clicked => { defocus-scope.focus(); }
+            clicked => {
+                if !root.hotkey-recording {
+                    defocus-scope.focus();
+                }
+            }
         }
 
         HorizontalLayout {
@@ -280,56 +342,51 @@ export component SettingsPage inherits Rectangle {
                     // ── 头部（单一区域）──────────────────────────────────────
                     Rectangle {
                         height: 62px;
+                        background: root.show-back-button && back-ta.has-hover ? Palette.nav-active-bg : transparent;
 
-                        HorizontalLayout {
-                            padding-left: 16px;
-                            padding-right: 16px;
-                            alignment: center;
-                            spacing: 10px;
+                        back-ta := TouchArea {
+                            width: 100%; height: 100%;
+                            visible: root.show-back-button;
+                            clicked => { root.back-requested(); }
+                            mouse-cursor: pointer;
+                        }
 
-                            if root.show-back-button: Rectangle {
-                                background: back-ta.has-hover ? Palette.nav-active-bg : transparent;
-                                border-radius: 10px;
-                                horizontal-stretch: 1;
+                        if root.show-back-button: HorizontalLayout {
+                            padding-left: 20px;
+                            padding-right: 8px;
+                            alignment: start;
+                            spacing: 8px;
 
-                                back-ta := TouchArea {
-                                    clicked => { root.back-requested(); }
-                                    mouse-cursor: pointer;
-                                }
+                            Rectangle {
+                                width: 16px; height: 62px;
+                                background: transparent;
 
-                                HorizontalLayout {
-                                    padding-left: 10px;
-                                    padding-right: 10px;
-                                    alignment: start;
-                                    spacing: 8px;
-
-                                    Rectangle {
-                                        width: 20px; height: 62px;
-                                        background: transparent;
-
-                                        Path {
-                                            x: 0;
-                                            y: (parent.height - self.height) / 2;
-                                            width: 20px; height: 20px;
-                                            viewbox-width: 24; viewbox-height: 24;
-                                            commands: Icons.house;
-                                            stroke: Palette.text-primary;
-                                            stroke-width: 2px;
-                                            fill: transparent;
-                                        }
-                                    }
-
-                                    Text {
-                                        text: "返回主页";
-                                        color: Palette.text-primary;
-                                        font-size: 15px;
-                                        font-weight: 700;
-                                        vertical-alignment: center;
-                                    }
+                                Path {
+                                    x: 0;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 16px; height: 16px;
+                                    viewbox-width: 24; viewbox-height: 24;
+                                    commands: Icons.house;
+                                    stroke: Palette.text-primary;
+                                    stroke-width: 2px;
+                                    fill: transparent;
                                 }
                             }
 
-                            if !root.show-back-button: VerticalLayout {
+                            Text {
+                                text: "返回主页";
+                                color: Palette.text-primary;
+                                font-size: 15px;
+                                font-weight: 700;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        if !root.show-back-button: HorizontalLayout {
+                            padding-left: 20px;
+                            padding-right: 8px;
+                            alignment: start;
+                            VerticalLayout {
                                 alignment: center;
                                 spacing: 3px;
                                 Text {
@@ -379,18 +436,6 @@ export component SettingsPage inherits Rectangle {
                             label: "LLM 润色";
                             active: root.active-section == SettingsSection.Llm;
                             clicked => { root.active-section = SettingsSection.Llm; }
-                        }
-                    }
-                    HorizontalLayout {
-                        height: 38px;
-                        padding-left: 8px;
-                        padding-right: 8px;
-                        NavItem {
-                            horizontal-stretch: 1;
-                            icon-path: Icons.send;
-                            label: "输出";
-                            active: root.active-section == SettingsSection.Output;
-                            clicked => { root.active-section = SettingsSection.Output; }
                         }
                     }
                     HorizontalLayout {
@@ -1136,85 +1181,6 @@ if root.active-section == SettingsSection.Llm: ScrollView {
     }
 }
 
-// ── 输出页 ──
-if root.active-section == SettingsSection.Output: ScrollView {
-    width: 100%;
-    height: 100%;
-    VerticalLayout {
-        padding: 24px;
-        spacing: 20px;
-        alignment: start;
-
-        VerticalLayout {
-            spacing: 4px;
-            Text { text: "输出"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
-            Text { text: "文本格式与粘贴行为"; color: Palette.text-muted; font-size: 13px; }
-        }
-
-        SectionLabel { label: "格式"; }
-        Rectangle {
-            border-radius: 10px;
-            background: Palette.card-bg;
-            border-width: 1px;
-            border-color: Palette.border;
-            VerticalLayout {
-                Rectangle {
-                    height: 44px;
-                    HorizontalLayout {
-                        padding-left: 16px; padding-right: 16px;
-                        alignment: space-between;
-                        Text { text: "标点风格"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
-                        Button { text: root.punct-style-text; clicked => { root.cycle-punct-style-requested(); } }
-                    }
-                    Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
-                }
-                Rectangle {
-                    height: 44px;
-                    HorizontalLayout {
-                        padding-left: 16px; padding-right: 16px;
-                        alignment: space-between;
-                        Text { text: "追加内容"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
-                        Button { text: root.append-content-text; clicked => { root.cycle-append-content-requested(); } }
-                    }
-                }
-            }
-        }
-
-        SectionLabel { label: "界面"; }
-        Rectangle {
-            border-radius: 10px;
-            background: Palette.card-bg;
-            border-width: 1px;
-            border-color: Palette.border;
-            height: 44px;
-            HorizontalLayout {
-                padding-left: 16px; padding-right: 16px;
-                alignment: space-between;
-                Text { text: "悬浮窗"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
-                ToggleSwitch {
-                    checked: root.overlay-visible;
-                    toggled(v) => { root.toggle-overlay-requested(); }
-                }
-            }
-        }
-
-        SectionLabel { label: "外观"; }
-        Rectangle {
-            border-radius: 10px;
-            background: Palette.card-bg;
-            border-width: 1px;
-            border-color: Palette.border;
-            height: 44px;
-            HorizontalLayout {
-                padding-left: 16px; padding-right: 16px;
-                alignment: space-between;
-                Text { text: "主题"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
-                Button { text: root.theme-text; clicked => { root.cycle-theme-requested(); } }
-            }
-        }
-    }
-}
-
 // ── 快捷键页 ──
 if root.active-section == SettingsSection.Hotkeys: ScrollView {
     width: 100%;
@@ -1235,17 +1201,74 @@ if root.active-section == SettingsSection.Hotkeys: ScrollView {
             border-radius: 10px;
             background: Palette.card-bg;
             border-width: 1px;
-            border-color: Palette.border;
-            height: 54px;
+            border-color: root.hotkey-recording ? #93c5fd : Palette.border;
+            min-height: 80px;
             HorizontalLayout {
                 padding-left: 16px; padding-right: 16px;
                 alignment: space-between;
                 VerticalLayout {
-                    alignment: center; spacing: 2px;
-                    Text { text: "当前快捷键"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
-                    Text { text: root.hotkey-summary-text; color: Palette.text-muted; font-size: 12px; }
+                    alignment: center; spacing: 4px;
+                    Text { text: "当前生效快捷键"; color: Palette.text-primary; font-size: 13px; font-weight: 400; }
+                    Text { text: root.hotkey-current-text; color: Palette.text-primary; font-size: 17px; font-weight: 700; }
+                    Text {
+                        text: root.hotkey-help-text;
+                        color: root.hotkey-recording ? #2563eb : Palette.text-muted;
+                        font-size: 12px;
+                        wrap: word-wrap;
+                    }
                 }
-                Button { text: "重新录制"; clicked => { root.record-hotkey-requested(); } }
+                VerticalLayout {
+                    alignment: center;
+                    HeaderButton {
+                        text: root.hotkey-recording ? "取消本次录制" : "重新录制";
+                        danger: root.hotkey-recording;
+                        clicked => {
+                            if root.hotkey-recording {
+                                root.cancel-hotkey-recording-requested();
+                                defocus-scope.focus();
+                            } else {
+                                root.begin-hotkey-recording-requested();
+                                hotkey-capture-scope.focus();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        hotkey-capture-scope := FocusScope {
+            width: 0px;
+            height: 0px;
+
+            key-pressed(event) => {
+                if !root.hotkey-recording {
+                    return reject;
+                }
+
+                root.hotkey-capture-key-pressed(
+                    event.text,
+                    event.modifiers.alt,
+                    event.modifiers.control,
+                    event.modifiers.shift,
+                    event.modifiers.meta,
+                    event.repeat
+                );
+                accept
+            }
+
+            key-released(event) => {
+                if !root.hotkey-recording {
+                    return reject;
+                }
+
+                root.hotkey-capture-key-released(
+                    event.text,
+                    event.modifiers.alt,
+                    event.modifiers.control,
+                    event.modifiers.shift,
+                    event.modifiers.meta
+                );
+                accept
             }
         }
     }
@@ -1263,24 +1286,226 @@ if root.active-section == SettingsSection.Network: ScrollView {
         VerticalLayout {
             spacing: 4px;
             Text { text: "网络"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
-            Text { text: "模型下载代理配置"; color: Palette.text-muted; font-size: 13px; }
+            Text { text: "代理配置与网络连通性检测"; color: Palette.text-muted; font-size: 13px; }
         }
 
-        SectionLabel { label: "下载代理"; }
-        Rectangle {
-            border-radius: 10px;
-            background: Palette.card-bg;
-            border-width: 1px;
-            border-color: Palette.border;
-            height: 44px;
-            HorizontalLayout {
-                padding-left: 16px; padding-right: 16px;
-                alignment: space-between;
-                Text { text: "GitHub 代理"; color: Palette.text-primary; font-size: 13px; font-weight: 400; vertical-alignment: center; }
-                Button { text: "切换"; clicked => { root.cycle-github-proxy-requested(); } }
+        VerticalLayout {
+            spacing: 10px;
+            VerticalLayout {
+                spacing: 3px;
+                SectionLabel { label: "全局代理"; }
+                Text { text: "模型下载、LLM 接口和其他联网能力共用这一套代理策略"; color: Palette.text-muted; font-size: 12px; }
+            }
+            Rectangle {
+                border-radius: 10px;
+                clip: true;
+                background: Palette.card-bg;
+                border-width: 1px;
+                border-color: Palette.border;
+                height: network-card.min-height;
+                network-card := VerticalLayout {
+                    Rectangle {
+                        height: 54px;
+                        HorizontalLayout {
+                            padding-left: 16px; padding-right: 16px; spacing: 12px;
+                            Text {
+                                text: "代理策略";
+                                width: 90px;
+                                color: Palette.text-primary;
+                                font-size: 13px;
+                                vertical-alignment: center;
+                            }
+                            Rectangle {
+                                horizontal-stretch: 1;
+                                background: transparent;
+                                CustomSelector {
+                                    width: min(parent.width, 220px);
+                                    x: parent.width - self.width;
+                                    y: (parent.height - self.height) / 2;
+                                    model: ["使用系统代理", "自定义代理", "直连（不使用代理）"];
+                                    current-index: root.network-proxy-mode-index;
+                                    selected(index) => {
+                                        root.set-network-proxy-mode-requested(index);
+                                        defocus-scope.focus();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if root.network-proxy-mode-index == 1 : VerticalLayout {
+                        Rectangle {
+                            height: 54px;
+                            Rectangle { y: 0; height: 1px; background: Palette.border; }
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; spacing: 12px;
+                                Text {
+                                    text: "代理类型";
+                                    width: 90px;
+                                    color: Palette.text-primary;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1;
+                                    background: transparent;
+                                    CustomSelector {
+                                        width: min(parent.width, 220px);
+                                        x: parent.width - self.width;
+                                        y: (parent.height - self.height) / 2;
+                                        model: ["HTTP", "HTTPS", "SOCKS5", "SOCKS5h"];
+                                        current-index: root.network-proxy-type-index;
+                                        selected(index) => {
+                                            root.set-network-proxy-type-requested(index);
+                                            defocus-scope.focus();
+                                        }
+                                    }
+                                }
+                            }
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                        }
+
+                        Rectangle {
+                            height: 54px;
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; spacing: 12px;
+                                Text {
+                                    text: "代理地址";
+                                    width: 90px;
+                                    color: Palette.text-primary;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1; background: transparent;
+                                    LineEdit {
+                                        width: parent.width;
+                                        y: (parent.height - self.height) / 2;
+                                        text: root.network-proxy-host;
+                                        placeholder-text: "127.0.0.1";
+                                        edited(v) => { root.set-network-proxy-host-requested(v); }
+                                    }
+                                }
+                            }
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                        }
+
+                        Rectangle {
+                            height: 54px;
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; spacing: 12px;
+                                Text {
+                                    text: "代理端口";
+                                    width: 90px;
+                                    color: Palette.text-primary;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1; background: transparent;
+                                    LineEdit {
+                                        width: parent.width;
+                                        y: (parent.height - self.height) / 2;
+                                        text: root.network-proxy-port;
+                                        placeholder-text: "7890";
+                                        edited(v) => { root.set-network-proxy-port-requested(v); }
+                                    }
+                                }
+                            }
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                        }
+
+                        Rectangle {
+                            height: 54px;
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; spacing: 12px;
+                                Text {
+                                    text: "用户名";
+                                    width: 90px;
+                                    color: Palette.text-primary;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1; background: transparent;
+                                    LineEdit {
+                                        width: parent.width;
+                                        y: (parent.height - self.height) / 2;
+                                        text: root.network-proxy-username;
+                                        placeholder-text: "可选";
+                                        edited(v) => { root.set-network-proxy-username-requested(v); }
+                                    }
+                                }
+                            }
+                            Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
+                        }
+
+                        Rectangle {
+                            height: 54px;
+                            HorizontalLayout {
+                                padding-left: 16px; padding-right: 16px; spacing: 12px;
+                                Text {
+                                    text: "密码";
+                                    width: 90px;
+                                    color: Palette.text-primary;
+                                    font-size: 13px;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle {
+                                    horizontal-stretch: 1; background: transparent;
+                                    LineEdit {
+                                        width: parent.width;
+                                        y: (parent.height - self.height) / 2;
+                                        input-type: InputType.password;
+                                        placeholder-text: root.network-proxy-password-saved
+                                            ? "•••••••••••• (已保存，输入新值覆盖)"
+                                            : "可选";
+                                        edited(v) => {
+                                            if v != "" { root.set-network-proxy-password-requested(v); }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                Rectangle {
+                    height: 46px;
+                    background: #fafafa;
+                    Rectangle { y: 0; height: 1px; background: Palette.border; }
+                    HorizontalLayout {
+                        padding-left: 16px; padding-right: 16px;
+                        alignment: space-between;
+                        Text {
+                            text: root.network-proxy-test-status-text == "" ? "尚未测试" : root.network-proxy-test-status-text;
+                            color: root.network-proxy-test-status-type == 1 ? #22c55e
+                                 : root.network-proxy-test-status-type == 2 ? #ef4444
+                                 : Palette.text-muted;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+                        Rectangle {
+                            min-width: 88px; min-height: 30px;
+                            VerticalLayout {
+                                alignment: center;
+                                Button {
+                                    text: root.network-proxy-testing ? "测试中…" : "测试代理";
+                                    enabled: !root.network-proxy-testing
+                                        && (root.network-proxy-mode-index != 1
+                                            || (root.network-proxy-host != "" && root.network-proxy-port != ""));
+                                    clicked => {
+                                        root.test-network-proxy-requested();
+                                        defocus-scope.focus();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
+}
 }
 
 // ── 历史记录页 ──
@@ -1288,26 +1513,28 @@ if root.active-section == SettingsSection.History: Rectangle {
     width: 100%;
     height: 100%;
     VerticalLayout {
-        // 顶部操作栏（固定）
+        // 顶部标题栏（固定）
         Rectangle {
-            height: 52px;
             HorizontalLayout {
-                padding-left: 20px; padding-right: 20px;
+                padding-left: 24px; padding-right: 24px;
+                padding-top: 24px; padding-bottom: 20px;
                 alignment: space-between;
                 VerticalLayout {
                     alignment: center;
-                    spacing: 2px;
+                    spacing: 4px;
                     Text { text: "历史记录"; color: Palette.text-primary; font-size: 19px; font-weight: 700; }
                     Text { text: root.history-stats-text; color: Palette.text-muted; font-size: 13px; }
                 }
-                HorizontalLayout {
-                    alignment: end;
-                    spacing: 8px;
-                    Button { text: "刷新"; clicked => { root.refresh-history-requested(); } }
-                    Button { text: "清空全部"; clicked => { root.clear-history-requested(); } }
+                VerticalLayout {
+                    alignment: center;
+                    HorizontalLayout {
+                        alignment: end;
+                        spacing: 8px;
+                        HeaderButton { text: "刷新"; clicked => { root.refresh-history-requested(); } }
+                        HeaderButton { text: "清空全部"; danger: true; clicked => { root.clear-history-requested(); } }
+                    }
                 }
             }
-            Rectangle { y: parent.height - 1px; height: 1px; background: Palette.border; }
         }
 
         // 卡片列表（可滚动）
@@ -1357,9 +1584,37 @@ if root.active-section == SettingsSection.History: Rectangle {
                                     text: card.is-retranscribing ? "转写中..." : "↻ 重新转录";
                                     clicked => { root.retranscribe-requested(card.record-id); }
                                 }
-                                Button { text: "复制"; clicked => { root.copy-record-requested(card.record-id); } }
-                                Button { text: "粘贴"; clicked => { root.paste-record-requested(card.record-id); } }
-                                Button { text: "删除"; clicked => { root.delete-record-requested(card.record-id); } }
+                                Button {
+                                    text: card.record-id == root.copy-flash-id ? "✓ 已复制" : "复制";
+                                    enabled: card.record-id != root.copy-flash-id;
+                                    clicked => {
+                                        root.copy-record-requested(card.record-id);
+                                        root.copy-flash-id = card.record-id;
+                                        copy-flash-timer.running = true;
+                                    }
+                                }
+                                if card.record-id != root.confirm-delete-id: Button {
+                                    text: "删除";
+                                    clicked => {
+                                        root.confirm-delete-id = card.record-id;
+                                        confirm-delete-timer.running = true;
+                                    }
+                                }
+                                if card.record-id == root.confirm-delete-id: Button {
+                                    text: "取消";
+                                    clicked => {
+                                        root.confirm-delete-id = -1;
+                                        confirm-delete-timer.running = false;
+                                    }
+                                }
+                                if card.record-id == root.confirm-delete-id: Button {
+                                    text: "确认删除";
+                                    clicked => {
+                                        root.confirm-delete-id = -1;
+                                        confirm-delete-timer.running = false;
+                                        root.delete-record-requested(card.record-id);
+                                    }
+                                }
                             }
                         }
 
@@ -1402,6 +1657,7 @@ if root.active-section == SettingsSection.History: Rectangle {
                 }
             }
         }
+
     }
 }
 
@@ -1466,7 +1722,108 @@ if root.active-section == SettingsSection.About: ScrollView {
         }
     }
 }
+            }
+        }
+    }
+}
 
+// ── 通用确认对话框（全窗口覆盖层，放置于 AppWindow 根级别）────────────────
+export component ConfirmDialog inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <string> confirm-text: "确认";
+    in property <bool>   danger: false;
+    callback confirmed();
+    callback cancelled();
+
+    width: 100%; height: 100%;
+    background: #00000055;
+
+    // 点遮罩取消
+    TouchArea {
+        width: 100%; height: 100%;
+        clicked => { root.cancelled(); }
+    }
+
+    // 卡片（阻止点击透传）
+    card := Rectangle {
+        width: 300px;
+        height: card-layout.preferred-height;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        border-radius: 14px;
+        background: #ffffff;
+        border-width: 1px;
+        border-color: #e0e2e6;
+        drop-shadow-blur: 24px;
+        drop-shadow-color: #00000028;
+        drop-shadow-offset-y: 8px;
+
+        TouchArea { width: 100%; height: 100%; } // 阻止点击穿透到遮罩
+
+        card-layout := VerticalLayout {
+            padding: 24px;
+            spacing: 10px;
+
+            Text {
+                text: root.title;
+                color: #111827;
+                font-size: 15px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: root.description;
+                color: #6b7280;
+                font-size: 13px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            Rectangle { height: 4px; }
+
+            HorizontalLayout {
+                spacing: 8px;
+                cancel-rect := Rectangle {
+                    height: 34px;
+                    horizontal-stretch: 1;
+                    border-radius: 8px;
+                    background: cancel-ta.pressed ? #e5e7eb : (cancel-ta.has-hover ? #f3f4f6 : #f9fafb);
+                    border-width: 1px;
+                    border-color: #d1d5db;
+                    cancel-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.cancelled(); }
+                    }
+                    Text {
+                        text: "取消";
+                        color: #374151;
+                        font-size: 13px;
+                        font-weight: 500;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
+                confirm-rect := Rectangle {
+                    height: 34px;
+                    horizontal-stretch: 1;
+                    border-radius: 8px;
+                    background: confirm-ta.pressed
+                        ? (root.danger ? #b91c1c : #1d4ed8)
+                        : (root.danger ? #dc2626 : #2563eb);
+                    confirm-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { root.confirmed(); }
+                    }
+                    Text {
+                        text: root.confirm-text;
+                        color: #ffffff;
+                        font-size: 13px;
+                        font-weight: 500;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                }
             }
         }
     }

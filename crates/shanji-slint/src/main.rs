@@ -12,6 +12,29 @@ const OVERLAY_CAPSULE_HEIGHT: f32 = 34.0;
 thread_local! {
     static PLATFORM_RUNTIME_SLOT: std::cell::RefCell<Option<std::rc::Rc<std::cell::RefCell<platform_runtime::PlatformRuntime>>>> =
         const { std::cell::RefCell::new(None) };
+    static HOTKEY_CAPTURE_SLOT: std::cell::RefCell<HotkeyCaptureState> =
+        const {
+            std::cell::RefCell::new(HotkeyCaptureState {
+                pending_shortcut: None,
+                #[cfg(target_os = "macos")]
+                fn_pressed: false,
+            })
+        };
+}
+
+#[derive(Default)]
+struct HotkeyCaptureState {
+    pending_shortcut: Option<String>,
+    #[cfg(target_os = "macos")]
+    fn_pressed: bool,
+}
+
+#[derive(Clone, Copy, Default, Debug)]
+struct CapturedModifiers {
+    alt: bool,
+    control: bool,
+    shift: bool,
+    meta: bool,
 }
 
 fn init_logging() {
@@ -94,6 +117,653 @@ fn sync_platform_runtime() {
             let _ = runtime.borrow_mut().sync();
         }
     });
+}
+
+fn reset_hotkey_capture_state() {
+    HOTKEY_CAPTURE_SLOT.with(|slot| {
+        let mut state = slot.borrow_mut();
+        state.pending_shortcut = None;
+        #[cfg(target_os = "macos")]
+        {
+            state.fn_pressed = false;
+        }
+    });
+}
+
+fn set_pending_hotkey_capture(shortcut: String) {
+    HOTKEY_CAPTURE_SLOT.with(|slot| {
+        slot.borrow_mut().pending_shortcut = Some(shortcut);
+    });
+}
+
+fn take_pending_hotkey_capture() -> Option<String> {
+    HOTKEY_CAPTURE_SLOT.with(|slot| slot.borrow_mut().pending_shortcut.take())
+}
+
+fn take_pending_hotkey_capture_matching(released_tokens: &[String]) -> Option<String> {
+    HOTKEY_CAPTURE_SLOT.with(|slot| {
+        let mut state = slot.borrow_mut();
+        let should_take = state
+            .pending_shortcut
+            .as_ref()
+            .map(|shortcut| {
+                shortcut
+                    .split('+')
+                    .any(|part| released_tokens.iter().any(|token| token == part))
+            })
+            .unwrap_or(false);
+        if should_take {
+            state.pending_shortcut.take()
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn update_native_fn_capture_state(is_pressed: bool) -> Option<bool> {
+    HOTKEY_CAPTURE_SLOT.with(|slot| {
+        let mut state = slot.borrow_mut();
+        match (state.fn_pressed, is_pressed) {
+            (false, true) => {
+                state.fn_pressed = true;
+                Some(true)
+            }
+            (true, false) => {
+                state.fn_pressed = false;
+                Some(false)
+            }
+            _ => None,
+        }
+    })
+}
+
+fn hotkey_capture_recording_help_text() -> &'static str {
+    "录制中：按下目标快捷键；如果只设置修饰键，松开后保存；Esc 取消"
+}
+
+fn hotkey_capture_pending_help_text(shortcut: &str) -> String {
+    format!(
+        "已识别：{}。松开后保存",
+        app::format_hotkey_display(shortcut)
+    )
+}
+
+fn hotkey_capture_saved_help_text(shortcut: &str) -> String {
+    format!(
+        "已保存：{}。新的快捷键已立即全局生效",
+        app::format_hotkey_display(shortcut)
+    )
+}
+
+fn hotkey_capture_cancelled_help_text(current_hotkey: &str) -> String {
+    format!("已取消，本次未修改；当前仍为 {}", current_hotkey)
+}
+
+fn hotkey_capture_unchanged_help_text(shortcut: &str) -> String {
+    format!(
+        "快捷键没有变化；当前仍为 {}",
+        app::format_hotkey_display(shortcut)
+    )
+}
+
+fn finish_hotkey_capture_unchanged(app: &AppWindow, shortcut: &str) {
+    reset_hotkey_capture_state();
+    app.set_hotkey_recording(false);
+    app.set_status_text("快捷键没有变化，无需保存".into());
+    app.set_hotkey_help_text(hotkey_capture_unchanged_help_text(shortcut).into());
+    log::info!("hotkey capture unchanged: shortcut={}", shortcut);
+}
+
+fn begin_hotkey_capture(app: &AppWindow) {
+    reset_hotkey_capture_state();
+    app.set_hotkey_recording(true);
+    app.set_hotkey_help_text(hotkey_capture_recording_help_text().into());
+    log::info!(
+        "hotkey capture started: current_hotkey={}",
+        app.get_hotkey_current_text()
+    );
+}
+
+fn cancel_hotkey_capture(app: &AppWindow) {
+    reset_hotkey_capture_state();
+    app.set_hotkey_recording(false);
+    app.set_hotkey_help_text(app::hotkey_settings_help_text().into());
+    log::info!("hotkey capture canceled");
+}
+
+fn handle_hotkey_capture_pressed(
+    app: &AppWindow,
+    overlay: &OverlayWindow,
+    text: &str,
+    modifiers: CapturedModifiers,
+    repeat: bool,
+) {
+    if !app.get_hotkey_recording() || repeat {
+        return;
+    }
+
+    if is_slint_key(text, slint::platform::Key::Escape) {
+        cancel_hotkey_capture(app);
+        return;
+    }
+
+    let Some(shortcut) = shortcut_from_captured_key(text, modifiers) else {
+        log::info!(
+            "hotkey capture press ignored: text={:?}, modifiers={:?}, repeat={}",
+            text,
+            modifiers,
+            repeat
+        );
+        return;
+    };
+
+    log::info!(
+        "hotkey capture press parsed: text={:?}, modifiers={:?}, repeat={}, shortcut={}",
+        text,
+        modifiers,
+        repeat,
+        shortcut
+    );
+
+    match app::is_push_to_talk_hotkey_unchanged(&shortcut) {
+        Ok(true) => {
+            finish_hotkey_capture_unchanged(app, &shortcut);
+            return;
+        }
+        Ok(false) => {}
+        Err(err) => {
+            log::warn!(
+                "hotkey capture unchanged check failed: shortcut={}, err={}",
+                shortcut,
+                err
+            );
+        }
+    }
+
+    if shortcut_is_modifier_only(&shortcut) {
+        set_pending_hotkey_capture(shortcut.clone());
+        app.set_hotkey_help_text(hotkey_capture_pending_help_text(&shortcut).into());
+        log::info!(
+            "hotkey capture pending modifier-only shortcut: {}",
+            shortcut
+        );
+        return;
+    }
+
+    reset_hotkey_capture_state();
+    commit_hotkey_capture(app, overlay, shortcut);
+}
+
+fn handle_hotkey_capture_released(
+    app: &AppWindow,
+    overlay: &OverlayWindow,
+    text: &str,
+    modifiers: CapturedModifiers,
+) {
+    if !app.get_hotkey_recording() {
+        return;
+    }
+
+    let Some(shortcut) = take_pending_hotkey_capture_for_release(text, modifiers) else {
+        return;
+    };
+
+    commit_hotkey_capture(app, overlay, shortcut);
+}
+
+#[cfg(target_os = "macos")]
+fn poll_macos_native_hotkey_capture(app: &AppWindow, overlay: &OverlayWindow) {
+    if !app.get_hotkey_recording() {
+        let _ = update_native_fn_capture_state(
+            shanji_platform::hotkeys::is_native_modifier_pressed("Fn"),
+        );
+        return;
+    }
+
+    let is_pressed = shanji_platform::hotkeys::is_native_modifier_pressed("Fn");
+
+    match update_native_fn_capture_state(is_pressed) {
+        Some(true) => {
+            let shortcut = "Fn";
+            match app::is_push_to_talk_hotkey_unchanged(shortcut) {
+                Ok(true) => {
+                    finish_hotkey_capture_unchanged(app, shortcut);
+                    return;
+                }
+                Ok(false) => {}
+                Err(err) => {
+                    log::warn!(
+                        "native hotkey capture unchanged check failed: shortcut={}, err={}",
+                        shortcut,
+                        err
+                    );
+                }
+            }
+
+            set_pending_hotkey_capture(shortcut.to_string());
+            app.set_hotkey_help_text(hotkey_capture_pending_help_text(shortcut).into());
+            log::info!(
+                "native hotkey capture pending modifier-only shortcut: {}",
+                shortcut
+            );
+        }
+        Some(false) => {
+            let shortcut = take_pending_hotkey_capture_matching(&["Fn".to_string()])
+                .or_else(take_pending_hotkey_capture);
+            if let Some(shortcut) = shortcut {
+                log::info!(
+                    "native hotkey capture release committed shortcut={}",
+                    shortcut
+                );
+                commit_hotkey_capture(app, overlay, shortcut);
+            }
+        }
+        None => {}
+    }
+}
+
+fn commit_hotkey_capture(app: &AppWindow, overlay: &OverlayWindow, shortcut: String) {
+    let saved_help_text = hotkey_capture_saved_help_text(&shortcut);
+    log::info!("hotkey capture commit requested: shortcut={}", shortcut);
+    match app::set_push_to_talk_hotkey(shortcut) {
+        Ok(snapshot) => {
+            cancel_hotkey_capture(app);
+            apply_snapshot(app, overlay, snapshot);
+            apply_settings_snapshot(app, app::refresh_settings_window());
+            app.set_hotkey_help_text(saved_help_text.into());
+            log::info!("hotkey capture commit succeeded");
+        }
+        Err(err) => {
+            reset_hotkey_capture_state();
+            log::warn!("hotkey capture commit failed: {}", err);
+            app.set_status_text(format!("快捷键设置失败：{}", err).into());
+            app.set_hotkey_help_text(
+                format!("保存失败：{}。请换一个按键重试；Esc 取消", err).into(),
+            );
+        }
+    }
+}
+
+fn take_pending_hotkey_capture_for_release(
+    text: &str,
+    modifiers: CapturedModifiers,
+) -> Option<String> {
+    let released_tokens = released_tokens_from_captured_key(text, modifiers);
+    if !released_tokens.is_empty() {
+        let shortcut = take_pending_hotkey_capture_matching(&released_tokens);
+        log::info!(
+            "hotkey capture release parsed: text={:?}, modifiers={:?}, released_tokens={:?}, committed_shortcut={:?}",
+            text,
+            modifiers,
+            released_tokens,
+            shortcut
+        );
+        return shortcut;
+    }
+
+    if text.is_empty() {
+        // On macOS, Slint can emit key-released events with an empty text payload for modifier
+        // keys. Pending captures only exist for modifier-only shortcuts, so the first release
+        // event is enough to finalize the shortcut.
+        let shortcut = take_pending_hotkey_capture();
+        log::info!(
+            "hotkey capture release fallback: empty text, modifiers={:?}, committed_shortcut={:?}",
+            modifiers,
+            shortcut
+        );
+        return shortcut;
+    }
+
+    log::info!(
+        "hotkey capture release ignored: text={:?}, modifiers={:?}",
+        text,
+        modifiers
+    );
+    None
+}
+
+fn released_tokens_from_captured_key(text: &str, modifiers: CapturedModifiers) -> Vec<String> {
+    let mut tokens = Vec::new();
+
+    if let Some(token) = key_token_from_captured_key(text, modifiers) {
+        tokens.push(token);
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if is_slint_key(text, slint::platform::Key::Alt)
+            || is_slint_key(text, slint::platform::Key::AltGr)
+        {
+            for token in ["LeftOption", "RightOption"] {
+                if !tokens.iter().any(|item| item == token) {
+                    tokens.push(token.to_string());
+                }
+            }
+        } else if is_slint_key(text, slint::platform::Key::Shift)
+            || is_slint_key(text, slint::platform::Key::ShiftR)
+        {
+            for token in ["LeftShift", "RightShift"] {
+                if !tokens.iter().any(|item| item == token) {
+                    tokens.push(token.to_string());
+                }
+            }
+        } else if is_slint_key(text, slint::platform::Key::ControlR)
+            || is_slint_key(text, slint::platform::Key::MetaR)
+            || is_slint_key(text, slint::platform::Key::Control)
+            || is_slint_key(text, slint::platform::Key::Meta)
+        {
+            for token in ["LeftCommand", "RightCommand", "LeftCtrl", "RightCtrl"] {
+                if !tokens.iter().any(|item| item == token) {
+                    tokens.push(token.to_string());
+                }
+            }
+        }
+    }
+
+    tokens
+}
+
+fn shortcut_from_captured_key(text: &str, modifiers: CapturedModifiers) -> Option<String> {
+    let key_token = key_token_from_captured_key(text, modifiers)?;
+    let mut parts = modifier_tokens_from_state(modifiers);
+    parts.retain(|part| !modifier_token_conflicts(part, &key_token));
+    parts.push(key_token);
+    Some(join_shortcut_parts(parts))
+}
+
+fn key_token_from_captured_key(text: &str, modifiers: CapturedModifiers) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        if is_slint_key(text, slint::platform::Key::Alt) {
+            return native_modifier_side_token("LeftOption", "RightOption")
+                .or_else(|| Some("LeftOption".to_string()));
+        }
+
+        if is_slint_key(text, slint::platform::Key::AltGr) {
+            return native_modifier_side_token("LeftOption", "RightOption")
+                .or_else(|| Some("RightOption".to_string()));
+        }
+
+        if (is_slint_key(text, slint::platform::Key::ControlR)
+            || is_slint_key(text, slint::platform::Key::MetaR))
+            && modifiers.control
+            && !modifiers.meta
+        {
+            return native_modifier_side_token("LeftCommand", "RightCommand")
+                .or_else(|| Some("RightCommand".to_string()));
+        }
+
+        if (is_slint_key(text, slint::platform::Key::Control)
+            || is_slint_key(text, slint::platform::Key::Meta))
+            && modifiers.control
+            && !modifiers.meta
+        {
+            return native_modifier_side_token("LeftCommand", "RightCommand")
+                .or_else(|| Some("LeftCommand".to_string()));
+        }
+
+        if (is_slint_key(text, slint::platform::Key::MetaR)
+            || is_slint_key(text, slint::platform::Key::ControlR))
+            && modifiers.meta
+            && !modifiers.control
+        {
+            return native_modifier_side_token("LeftCtrl", "RightCtrl")
+                .or_else(|| Some("RightCtrl".to_string()));
+        }
+
+        if (is_slint_key(text, slint::platform::Key::Meta)
+            || is_slint_key(text, slint::platform::Key::Control))
+            && modifiers.meta
+            && !modifiers.control
+        {
+            return native_modifier_side_token("LeftCtrl", "RightCtrl")
+                .or_else(|| Some("LeftCtrl".to_string()));
+        }
+
+        if is_slint_key(text, slint::platform::Key::Shift) {
+            return native_modifier_side_token("LeftShift", "RightShift")
+                .or_else(|| Some("LeftShift".to_string()));
+        }
+
+        if is_slint_key(text, slint::platform::Key::ShiftR) {
+            return native_modifier_side_token("LeftShift", "RightShift")
+                .or_else(|| Some("RightShift".to_string()));
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if is_slint_key(text, slint::platform::Key::AltGr) {
+        return Some("RightAlt".to_string());
+    }
+
+    if is_slint_key(text, slint::platform::Key::Control)
+        || is_slint_key(text, slint::platform::Key::ControlR)
+    {
+        return Some("Ctrl".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Alt) {
+        return Some("Alt".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Shift)
+        || is_slint_key(text, slint::platform::Key::ShiftR)
+    {
+        return Some("Shift".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Meta)
+        || is_slint_key(text, slint::platform::Key::MetaR)
+    {
+        return Some("Meta".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Space) {
+        return Some("Space".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Tab) {
+        return Some("Tab".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Return) {
+        return Some("Enter".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Backspace) {
+        return Some("Backspace".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Delete) {
+        return Some("Delete".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::UpArrow) {
+        return Some("Up".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::DownArrow) {
+        return Some("Down".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::LeftArrow) {
+        return Some("Left".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::RightArrow) {
+        return Some("Right".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::Home) {
+        return Some("Home".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::End) {
+        return Some("End".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::PageUp) {
+        return Some("PageUp".to_string());
+    }
+    if is_slint_key(text, slint::platform::Key::PageDown) {
+        return Some("PageDown".to_string());
+    }
+
+    for (key, token) in [
+        (slint::platform::Key::F1, "F1"),
+        (slint::platform::Key::F2, "F2"),
+        (slint::platform::Key::F3, "F3"),
+        (slint::platform::Key::F4, "F4"),
+        (slint::platform::Key::F5, "F5"),
+        (slint::platform::Key::F6, "F6"),
+        (slint::platform::Key::F7, "F7"),
+        (slint::platform::Key::F8, "F8"),
+        (slint::platform::Key::F9, "F9"),
+        (slint::platform::Key::F10, "F10"),
+        (slint::platform::Key::F11, "F11"),
+        (slint::platform::Key::F12, "F12"),
+        (slint::platform::Key::F13, "F13"),
+    ] {
+        if is_slint_key(text, key) {
+            return Some(token.to_string());
+        }
+    }
+
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() || ch.is_control() {
+        return None;
+    }
+
+    Some(ch.to_ascii_uppercase().to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn native_modifier_side_token(left: &str, right: &str) -> Option<String> {
+    let left_pressed = shanji_platform::hotkeys::is_native_modifier_pressed(left);
+    let right_pressed = shanji_platform::hotkeys::is_native_modifier_pressed(right);
+
+    match (left_pressed, right_pressed) {
+        (true, false) => Some(left.to_string()),
+        (false, true) => Some(right.to_string()),
+        _ => None,
+    }
+}
+
+fn modifier_tokens_from_state(modifiers: CapturedModifiers) -> Vec<String> {
+    let mut parts = Vec::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        if modifiers.control {
+            parts.push("Command".to_string());
+        }
+        if modifiers.meta {
+            parts.push("Ctrl".to_string());
+        }
+        if modifiers.alt {
+            parts.push("Option".to_string());
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if modifiers.control {
+            parts.push("Ctrl".to_string());
+        }
+        if modifiers.meta {
+            parts.push("Meta".to_string());
+        }
+        if modifiers.alt {
+            parts.push("Alt".to_string());
+        }
+    }
+    if modifiers.shift {
+        parts.push("Shift".to_string());
+    }
+
+    parts
+}
+
+fn join_shortcut_parts(parts: Vec<String>) -> String {
+    let mut unique = Vec::new();
+    for part in parts {
+        if !unique.contains(&part) {
+            unique.push(part);
+        }
+    }
+
+    let mut modifiers = unique
+        .iter()
+        .filter(|part| shortcut_is_modifier_only(part))
+        .cloned()
+        .collect::<Vec<_>>();
+    modifiers.sort_by_key(|part| shortcut_part_order(part));
+
+    let key = unique
+        .iter()
+        .find(|part| !shortcut_is_modifier_only(part))
+        .cloned();
+
+    if let Some(key) = key {
+        modifiers.push(key);
+    }
+
+    modifiers.join("+")
+}
+
+fn shortcut_is_modifier_only(shortcut: &str) -> bool {
+    shortcut.split('+').all(is_modifier_token)
+}
+
+fn modifier_token_conflicts(existing: &str, key_token: &str) -> bool {
+    matches!(
+        (existing, key_token),
+        ("Alt", "RightAlt")
+            | ("Option", "LeftOption")
+            | ("Option", "RightOption")
+            | ("Option", "Option")
+            | ("Command", "LeftCommand")
+            | ("Command", "RightCommand")
+            | ("Command", "Command")
+            | ("Ctrl", "LeftCtrl")
+            | ("Ctrl", "RightCtrl")
+            | ("Ctrl", "Ctrl")
+            | ("Shift", "LeftShift")
+            | ("Shift", "RightShift")
+            | ("Alt", "Alt")
+            | ("Shift", "Shift")
+            | ("Meta", "Meta")
+    )
+}
+
+fn shortcut_part_order(part: &str) -> u8 {
+    match part {
+        "LeftCommand" | "RightCommand" | "Command" => 0,
+        "LeftCtrl" | "RightCtrl" | "Ctrl" => 1,
+        "LeftOption" | "RightOption" | "RightAlt" | "Alt" | "Option" => 2,
+        "LeftShift" | "RightShift" | "Shift" => 3,
+        "Fn" => 4,
+        "Meta" => 5,
+        _ => 10,
+    }
+}
+
+fn is_modifier_token(token: &str) -> bool {
+    matches!(
+        token,
+        "LeftCommand"
+            | "RightCommand"
+            | "Command"
+            | "LeftCtrl"
+            | "RightCtrl"
+            | "Ctrl"
+            | "LeftOption"
+            | "RightOption"
+            | "RightAlt"
+            | "Alt"
+            | "Option"
+            | "LeftShift"
+            | "RightShift"
+            | "Shift"
+            | "Fn"
+            | "Meta"
+    )
+}
+
+fn is_slint_key(text: &str, key: slint::platform::Key) -> bool {
+    let key_text = slint::SharedString::from(key);
+    text == key_text.as_str()
 }
 
 fn is_settings_page_visible(app: &AppWindow) -> bool {
@@ -285,14 +955,6 @@ fn main() -> Result<(), slint::PlatformError> {
     refresh_settings_from_app(&app);
 
     let weak = app.as_weak();
-    let weak_overlay = overlay.as_weak();
-    app.on_refresh_requested(move || {
-        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
-            apply_result(&app, &overlay, app::refresh_snapshot());
-        }
-    });
-
-    let weak = app.as_weak();
     app.on_open_history_requested(move || {
         if let Some(app) = weak.upgrade() {
             app.set_active_section(SettingsSection::History);
@@ -313,6 +975,7 @@ fn main() -> Result<(), slint::PlatformError> {
     let weak = app.as_weak();
     app.on_close_settings_requested(move || {
         if let Some(app) = weak.upgrade() {
+            cancel_hotkey_capture(&app);
             hide_settings_page(&app);
         }
     });
@@ -322,14 +985,6 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_download_model_requested(move || {
         if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
             apply_result(&app, &overlay, app::start_model_download());
-        }
-    });
-
-    let weak = app.as_weak();
-    let weak_overlay = overlay.as_weak();
-    app.on_github_proxy_selected(move |index| {
-        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
-            apply_result(&app, &overlay, app::set_github_proxy_index(index));
         }
     });
 
@@ -350,24 +1005,6 @@ fn main() -> Result<(), slint::PlatformError> {
     app.on_toggle_live_asr_requested(move || {
         if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
             apply_result(&app, &overlay, app::toggle_live_asr());
-        }
-    });
-
-    let weak = app.as_weak();
-    let weak_overlay = overlay.as_weak();
-    app.on_cycle_theme_requested(move || {
-        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
-            apply_result(&app, &overlay, app::cycle_theme());
-            apply_settings_snapshot(&app, app::refresh_settings_window());
-        }
-    });
-
-    let weak = app.as_weak();
-    let weak_overlay = overlay.as_weak();
-    app.on_cycle_github_proxy_requested(move || {
-        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
-            apply_result(&app, &overlay, app::cycle_github_proxy());
-            apply_settings_snapshot(&app, app::refresh_settings_window());
         }
     });
 
@@ -454,33 +1091,6 @@ fn main() -> Result<(), slint::PlatformError> {
 
     let weak = app.as_weak();
     let weak_overlay = overlay.as_weak();
-    app.on_cycle_punct_style_requested(move || {
-        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
-            apply_result(&app, &overlay, app::cycle_punct_style());
-            apply_settings_snapshot(&app, app::refresh_settings_window());
-        }
-    });
-
-    let weak = app.as_weak();
-    let weak_overlay = overlay.as_weak();
-    app.on_cycle_append_content_requested(move || {
-        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
-            apply_result(&app, &overlay, app::cycle_append_content());
-            apply_settings_snapshot(&app, app::refresh_settings_window());
-        }
-    });
-
-    let weak = app.as_weak();
-    let weak_overlay = overlay.as_weak();
-    app.on_toggle_overlay_requested(move || {
-        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
-            apply_result(&app, &overlay, app::toggle_overlay_visibility());
-            apply_settings_snapshot(&app, app::refresh_settings_window());
-        }
-    });
-
-    let weak = app.as_weak();
-    let weak_overlay = overlay.as_weak();
     app.on_clear_session_requested(move || {
         if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
             apply_result(&app, &overlay, app::clear_session());
@@ -507,14 +1117,6 @@ fn main() -> Result<(), slint::PlatformError> {
 
     app.on_copy_record_requested(move |id| {
         let _ = app::copy_history_record(id);
-    });
-
-    let weak = app.as_weak();
-    app.on_paste_record_requested(move |id| {
-        let _ = app::paste_history_record(id);
-        if let Some(app) = weak.upgrade() {
-            refresh_history_only(&app);
-        }
     });
 
     let weak = app.as_weak();
@@ -578,6 +1180,30 @@ fn main() -> Result<(), slint::PlatformError> {
         let _ = app::set_llm_system_prompt(prompt.to_string());
     });
 
+    app.on_set_network_proxy_mode_requested(move |index| {
+        let _ = app::set_network_proxy_mode(index);
+    });
+
+    app.on_set_network_proxy_type_requested(move |index| {
+        let _ = app::set_network_proxy_type(index);
+    });
+
+    app.on_set_network_proxy_host_requested(move |host| {
+        let _ = app::set_network_proxy_host(host.to_string());
+    });
+
+    app.on_set_network_proxy_port_requested(move |port| {
+        let _ = app::set_network_proxy_port(port.to_string());
+    });
+
+    app.on_set_network_proxy_username_requested(move |username| {
+        let _ = app::set_network_proxy_username(username.to_string());
+    });
+
+    app.on_set_network_proxy_password_requested(move |password| {
+        let _ = app::set_network_proxy_password(password.to_string());
+    });
+
     let weak = app.as_weak();
     app.on_test_llm_api_requested(move || {
         if let Some(app) = weak.upgrade() {
@@ -607,9 +1233,89 @@ fn main() -> Result<(), slint::PlatformError> {
         }
     });
 
-    app.on_record_hotkey_requested(move || {
-        // TODO: implement hotkey recording UI flow
-        log::info!("Hotkey recording requested from settings");
+    let weak = app.as_weak();
+    app.on_test_network_proxy_requested(move || {
+        if let Some(app) = weak.upgrade() {
+            app.set_network_proxy_test_status_text("".into());
+            app.set_network_proxy_test_status_type(0);
+            app.set_network_proxy_testing(true);
+            let weak2 = weak.clone();
+            std::thread::spawn(move || {
+                let result = app::test_network_proxy();
+                slint::invoke_from_event_loop(move || {
+                    if let Some(app) = weak2.upgrade() {
+                        app.set_network_proxy_testing(false);
+                        match result {
+                            Ok(message) => {
+                                app.set_network_proxy_test_status_text(message.into());
+                                app.set_network_proxy_test_status_type(1);
+                            }
+                            Err(err) => {
+                                app.set_network_proxy_test_status_text(format!("✗ {}", err).into());
+                                app.set_network_proxy_test_status_type(2);
+                            }
+                        }
+                    }
+                })
+                .ok();
+            });
+        }
+    });
+
+    let weak = app.as_weak();
+    app.on_begin_hotkey_recording_requested(move || {
+        if let Some(app) = weak.upgrade() {
+            begin_hotkey_capture(&app);
+            app.set_status_text("正在录制快捷键，请按下目标按键".into());
+        }
+    });
+
+    let weak = app.as_weak();
+    app.on_cancel_hotkey_recording_requested(move || {
+        if let Some(app) = weak.upgrade() {
+            cancel_hotkey_capture(&app);
+            app.set_status_text("已取消快捷键录制".into());
+            app.set_hotkey_help_text(
+                hotkey_capture_cancelled_help_text(app.get_hotkey_current_text().as_str()).into(),
+            );
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
+    app.on_hotkey_capture_key_pressed(move |text, alt, control, shift, meta, repeat| {
+        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
+            handle_hotkey_capture_pressed(
+                &app,
+                &overlay,
+                text.as_str(),
+                CapturedModifiers {
+                    alt,
+                    control,
+                    shift,
+                    meta,
+                },
+                repeat,
+            );
+        }
+    });
+
+    let weak = app.as_weak();
+    let weak_overlay = overlay.as_weak();
+    app.on_hotkey_capture_key_released(move |text, alt, control, shift, meta| {
+        if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
+            handle_hotkey_capture_released(
+                &app,
+                &overlay,
+                text.as_str(),
+                CapturedModifiers {
+                    alt,
+                    control,
+                    shift,
+                    meta,
+                },
+            );
+        }
     });
 
     // ── Timers ─────────────────────────────────────────────────────────────
@@ -647,6 +1353,23 @@ fn main() -> Result<(), slint::PlatformError> {
         );
     }
 
+    #[cfg(target_os = "macos")]
+    let native_hotkey_capture_timer = slint::Timer::default();
+    #[cfg(target_os = "macos")]
+    {
+        let weak = app.as_weak();
+        let weak_overlay = overlay.as_weak();
+        native_hotkey_capture_timer.start(
+            slint::TimerMode::Repeated,
+            std::time::Duration::from_millis(16),
+            move || {
+                if let (Some(app), Some(overlay)) = (weak.upgrade(), weak_overlay.upgrade()) {
+                    poll_macos_native_hotkey_capture(&app, &overlay);
+                }
+            },
+        );
+    }
+
     app.show()?;
 
     // 在事件循环第一次迭代后再设置 Dock 图标，确保 NSApplication 完全初始化
@@ -668,6 +1391,15 @@ fn handle_platform_hotkey_event(
     event: shanji_platform::hotkeys::PlatformHotkeyEvent,
 ) {
     use shanji_platform::hotkeys::{HotkeyAction, HotkeyEventState};
+
+    if app.get_hotkey_recording() {
+        log::info!(
+            "ignoring platform hotkey while capture is active: action={:?}, state={:?}",
+            event.action,
+            event.state
+        );
+        return;
+    }
 
     match (event.action, event.state) {
         (HotkeyAction::ToggleRecording, HotkeyEventState::Pressed) => {
@@ -767,7 +1499,6 @@ fn apply_snapshot(app: &AppWindow, overlay: &OverlayWindow, snapshot: app::UiSna
     app.set_model_download_progress(snapshot.model_download_progress);
     app.set_model_download_status_text(snapshot.model_download_status_text.into());
     app.set_model_download_error_text(snapshot.model_download_error_text.into());
-    app.set_github_proxy_current_index(snapshot.github_proxy_index);
     app.set_refine_model_title_text(snapshot.refine_model_title_text.into());
     app.set_refine_model_desc_text(snapshot.refine_model_desc_text.into());
     app.set_refine_model_version_text(snapshot.refine_model_version_text.into());
@@ -857,10 +1588,9 @@ fn apply_settings_snapshot(
 ) {
     match result {
         Ok(snapshot) => {
-            settings.set_theme_text(snapshot.theme_text.into());
-            settings.set_punct_style_text(snapshot.punct_style_text.into());
-            settings.set_append_content_text(snapshot.append_content_text.into());
             settings.set_hotkey_summary_text(snapshot.hotkey_summary_text.into());
+            settings.set_hotkey_current_text(snapshot.hotkey_current_text.into());
+            settings.set_hotkey_help_text(snapshot.hotkey_help_text.into());
             settings.set_config_path_text(snapshot.config_path_text.into());
             settings.set_llm_enabled(snapshot.llm_enabled);
             settings.set_llm_base_url(snapshot.llm_base_url.into());
@@ -870,7 +1600,15 @@ fn apply_settings_snapshot(
             settings.set_llm_active_prompt_id(snapshot.llm_active_prompt_id.into());
             settings.set_llm_test_status_type(snapshot.llm_test_status);
             settings.set_llm_test_status_text(snapshot.llm_test_status_text.into());
-            settings.set_overlay_visible(snapshot.overlay_enabled);
+            settings.set_network_proxy_mode_index(snapshot.network_proxy_mode_index);
+            settings.set_network_proxy_type_index(snapshot.network_proxy_type_index);
+            settings.set_network_proxy_host(snapshot.network_proxy_host.into());
+            settings.set_network_proxy_port(snapshot.network_proxy_port.into());
+            settings.set_network_proxy_username(snapshot.network_proxy_username.into());
+            settings.set_network_proxy_password_saved(snapshot.network_proxy_password_saved);
+            settings.set_network_proxy_test_status_type(snapshot.network_proxy_test_status);
+            settings
+                .set_network_proxy_test_status_text(snapshot.network_proxy_test_status_text.into());
             // live model
             settings.set_live_model_id(snapshot.live_model_id.into());
             settings.set_live_model_size_text(snapshot.live_model_size_text.into());
@@ -965,5 +1703,157 @@ fn refresh_history_only(settings: &AppWindow) {
             settings.set_history_stats_text(format!("共 {} 条 · 最近 20 条", total).into());
         }
         Err(e) => log::warn!("Failed to load history cards: {}", e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key_text(key: slint::platform::Key) -> String {
+        slint::SharedString::from(key).to_string()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn left_alt_modifier_token() -> &'static str {
+        "LeftOption"
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn left_alt_modifier_token() -> &'static str {
+        "Alt"
+    }
+
+    #[test]
+    fn modifier_release_with_matching_token_commits_pending_shortcut() {
+        reset_hotkey_capture_state();
+        set_pending_hotkey_capture(left_alt_modifier_token().to_string());
+
+        let shortcut = take_pending_hotkey_capture_for_release(
+            &key_text(slint::platform::Key::Alt),
+            CapturedModifiers::default(),
+        );
+
+        assert_eq!(shortcut.as_deref(), Some(left_alt_modifier_token()));
+        assert!(take_pending_hotkey_capture().is_none());
+    }
+
+    #[test]
+    fn empty_release_text_commits_pending_modifier_shortcut() {
+        reset_hotkey_capture_state();
+        set_pending_hotkey_capture("Shift".to_string());
+
+        let shortcut = take_pending_hotkey_capture_for_release("", CapturedModifiers::default());
+
+        assert_eq!(shortcut.as_deref(), Some("Shift"));
+        assert!(take_pending_hotkey_capture().is_none());
+    }
+
+    #[test]
+    fn empty_release_text_commits_pending_modifier_combo() {
+        reset_hotkey_capture_state();
+        set_pending_hotkey_capture("Command+Shift".to_string());
+
+        let shortcut = take_pending_hotkey_capture_for_release(
+            "",
+            CapturedModifiers {
+                control: true,
+                ..CapturedModifiers::default()
+            },
+        );
+
+        assert_eq!(shortcut.as_deref(), Some("Command+Shift"));
+        assert!(take_pending_hotkey_capture().is_none());
+    }
+
+    #[test]
+    fn unrelated_release_token_keeps_pending_shortcut() {
+        reset_hotkey_capture_state();
+        set_pending_hotkey_capture(left_alt_modifier_token().to_string());
+
+        let shortcut = take_pending_hotkey_capture_for_release(
+            &key_text(slint::platform::Key::Shift),
+            CapturedModifiers::default(),
+        );
+
+        assert!(shortcut.is_none());
+        assert_eq!(
+            take_pending_hotkey_capture().as_deref(),
+            Some(left_alt_modifier_token())
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_alt_release_matches_pending_right_option_even_when_event_is_generic() {
+        reset_hotkey_capture_state();
+        set_pending_hotkey_capture("RightOption".to_string());
+
+        let shortcut = take_pending_hotkey_capture_for_release(
+            &key_text(slint::platform::Key::Alt),
+            CapturedModifiers::default(),
+        );
+
+        assert_eq!(shortcut.as_deref(), Some("RightOption"));
+        assert!(take_pending_hotkey_capture().is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_option_keys_are_captured_with_side_specific_tokens() {
+        let modifiers = CapturedModifiers {
+            alt: true,
+            ..CapturedModifiers::default()
+        };
+
+        assert_eq!(
+            key_token_from_captured_key(&key_text(slint::platform::Key::Alt), modifiers).as_deref(),
+            Some("LeftOption")
+        );
+        assert_eq!(
+            key_token_from_captured_key(&key_text(slint::platform::Key::AltGr), modifiers)
+                .as_deref(),
+            Some("RightOption")
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_command_and_control_keys_are_captured_with_side_specific_tokens() {
+        let command_modifiers = CapturedModifiers {
+            control: true,
+            ..CapturedModifiers::default()
+        };
+        let control_modifiers = CapturedModifiers {
+            meta: true,
+            ..CapturedModifiers::default()
+        };
+
+        assert_eq!(
+            key_token_from_captured_key(
+                &key_text(slint::platform::Key::Control),
+                command_modifiers
+            )
+            .as_deref(),
+            Some("LeftCommand")
+        );
+        assert_eq!(
+            key_token_from_captured_key(
+                &key_text(slint::platform::Key::ControlR),
+                command_modifiers
+            )
+            .as_deref(),
+            Some("RightCommand")
+        );
+        assert_eq!(
+            key_token_from_captured_key(&key_text(slint::platform::Key::Meta), control_modifiers)
+                .as_deref(),
+            Some("LeftCtrl")
+        );
+        assert_eq!(
+            key_token_from_captured_key(&key_text(slint::platform::Key::MetaR), control_modifiers)
+                .as_deref(),
+            Some("RightCtrl")
+        );
     }
 }

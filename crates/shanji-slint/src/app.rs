@@ -4,6 +4,7 @@ use shanji_core::config::{self, AppConfig, AppState};
 use shanji_core::history::{HistoryDb, HistoryRecord};
 use shanji_core::hotwords;
 use shanji_core::model;
+use shanji_core::network;
 use shanji_core::offline_transcribe::OfflineTranscriber;
 use shanji_core::paths::AppPaths;
 use shanji_core::state::{self, RuntimeSnapshot};
@@ -224,7 +225,6 @@ pub struct UiSnapshot {
     pub model_download_progress: f32,
     pub model_download_status_text: String,
     pub model_download_error_text: String,
-    pub github_proxy_index: i32,
     pub refine_model_title_text: String,
     pub refine_model_desc_text: String,
     pub refine_model_version_text: String,
@@ -253,15 +253,12 @@ pub struct UiSnapshot {
     pub model_text: String,
     pub model_summary_text: String,
     pub model_inventory_text: String,
-    pub theme_text: String,
     pub audio_device_text: String,
     pub recording_mode_text: String,
     pub rewrite_text: String,
     pub llm_enabled: bool,
     pub llm_active_prompt_id: String,
     pub llm_provider_summary: String,
-    pub punct_style_text: String,
-    pub append_content_text: String,
     pub hotword_summary_text: String,
     pub hotword_inventory_text: String,
     pub hotkey_summary_text: String,
@@ -270,7 +267,6 @@ pub struct UiSnapshot {
     pub tray_inventory_text: String,
     pub live_asr_text: String,
     pub overlay_visible: bool,
-    pub overlay_visibility_text: String,
     pub config_path_text: String,
     pub history_stats_text: String,
     pub history_preview_text: String,
@@ -306,10 +302,9 @@ pub struct HotwordLibraryCardData {
 }
 
 pub struct SettingsWindowSnapshot {
-    pub theme_text: String,
-    pub punct_style_text: String,
-    pub append_content_text: String,
     pub hotkey_summary_text: String,
+    pub hotkey_current_text: String,
+    pub hotkey_help_text: String,
     pub config_path_text: String,
     pub llm_enabled: bool,
     pub llm_base_url: String,
@@ -319,7 +314,15 @@ pub struct SettingsWindowSnapshot {
     pub llm_active_prompt_id: String,
     pub llm_test_status: i32,
     pub llm_test_status_text: String,
-    pub overlay_enabled: bool,
+    // Network
+    pub network_proxy_mode_index: i32,
+    pub network_proxy_type_index: i32,
+    pub network_proxy_host: String,
+    pub network_proxy_port: String,
+    pub network_proxy_username: String,
+    pub network_proxy_password_saved: bool,
+    pub network_proxy_test_status: i32,
+    pub network_proxy_test_status_text: String,
     // ASR — live model
     pub live_model_id: String,
     pub live_model_size_text: String,
@@ -345,7 +348,17 @@ pub struct SettingsWindowSnapshot {
     pub audio_device_index: i32,
 }
 
-const GITHUB_PROXY_VALUES: [&str; 3] = ["https://ghfast.top/", "https://gh-proxy.com/", ""];
+const PROXY_MODE_VALUES: [&str; 3] = [
+    network::PROXY_MODE_SYSTEM,
+    network::PROXY_MODE_CUSTOM,
+    network::PROXY_MODE_DIRECT,
+];
+const PROXY_TYPE_VALUES: [&str; 4] = [
+    network::PROXY_TYPE_HTTP,
+    network::PROXY_TYPE_HTTPS,
+    network::PROXY_TYPE_SOCKS5,
+    network::PROXY_TYPE_SOCKS5H,
+];
 
 pub fn bootstrap_snapshot() -> UiSnapshot {
     shanji_core::state::init_state();
@@ -370,7 +383,6 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
             model_download_progress: 0.0,
             model_download_status_text: String::new(),
             model_download_error_text: String::new(),
-            github_proxy_index: 0,
             mic_permission_title: "麦克风状态不可用".to_string(),
             mic_permission_body: "当前无法读取音频输入设备".to_string(),
             mic_ready: false,
@@ -399,15 +411,12 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
             model_text: "Unavailable".to_string(),
             model_summary_text: "Models unavailable".to_string(),
             model_inventory_text: "Model inventory unavailable".to_string(),
-            theme_text: "Unavailable".to_string(),
             audio_device_text: "Audio devices unavailable".to_string(),
             recording_mode_text: "Unavailable".to_string(),
             rewrite_text: "LLM polish: unavailable".to_string(),
             llm_enabled: false,
             llm_active_prompt_id: "default".to_string(),
             llm_provider_summary: String::new(),
-            punct_style_text: "Punct style: unavailable".to_string(),
-            append_content_text: "Append content: unavailable".to_string(),
             hotword_summary_text: "Hotwords unavailable".to_string(),
             hotword_inventory_text: "Hotword inventory unavailable".to_string(),
             hotkey_summary_text: "Hotkeys unavailable".to_string(),
@@ -416,7 +425,6 @@ pub fn bootstrap_snapshot() -> UiSnapshot {
             tray_inventory_text: "Tray inventory unavailable".to_string(),
             live_asr_text: "Live ASR unavailable".to_string(),
             overlay_visible: false,
-            overlay_visibility_text: "Overlay unavailable".to_string(),
             config_path_text: err,
             history_stats_text: "History stats unavailable".to_string(),
             history_preview_text: "History unavailable".to_string(),
@@ -459,10 +467,17 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         status_text: runtime.status_message.clone(),
         hotkey_hint_title: "按下快捷键开始语音输入".to_string(),
         hotkey_hint_body: match cfg.audio.recording_mode.as_str() {
-            "push-to-talk" => format!(
-                "把光标放到目标输入框，按住说话超过 {}ms 后开始录音，松开后自动转写并粘贴",
-                cfg.hotkeys.push_to_talk_hold_delay_ms
-            ),
+            "push-to-talk" => {
+                let hold_delay_ms = hotkeys::effective_push_to_talk_hold_delay_ms(&cfg.hotkeys);
+                if hold_delay_ms == 0 {
+                    "把光标放到目标输入框，按住说话后开始录音，松开后自动转写并粘贴".to_string()
+                } else {
+                    format!(
+                        "把光标放到目标输入框，按住说话超过 {}ms 后开始录音，松开后自动转写并粘贴",
+                        hold_delay_ms
+                    )
+                }
+            }
             _ => "把光标放到目标输入框，按一次开始说话，再按一次结束转写并粘贴".to_string(),
         },
         hotkey_display_text: hotkey_display,
@@ -511,7 +526,6 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         ),
         model_download_error_text: crate::model_downloader::get_last_error(&cfg.asr.live_model_id)
             .unwrap_or_default(),
-        github_proxy_index: github_proxy_index(&cfg),
         refine_model_title_text: refine_model
             .as_ref()
             .map(|m| m.name.clone())
@@ -599,7 +613,6 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
         model_text: format!("Live model: {}", cfg.asr.live_model_id),
         model_summary_text: load_model_summary(&paths, &cfg),
         model_inventory_text: load_model_inventory(&paths, &cfg),
-        theme_text: format!("Theme: {}", cfg.general.theme),
         audio_device_text: load_audio_device_summary(&cfg),
         recording_mode_text: format!("Recording mode: {}", cfg.audio.recording_mode),
         rewrite_text: format!(
@@ -618,8 +631,6 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
             .first()
             .map(|p| p.model.clone())
             .unwrap_or_default(),
-        punct_style_text: format!("Punct style: {}", cfg.output.punct_style),
-        append_content_text: format!("Append content: {}", cfg.output.append_content),
         hotword_summary_text: load_hotword_summary(&paths),
         hotword_inventory_text: load_hotword_inventory(&paths),
         hotkey_summary_text: load_hotkey_summary(&cfg),
@@ -632,11 +643,6 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
                 runtime.current_state,
                 AppState::Recording | AppState::Transcribing | AppState::Rewriting
             ),
-        overlay_visibility_text: if runtime.overlay_visible {
-            "Overlay: visible".to_string()
-        } else {
-            "Overlay: hidden".to_string()
-        },
         config_path_text: format!("Config: {}", paths.config_file().display()),
         history_stats_text: load_history_stats(&paths),
         history_preview_text: load_history_preview(&paths),
@@ -656,7 +662,6 @@ pub fn refresh_snapshot() -> Result<UiSnapshot, String> {
 pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
     let paths = resolve_app_paths();
     let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    let runtime = state::get_runtime_snapshot();
     let live_model = active_live_model_info(&paths, &cfg);
     let refine_model = refine_model_info(&paths, &cfg);
     let live_model_downloaded = live_model
@@ -682,14 +687,16 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
     };
     let hotword_libraries = build_hotword_library_cards(&paths);
 
-    let live_size_bytes = live_model.as_ref().map(|m| total_size_with_deps(m)).unwrap_or(0);
+    let live_size_bytes = live_model
+        .as_ref()
+        .map(|m| total_size_with_deps(m))
+        .unwrap_or(0);
     let refine_size_bytes = refine_model.as_ref().map(|m| m.size_bytes).unwrap_or(0);
 
     Ok(SettingsWindowSnapshot {
-        theme_text: format!("主题: {}", cfg.general.theme),
-        punct_style_text: format!("标点风格: {}", cfg.output.punct_style),
-        append_content_text: format!("附加内容: {}", cfg.output.append_content),
         hotkey_summary_text: load_hotkey_summary(&cfg),
+        hotkey_current_text: push_to_talk_hotkey_display(&cfg),
+        hotkey_help_text: hotkey_settings_help_text(),
         config_path_text: format!("配置路径: {}", paths.config_file().display()),
         llm_enabled: cfg.rewrite.enabled,
         llm_base_url: cfg
@@ -732,7 +739,14 @@ pub fn refresh_settings_window() -> Result<SettingsWindowSnapshot, String> {
             .first()
             .map(|p| p.test_status_text.clone())
             .unwrap_or_default(),
-        overlay_enabled: runtime.overlay_visible,
+        network_proxy_mode_index: proxy_mode_index(&cfg),
+        network_proxy_type_index: proxy_type_index(&cfg),
+        network_proxy_host: cfg.network.proxy_host.clone(),
+        network_proxy_port: cfg.network.proxy_port.clone(),
+        network_proxy_username: cfg.network.proxy_username.clone(),
+        network_proxy_password_saved: !cfg.network.proxy_password_encrypted.is_empty(),
+        network_proxy_test_status: cfg.network.proxy_test_status,
+        network_proxy_test_status_text: cfg.network.proxy_test_status_text.clone(),
         // live model
         live_model_id: cfg.asr.live_model_id.clone(),
         live_model_size_text: format_size_mb(live_size_bytes),
@@ -877,15 +891,6 @@ pub fn get_main_window_download_progress() -> Option<MainWindowDownloadSnapshot>
     })
 }
 
-pub fn cycle_theme() -> Result<UiSnapshot, String> {
-    let paths = resolve_app_paths();
-    config::init_config(&paths).map_err(|e| e.to_string())?;
-    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    cfg.general.theme = next_theme(&cfg.general.theme).to_string();
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
-    refresh_snapshot()
-}
-
 pub fn toggle_rewrite_enabled() -> Result<UiSnapshot, String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
@@ -905,46 +910,83 @@ pub fn set_active_prompt(id: String) -> Result<UiSnapshot, String> {
     refresh_snapshot()
 }
 
-pub fn cycle_punct_style() -> Result<UiSnapshot, String> {
+pub fn set_network_proxy_mode(index: i32) -> Result<(), String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    cfg.output.punct_style = next_punct_style(&cfg.output.punct_style).to_string();
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
-    refresh_snapshot()
+    cfg.network.proxy_mode = proxy_mode_value(index).to_string();
+    reset_proxy_test_status(&mut cfg);
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())
 }
 
-pub fn cycle_append_content() -> Result<UiSnapshot, String> {
+pub fn set_network_proxy_type(index: i32) -> Result<(), String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    cfg.output.append_content = next_append_content(&cfg.output.append_content).to_string();
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
-    refresh_snapshot()
+    cfg.network.proxy_type = proxy_type_value(index).to_string();
+    reset_proxy_test_status(&mut cfg);
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())
 }
 
-pub fn cycle_github_proxy() -> Result<UiSnapshot, String> {
+pub fn set_network_proxy_host(host: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    cfg.network.github_proxy = next_github_proxy(&cfg.network.github_proxy).to_string();
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
-
-    let mut snapshot = refresh_snapshot()?;
-    snapshot.status_text = format!("已切换下载代理为 {}", github_proxy_display(&cfg));
-    Ok(snapshot)
+    cfg.network.proxy_host = host;
+    reset_proxy_test_status(&mut cfg);
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())
 }
 
-pub fn set_github_proxy_index(index: i32) -> Result<UiSnapshot, String> {
+pub fn set_network_proxy_port(port: String) -> Result<(), String> {
     let paths = resolve_app_paths();
     config::init_config(&paths).map_err(|e| e.to_string())?;
     let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
-    cfg.network.github_proxy = github_proxy_value(index).to_string();
-    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+    cfg.network.proxy_port = port;
+    reset_proxy_test_status(&mut cfg);
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())
+}
 
-    let mut snapshot = refresh_snapshot()?;
-    snapshot.status_text = format!("已切换下载代理为 {}", github_proxy_display(&cfg));
-    Ok(snapshot)
+pub fn set_network_proxy_username(username: String) -> Result<(), String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    cfg.network.proxy_username = username;
+    reset_proxy_test_status(&mut cfg);
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())
+}
+
+pub fn set_network_proxy_password(password: String) -> Result<(), String> {
+    if password.is_empty() {
+        return Ok(());
+    }
+
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    cfg.network.proxy_password_encrypted = network::encrypt_proxy_password(&password);
+    reset_proxy_test_status(&mut cfg);
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())
+}
+
+pub fn test_network_proxy() -> Result<String, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+
+    let result = network::test_proxy_connection(&cfg.network).map_err(|e| e.to_string());
+    match &result {
+        Ok(message) => {
+            cfg.network.proxy_test_status = 1;
+            cfg.network.proxy_test_status_text = message.clone();
+        }
+        Err(err) => {
+            cfg.network.proxy_test_status = 2;
+            cfg.network.proxy_test_status_text = format!("✗ {}", err);
+        }
+    }
+    let _ = config::save_config(&paths, &cfg);
+
+    result
 }
 
 pub fn select_audio_device(index: usize) -> Result<SettingsWindowSnapshot, String> {
@@ -957,6 +999,54 @@ pub fn select_audio_device(index: usize) -> Result<SettingsWindowSnapshot, Strin
         config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
     }
     refresh_settings_window()
+}
+
+pub fn set_push_to_talk_hotkey(shortcut: String) -> Result<UiSnapshot, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let mut cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    log::info!(
+        "set_push_to_talk_hotkey requested: raw_shortcut={}",
+        shortcut
+    );
+    let canonical = hotkeys::validate_shortcut(&shortcut)?;
+    log::info!(
+        "set_push_to_talk_hotkey validated: canonical_shortcut={}",
+        canonical
+    );
+    cfg.hotkeys.push_to_talk = canonical;
+
+    let summary = hotkeys::summarize_hotkeys(&cfg.hotkeys);
+    if let Some(conflict) = summary.conflicts.first() {
+        log::warn!("set_push_to_talk_hotkey conflict: {}", conflict);
+        return Err(format!("快捷键冲突：{}", conflict));
+    }
+    if let Some(unsupported) = summary.unsupported.first() {
+        log::warn!("set_push_to_talk_hotkey unsupported: {}", unsupported);
+        return Err(format!("快捷键不可用：{}", unsupported));
+    }
+
+    config::save_config(&paths, &cfg).map_err(|e| e.to_string())?;
+    log::info!(
+        "set_push_to_talk_hotkey saved: stored_shortcut={}",
+        cfg.hotkeys.push_to_talk
+    );
+    let mut snapshot = refresh_snapshot()?;
+    snapshot.status_text = format!(
+        "快捷键已保存：{}，并已立即全局生效",
+        push_to_talk_hotkey_display(&cfg)
+    );
+    Ok(snapshot)
+}
+
+pub fn is_push_to_talk_hotkey_unchanged(shortcut: &str) -> Result<bool, String> {
+    let paths = resolve_app_paths();
+    config::init_config(&paths).map_err(|e| e.to_string())?;
+    let cfg = config::get_config(&paths).map_err(|e| e.to_string())?;
+    let current = hotkeys::validate_shortcut(&cfg.hotkeys.push_to_talk)
+        .unwrap_or_else(|_| cfg.hotkeys.push_to_talk.trim().to_string());
+    let candidate = hotkeys::validate_shortcut(shortcut)?;
+    Ok(candidate == current)
 }
 
 pub fn toggle_hotword_library(id: &str) -> Result<SettingsWindowSnapshot, String> {
@@ -1021,19 +1111,6 @@ pub fn copy_history_record(record_id: i32) -> Result<(), String> {
         .ok_or_else(|| format!("Record {} not found", record_id))?;
     let text = record_output_text(&record);
     shanji_core::output::copy_to_clipboard(&text).map_err(|e| e.to_string())
-}
-
-pub fn paste_history_record(record_id: i32) -> Result<(), String> {
-    let paths = resolve_app_paths();
-    let db = shanji_core::history::HistoryDb::new_with_paths(&paths).map_err(|e| e.to_string())?;
-    let record = db
-        .get(record_id as i64)
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("Record {} not found", record_id))?;
-    let cfg = shanji_core::config::get_config(&paths).map_err(|e| e.to_string())?;
-    let text = record_output_text(&record);
-    shanji_core::output::deliver_output(&text, &cfg.output).map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 pub fn delete_history_record(record_id: i32) -> Result<(), String> {
@@ -1232,6 +1309,11 @@ fn reset_llm_test_status(cfg: &mut shanji_core::config::AppConfig) {
     }
 }
 
+fn reset_proxy_test_status(cfg: &mut shanji_core::config::AppConfig) {
+    cfg.network.proxy_test_status = 0;
+    cfg.network.proxy_test_status_text = String::new();
+}
+
 fn ensure_custom_provider(cfg: &mut shanji_core::config::AppConfig) {
     if cfg.rewrite.providers.is_empty() {
         cfg.rewrite
@@ -1335,7 +1417,7 @@ pub fn test_llm_api() -> Result<(), String> {
         api_key_len
     );
 
-    let client = shanji_core::llm::create_client_from_settings(&cfg.rewrite).map_err(|e| {
+    let client = shanji_core::llm::create_client_from_app_config(&cfg).map_err(|e| {
         eprintln!("[LLM test] create_client error: {}", e);
         e.to_string()
     })?;
@@ -1460,17 +1542,6 @@ pub fn clear_session() -> Result<UiSnapshot, String> {
     Ok(snapshot)
 }
 
-pub fn toggle_overlay_visibility() -> Result<UiSnapshot, String> {
-    let runtime = state::get_runtime_snapshot();
-    state::set_overlay_visible(!runtime.overlay_visible);
-    state::set_status_message(if runtime.overlay_visible {
-        "Overlay hidden from native app"
-    } else {
-        "Overlay shown from native app"
-    });
-    refresh_snapshot()
-}
-
 fn resolve_app_paths() -> AppPaths {
     shanji_core::paths::standard_app_paths("shanji").expect("failed to resolve standard app paths")
 }
@@ -1550,15 +1621,6 @@ fn transcribe_body_text(runtime: &RuntimeSnapshot) -> String {
         "正在通过真实麦克风和当前模型进行转写".to_string()
     } else {
         "测试转写功能是否正常".to_string()
-    }
-}
-
-fn next_theme(current: &str) -> &'static str {
-    match current {
-        "system" => "light",
-        "light" => "dark",
-        "dark" => "system",
-        _ => "system",
     }
 }
 
@@ -1657,8 +1719,57 @@ fn load_hotkey_inventory(cfg: &AppConfig) -> String {
     hotkeys::summarize_hotkeys(&cfg.hotkeys).inventory_text()
 }
 
+pub fn format_hotkey_display(raw: &str) -> String {
+    raw.split('+')
+        .map(|token| match token.trim() {
+            "LeftCommand" => "左 Command ⌘",
+            "RightCommand" => "右 Command ⌘",
+            "Command" => "Command ⌘",
+            "LeftOption" => "左 Option ⌥",
+            "RightOption" => "右 Option ⌥",
+            #[cfg(target_os = "macos")]
+            "RightAlt" => "右 Option ⌥",
+            #[cfg(not(target_os = "macos"))]
+            "RightAlt" => "右 Alt",
+            #[cfg(target_os = "macos")]
+            "Alt" => "Option ⌥",
+            #[cfg(not(target_os = "macos"))]
+            "Alt" => "Alt",
+            "Option" => "Option ⌥",
+            "LeftCtrl" => "左 Control ⌃",
+            "RightCtrl" => "右 Control ⌃",
+            "Ctrl" | "Control" => "Control ⌃",
+            "LeftShift" => "左 Shift ⇧",
+            "RightShift" => "右 Shift ⇧",
+            "Shift" => "Shift ⇧",
+            "Fn" => "Fn",
+            "Meta" => "Meta",
+            "Space" => "空格",
+            "Return" | "Enter" => "回车 ↩",
+            "Delete" | "Backspace" => "Delete ⌫",
+            "Escape" | "Esc" => "Escape ⎋",
+            "Tab" => "Tab ⇥",
+            "F1" => "F1",
+            "F2" => "F2",
+            "F3" => "F3",
+            "F4" => "F4",
+            "F5" => "F5",
+            "F6" => "F6",
+            "F7" => "F7",
+            "F8" => "F8",
+            "F9" => "F9",
+            "F10" => "F10",
+            "F11" => "F11",
+            "F12" => "F12",
+            "F13" => "F13",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join(" + ")
+}
+
 fn primary_hotkey_display(cfg: &AppConfig) -> String {
-    match cfg.audio.recording_mode.as_str() {
+    let raw = match cfg.audio.recording_mode.as_str() {
         "push-to-talk" if !cfg.hotkeys.push_to_talk.trim().is_empty() => {
             cfg.hotkeys.push_to_talk.clone()
         }
@@ -1666,7 +1777,29 @@ fn primary_hotkey_display(cfg: &AppConfig) -> String {
             cfg.hotkeys.toggle_recording.clone()
         }
         _ if !cfg.hotkeys.push_to_talk.trim().is_empty() => cfg.hotkeys.push_to_talk.clone(),
-        _ => "Unavailable".to_string(),
+        _ => return "未设置".to_string(),
+    };
+    format_hotkey_display(&raw)
+}
+
+fn push_to_talk_hotkey_display(cfg: &AppConfig) -> String {
+    if cfg.hotkeys.push_to_talk.trim().is_empty() {
+        "未设置".to_string()
+    } else {
+        format_hotkey_display(&cfg.hotkeys.push_to_talk)
+    }
+}
+
+pub fn hotkey_settings_help_text() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        return "默认快捷键：右 Command。支持左/右侧修饰键；如果只设置修饰键或 Fn，松开后保存"
+            .to_string();
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        "默认快捷键：右 Alt。点击“重新录制”后直接按键；如果只设置修饰键，松开后保存".to_string()
     }
 }
 
@@ -1733,43 +1866,40 @@ fn human_readable_bytes(bytes: u64) -> String {
     }
 }
 
-fn next_punct_style(current: &str) -> &'static str {
-    match current {
-        "zh" => "en",
-        "en" => "none",
-        "none" => "zh",
-        _ => "zh",
-    }
+fn proxy_mode_index(cfg: &AppConfig) -> i32 {
+    proxy_mode_index_from_value(&cfg.network.proxy_mode)
 }
 
-fn next_append_content(current: &str) -> &'static str {
-    match current {
-        "space" => "newline",
-        "newline" => "none",
-        "none" => "space",
-        _ => "space",
-    }
-}
-
-fn next_github_proxy(current: &str) -> &'static str {
-    github_proxy_value(github_proxy_index_from_value(current) + 1)
-}
-
-fn github_proxy_index(cfg: &AppConfig) -> i32 {
-    github_proxy_index_from_value(&cfg.network.github_proxy)
-}
-
-fn github_proxy_index_from_value(value: &str) -> i32 {
-    GITHUB_PROXY_VALUES
+fn proxy_mode_index_from_value(value: &str) -> i32 {
+    let normalized = network::normalize_proxy_mode(value);
+    PROXY_MODE_VALUES
         .iter()
-        .position(|candidate| candidate == &value.trim())
+        .position(|candidate| candidate == &normalized)
         .map(|index| index as i32)
         .unwrap_or(0)
 }
 
-fn github_proxy_value(index: i32) -> &'static str {
-    let normalized = index.rem_euclid(GITHUB_PROXY_VALUES.len() as i32) as usize;
-    GITHUB_PROXY_VALUES[normalized]
+fn proxy_mode_value(index: i32) -> &'static str {
+    let normalized = index.rem_euclid(PROXY_MODE_VALUES.len() as i32) as usize;
+    PROXY_MODE_VALUES[normalized]
+}
+
+fn proxy_type_index(cfg: &AppConfig) -> i32 {
+    proxy_type_index_from_value(&cfg.network.proxy_type)
+}
+
+fn proxy_type_index_from_value(value: &str) -> i32 {
+    let normalized = network::normalize_proxy_type(value);
+    PROXY_TYPE_VALUES
+        .iter()
+        .position(|candidate| candidate == &normalized)
+        .map(|index| index as i32)
+        .unwrap_or(0)
+}
+
+fn proxy_type_value(index: i32) -> &'static str {
+    let normalized = index.rem_euclid(PROXY_TYPE_VALUES.len() as i32) as usize;
+    PROXY_TYPE_VALUES[normalized]
 }
 
 fn load_history_preview(paths: &AppPaths) -> String {
@@ -1988,15 +2118,6 @@ fn load_hotword_inventory(paths: &AppPaths) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-fn github_proxy_display(cfg: &AppConfig) -> &str {
-    let value = cfg.network.github_proxy.trim();
-    if value.is_empty() {
-        "直连 GitHub"
-    } else {
-        value
-    }
 }
 
 fn compact_path_display(path: std::path::PathBuf) -> String {

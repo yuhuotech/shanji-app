@@ -5,9 +5,13 @@ edition = "2021"
 
 [dependencies]
 global-hotkey = "0.6"
+log = "0.4"
 serde = { version = "1", features = ["derive"] }
 shanji-core = { path = "../shanji-core" }
 tray-icon = "0.21"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 readkey = "0.2.2"
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+device_query = "2.1"

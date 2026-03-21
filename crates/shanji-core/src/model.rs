@@ -1,11 +1,9 @@
 use crate::config;
 use crate::error::{AppError, Result};
+use crate::network;
 use crate::paths::AppPaths;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-
-const GITHUB_PROXY_ENV: &str = "SHANJI_GITHUB_PROXY";
-const DEFAULT_GITHUB_PROXY: &str = "https://ghfast.top/";
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -107,53 +105,11 @@ pub fn default_registry() -> ModelRegistry {
     )
 }
 
-fn github_proxy_prefix_with_paths(paths: Option<&AppPaths>) -> Option<String> {
-    if let Some(paths) = paths {
-        if let Ok(cfg) = config::get_config(paths) {
-            let value = cfg.network.github_proxy.trim();
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
-
-    if let Ok(raw) = std::env::var(GITHUB_PROXY_ENV) {
-        let value = raw.trim();
-        if !value.is_empty() {
-            return Some(value.to_string());
-        }
-    }
-
-    Some(DEFAULT_GITHUB_PROXY.to_string())
-}
-
-fn apply_github_proxy_with_prefix(url: &str, prefix: Option<&str>) -> String {
-    let Some(prefix) = prefix else {
-        return url.to_string();
-    };
-
-    if !is_github_asset_url(url) || url.starts_with(prefix) {
-        return url.to_string();
-    }
-
-    if prefix.contains("{url}") {
-        return prefix.replace("{url}", url);
-    }
-
-    let separator = if prefix.ends_with('/') { "" } else { "/" };
-    format!("{prefix}{separator}{url}")
-}
-
-fn is_github_asset_url(url: &str) -> bool {
-    url.contains("://github.com/") || url.contains("://raw.githubusercontent.com/")
-}
-
 pub fn list_models_with_paths(paths: &AppPaths) -> Result<Vec<ModelInfo>> {
     let mut registry = default_registry();
     apply_download_status_with_paths(paths, &mut registry);
     Ok(registry.models)
 }
-
 
 pub fn get_model_info(model_id: &str) -> Result<ModelInfo> {
     default_registry()
@@ -393,27 +349,6 @@ where
     download_models_with_progress(paths, &ids, progress_fn)
 }
 
-fn build_blocking_client() -> Result<reqwest::blocking::Client> {
-    let mut headers = reqwest::header::HeaderMap::new();
-    headers.insert(
-        reqwest::header::ACCEPT,
-        reqwest::header::HeaderValue::from_static("*/*"),
-    );
-    headers.insert(
-        reqwest::header::ACCEPT_LANGUAGE,
-        reqwest::header::HeaderValue::from_static("zh-CN,zh;q=0.9,en;q=0.8"),
-    );
-    reqwest::blocking::Client::builder()
-        .default_headers(headers)
-        .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent("shanji-app/0.1 (+https://github.com/yuhuotech/shanji)")
-        .http1_only()
-        .connect_timeout(std::time::Duration::from_secs(30))
-        // No overall timeout — we handle read stalls ourselves via recv_timeout
-        .build()
-        .map_err(|e| AppError::Network(format!("Failed to build HTTP client: {}", e)))
-}
-
 fn download_models_with_progress<F>(
     paths: &AppPaths,
     model_ids: &[&str],
@@ -429,10 +364,10 @@ where
     }
     dedupe_model_plan(&mut plan);
 
-    let client = build_blocking_client()?;
+    let network_config = config::get_config(paths).ok().map(|cfg| cfg.network);
+    let client = network::build_download_blocking_client(network_config.as_ref())?;
     let models_dir = paths.models_dir();
     std::fs::create_dir_all(&models_dir)?;
-    let proxy_prefix = github_proxy_prefix_with_paths(Some(paths));
 
     let pending = plan
         .into_iter()
@@ -472,7 +407,6 @@ where
         download_registered_model_files(
             &client,
             model,
-            proxy_prefix.as_deref(),
             &model_dir,
             &mut downloaded_total,
             total,
@@ -491,7 +425,6 @@ where
 fn download_registered_model_files<F>(
     client: &reqwest::blocking::Client,
     model: &ModelInfo,
-    proxy_prefix: Option<&str>,
     model_dir: &Path,
     downloaded_total: &mut u64,
     total: u64,
@@ -509,7 +442,6 @@ where
 
     for artifact in &model.artifacts {
         let direct_url = format!("{}{}", base, artifact.file_name);
-        let file_url = apply_github_proxy_with_prefix(&direct_url, proxy_prefix);
         let dest = model_dir.join(&artifact.file_name);
         let is_complete_existing_file = dest
             .metadata()
@@ -524,35 +456,17 @@ where
 
         eprintln!(
             "[shanji] Downloading {} from {}",
-            artifact.file_name, file_url
+            artifact.file_name, direct_url
         );
-        match download_single_file(
+        download_single_file(
             client,
-            &file_url,
+            &direct_url,
             &dest,
             &artifact.file_name,
             downloaded_total,
             total,
             progress_fn,
-        ) {
-            Ok(()) => {}
-            Err(proxy_error) if file_url != direct_url => {
-                eprintln!(
-                    "[shanji] Proxy download failed for {}, retrying direct: {}",
-                    artifact.file_name, proxy_error
-                );
-                download_single_file(
-                    client,
-                    &direct_url,
-                    &dest,
-                    &artifact.file_name,
-                    downloaded_total,
-                    total,
-                    progress_fn,
-                )?;
-            }
-            Err(error) => return Err(error),
-        }
+        )?;
     }
 
     Ok(())

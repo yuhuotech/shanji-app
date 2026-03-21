@@ -1,5 +1,6 @@
-use crate::config::RewriteConfig;
+use crate::config::{AppConfig, NetworkConfig, RewriteConfig};
 use crate::error::{AppError, Result};
+use crate::network;
 use async_openai::{
     config::OpenAIConfig,
     types::{
@@ -50,12 +51,13 @@ pub struct LlmClient {
 }
 
 impl LlmClient {
-    pub fn new(config: LlmConfig) -> Self {
+    pub fn new(config: LlmConfig, network_config: Option<&NetworkConfig>) -> Result<Self> {
         let openai_config = OpenAIConfig::new()
             .with_api_base(&config.base_url)
             .with_api_key(&config.api_key);
-        let client = Client::with_config(openai_config);
-        Self { client, config }
+        let http_client = network::build_async_client(network_config)?;
+        let client = Client::with_config(openai_config).with_http_client(http_client);
+        Ok(Self { client, config })
     }
 
     /// 同步改写入口，内部起单线程 tokio runtime 执行异步请求。
@@ -181,18 +183,33 @@ pub fn create_client(provider_id: &str, config: &RewriteConfig) -> Result<LlmCli
     let api_key = String::new(); // 内置 provider 无存储 key，走 create_client_from_settings
     let system_prompt = effective_system_prompt(&system_prompt_from_config(config));
 
-    Ok(LlmClient::new(LlmConfig {
-        base_url: provider.base_url,
-        api_key,
-        model: provider.model,
-        system_prompt,
-        max_tokens: 2048,
-        temperature: 0.2,
-    }))
+    LlmClient::new(
+        LlmConfig {
+            base_url: provider.base_url,
+            api_key,
+            model: provider.model,
+            system_prompt,
+            max_tokens: 2048,
+            temperature: 0.2,
+        },
+        None,
+    )
 }
 
 /// 从用户在设置页保存的 provider 配置创建客户端（优先使用用户配置）
 pub fn create_client_from_settings(config: &RewriteConfig) -> Result<LlmClient> {
+    create_client_from_parts(config, None)
+}
+
+/// 从完整应用配置创建客户端，让网络代理等全局设置同时生效。
+pub fn create_client_from_app_config(config: &AppConfig) -> Result<LlmClient> {
+    create_client_from_parts(&config.rewrite, Some(&config.network))
+}
+
+fn create_client_from_parts(
+    config: &RewriteConfig,
+    network_config: Option<&NetworkConfig>,
+) -> Result<LlmClient> {
     // 优先使用用户自定义配置列表
     let provider = if let Some(p) = config.providers.first() {
         p.clone()
@@ -217,14 +234,17 @@ pub fn create_client_from_settings(config: &RewriteConfig) -> Result<LlmClient> 
     let api_key = decrypt_api_key(&provider.api_key_encrypted);
     let system_prompt = effective_system_prompt(&system_prompt_from_config(config));
 
-    Ok(LlmClient::new(LlmConfig {
-        base_url: provider.base_url,
-        api_key,
-        model: provider.model,
-        system_prompt,
-        max_tokens: 2048,
-        temperature: 0.2,
-    }))
+    LlmClient::new(
+        LlmConfig {
+            base_url: provider.base_url,
+            api_key,
+            model: provider.model,
+            system_prompt,
+            max_tokens: 2048,
+            temperature: 0.2,
+        },
+        network_config,
+    )
 }
 
 fn friendly_api_error(raw: &str) -> String {

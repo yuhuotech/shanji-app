@@ -89,6 +89,6 @@ models/paraformer-zh-streaming/
 - 运行时不再依赖 `tokens.txt -> vocab.txt` 的特殊重命名
 - 模型文件名和下载文件名保持一致，由 registry 中的 artifact role 驱动加载
 - `public/model_registry.json` 是当前模型注册表位置
-- 桌面应用内置 GitHub 下载代理配置，默认使用 `https://ghfast.top/`
-- 设置窗口可在 `https://ghfast.top/`、`https://gh-proxy.com/` 和直连 GitHub 之间切换
-- 代理会同时作用于 `model_registry.json` 和 release 资产下载，代理失败时会自动回退直连
+- 桌面应用支持全局网络代理配置，默认使用系统代理
+- 自定义代理支持 `HTTP`、`HTTPS`、`SOCKS5`、`SOCKS5h`
+- 模型下载、LLM 接口等所有网络请求共用同一套代理策略，并可在设置页测试连通性

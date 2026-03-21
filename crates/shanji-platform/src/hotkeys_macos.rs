@@ -12,25 +12,49 @@ pub struct NativeHotkeyRuntime {
     join_handle: Option<thread::JoinHandle<()>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ModifierBinding {
+    LeftCommand,
+    RightCommand,
+    Command,
+    LeftOption,
+    RightOption,
+    Option,
+    LeftCtrl,
+    RightCtrl,
+    Ctrl,
+    LeftShift,
+    RightShift,
+    Shift,
+    Fn,
+}
+
 impl NativeHotkeyRuntime {
     pub fn new(
+        normalized: String,
         action: HotkeyAction,
         trigger: HotkeyTrigger,
         hold_delay_ms: u32,
     ) -> Result<Self, String> {
+        let binding = ModifierBinding::from_normalized(&normalized)
+            .ok_or_else(|| format!("Unsupported macOS native-only shortcut: {}", normalized))?;
         let stop_flag = Arc::new(AtomicBool::new(false));
         let stop_thread = Arc::clone(&stop_flag);
         let hold_delay = Duration::from_millis(u64::from(hold_delay_ms));
 
         let join_handle = thread::Builder::new()
-            .name("shanji-right-command".to_string())
+            .name(binding.thread_name().to_string())
             .spawn(move || {
-                let mut tracker = RightCommandHoldTracker::new(action, trigger, hold_delay);
+                let mut tracker = ModifierHoldTracker::new(action, trigger, hold_delay);
 
                 while !stop_thread.load(Ordering::Relaxed) {
                     let now = Instant::now();
-                    let is_pressed = Keycode::RightCommand.is_pressed();
-                    let has_combo = other_combo_key_pressed();
+                    let is_pressed = binding
+                        .target_keys()
+                        .iter()
+                        .copied()
+                        .any(Keycode::is_pressed);
+                    let has_combo = other_combo_key_pressed(binding.target_keys());
 
                     for event in tracker.update(now, is_pressed, has_combo) {
                         super::push_native_event(event);
@@ -39,7 +63,7 @@ impl NativeHotkeyRuntime {
                     thread::sleep(POLL_INTERVAL);
                 }
             })
-            .map_err(|err| format!("Failed to spawn macOS RightCommand watcher: {}", err))?;
+            .map_err(|err| format!("Failed to spawn macOS {} watcher: {}", binding.label(), err))?;
 
         Ok(Self {
             stop_flag,
@@ -57,8 +81,95 @@ impl Drop for NativeHotkeyRuntime {
     }
 }
 
+impl ModifierBinding {
+    fn from_normalized(normalized: &str) -> Option<Self> {
+        match normalized {
+            "LeftCommand" => Some(Self::LeftCommand),
+            "RightCommand" => Some(Self::RightCommand),
+            "Command" => Some(Self::Command),
+            "LeftOption" => Some(Self::LeftOption),
+            "RightOption" => Some(Self::RightOption),
+            "Option" => Some(Self::Option),
+            "LeftCtrl" => Some(Self::LeftCtrl),
+            "RightCtrl" => Some(Self::RightCtrl),
+            "Ctrl" => Some(Self::Ctrl),
+            "LeftShift" => Some(Self::LeftShift),
+            "RightShift" => Some(Self::RightShift),
+            "Shift" => Some(Self::Shift),
+            "Fn" => Some(Self::Fn),
+            _ => None,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::LeftCommand => "LeftCommand",
+            Self::RightCommand => "RightCommand",
+            Self::Command => "Command",
+            Self::LeftOption => "LeftOption",
+            Self::RightOption => "RightOption",
+            Self::Option => "Option",
+            Self::LeftCtrl => "LeftCtrl",
+            Self::RightCtrl => "RightCtrl",
+            Self::Ctrl => "Ctrl",
+            Self::LeftShift => "LeftShift",
+            Self::RightShift => "RightShift",
+            Self::Shift => "Shift",
+            Self::Fn => "Fn",
+        }
+    }
+
+    fn thread_name(self) -> &'static str {
+        match self {
+            Self::LeftCommand => "shanji-left-command",
+            Self::RightCommand => "shanji-right-command",
+            Self::Command => "shanji-command",
+            Self::LeftOption => "shanji-left-option",
+            Self::RightOption => "shanji-right-option",
+            Self::Option => "shanji-option",
+            Self::LeftCtrl => "shanji-left-control",
+            Self::RightCtrl => "shanji-right-control",
+            Self::Ctrl => "shanji-control",
+            Self::LeftShift => "shanji-left-shift",
+            Self::RightShift => "shanji-right-shift",
+            Self::Shift => "shanji-shift",
+            Self::Fn => "shanji-function",
+        }
+    }
+
+    fn target_keys(self) -> &'static [Keycode] {
+        match self {
+            Self::LeftCommand => LEFT_COMMAND_KEYS,
+            Self::RightCommand => RIGHT_COMMAND_KEYS,
+            Self::Command => COMMAND_KEYS,
+            Self::LeftOption => LEFT_OPTION_KEYS,
+            Self::RightOption => RIGHT_OPTION_KEYS,
+            Self::Option => OPTION_KEYS,
+            Self::LeftCtrl => LEFT_CONTROL_KEYS,
+            Self::RightCtrl => RIGHT_CONTROL_KEYS,
+            Self::Ctrl => CONTROL_KEYS,
+            Self::LeftShift => LEFT_SHIFT_KEYS,
+            Self::RightShift => RIGHT_SHIFT_KEYS,
+            Self::Shift => SHIFT_KEYS,
+            Self::Fn => FN_KEYS,
+        }
+    }
+}
+
+pub fn is_modifier_pressed(normalized: &str) -> bool {
+    ModifierBinding::from_normalized(normalized)
+        .map(|binding| {
+            binding
+                .target_keys()
+                .iter()
+                .copied()
+                .any(Keycode::is_pressed)
+        })
+        .unwrap_or(false)
+}
+
 #[derive(Debug)]
-struct RightCommandHoldTracker {
+struct ModifierHoldTracker {
     action: HotkeyAction,
     trigger: HotkeyTrigger,
     hold_delay: Duration,
@@ -67,7 +178,7 @@ struct RightCommandHoldTracker {
     activated: bool,
 }
 
-impl RightCommandHoldTracker {
+impl ModifierHoldTracker {
     fn new(action: HotkeyAction, trigger: HotkeyTrigger, hold_delay: Duration) -> Self {
         Self {
             action,
@@ -82,12 +193,12 @@ impl RightCommandHoldTracker {
     fn update(
         &mut self,
         now: Instant,
-        is_right_command_pressed: bool,
+        is_modifier_pressed: bool,
         has_combo_key: bool,
     ) -> Vec<PlatformHotkeyEvent> {
         let mut events = Vec::new();
 
-        match (self.pressed_at, is_right_command_pressed) {
+        match (self.pressed_at, is_modifier_pressed) {
             (None, true) => {
                 self.pressed_at = Some(now);
                 self.combo_detected = has_combo_key;
@@ -143,9 +254,31 @@ impl RightCommandHoldTracker {
     }
 }
 
-fn other_combo_key_pressed() -> bool {
-    OTHER_COMBO_KEYS.iter().copied().any(Keycode::is_pressed)
+fn other_combo_key_pressed(target_keys: &[Keycode]) -> bool {
+    OTHER_COMBO_KEYS
+        .iter()
+        .copied()
+        .filter(|key| {
+            !target_keys
+                .iter()
+                .any(|target| std::mem::discriminant(target) == std::mem::discriminant(key))
+        })
+        .any(Keycode::is_pressed)
 }
+
+const LEFT_COMMAND_KEYS: &[Keycode] = &[Keycode::Command];
+const RIGHT_COMMAND_KEYS: &[Keycode] = &[Keycode::RightCommand];
+const COMMAND_KEYS: &[Keycode] = &[Keycode::Command, Keycode::RightCommand];
+const LEFT_OPTION_KEYS: &[Keycode] = &[Keycode::Option];
+const RIGHT_OPTION_KEYS: &[Keycode] = &[Keycode::RightOption];
+const OPTION_KEYS: &[Keycode] = &[Keycode::Option, Keycode::RightOption];
+const LEFT_CONTROL_KEYS: &[Keycode] = &[Keycode::Control];
+const RIGHT_CONTROL_KEYS: &[Keycode] = &[Keycode::RightControl];
+const CONTROL_KEYS: &[Keycode] = &[Keycode::Control, Keycode::RightControl];
+const LEFT_SHIFT_KEYS: &[Keycode] = &[Keycode::Shift];
+const RIGHT_SHIFT_KEYS: &[Keycode] = &[Keycode::RightShift];
+const SHIFT_KEYS: &[Keycode] = &[Keycode::Shift, Keycode::RightShift];
+const FN_KEYS: &[Keycode] = &[Keycode::Function];
 
 const OTHER_COMBO_KEYS: &[Keycode] = &[
     Keycode::Command,
@@ -274,7 +407,7 @@ mod tests {
 
     #[test]
     fn activates_after_hold_delay_and_releases_after_key_up() {
-        let mut tracker = RightCommandHoldTracker::new(
+        let mut tracker = ModifierHoldTracker::new(
             HotkeyAction::PushToTalk,
             HotkeyTrigger::PressAndRelease,
             Duration::from_millis(500),
@@ -307,7 +440,7 @@ mod tests {
 
     #[test]
     fn cancels_activation_when_combo_key_appears_before_delay() {
-        let mut tracker = RightCommandHoldTracker::new(
+        let mut tracker = ModifierHoldTracker::new(
             HotkeyAction::PushToTalk,
             HotkeyTrigger::PressAndRelease,
             Duration::from_millis(500),
@@ -328,7 +461,7 @@ mod tests {
 
     #[test]
     fn ignores_quick_taps_shorter_than_hold_delay() {
-        let mut tracker = RightCommandHoldTracker::new(
+        let mut tracker = ModifierHoldTracker::new(
             HotkeyAction::PushToTalk,
             HotkeyTrigger::PressAndRelease,
             Duration::from_millis(500),

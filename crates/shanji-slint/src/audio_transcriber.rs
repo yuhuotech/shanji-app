@@ -3039,7 +3039,7 @@ fn maybe_rewrite_text(config: &AppConfig, text: &str) -> Option<String> {
         return None;
     }
 
-    match llm::create_client_from_settings(&config.rewrite) {
+    match llm::create_client_from_app_config(config) {
         Ok(client) => {
             state::set_state(AppState::Rewriting);
             state::set_status_message("LLM润色中...");
