@@ -321,7 +321,8 @@ jobs:
             echo "Bundled ORT: $ORT_LIB_NAME"
           fi
 
-          FPM_COMMON=(
+          # 所有 flag 必须在文件映射参数之前
+          FPM_FLAGS=(
             -s dir
             -n shanji
             -v "$VERSION"
@@ -329,9 +330,13 @@ jobs:
             --url "https://github.com/${{ github.repository }}"
             --license "MIT"
             --maintainer "YuHuo"
-            "$STAGING/usr/bin/shanji=/usr/bin/shanji"
-            "${ORT_FPM_ARG[@]}"
           )
+          FPM_FILES=(
+            "$STAGING/usr/bin/shanji=/usr/bin/shanji"
+          )
+          if [ -n "$ORT_LIB" ]; then
+            FPM_FILES+=("$STAGING/usr/lib/$ORT_LIB_NAME=/usr/lib/$ORT_LIB_NAME")
+          fi
 
           # ── tar.gz（通用，解压即用）──────────────────────────────
           DIR_NAME="shanji-app-${VERSION}-linux-x64"
@@ -343,19 +348,21 @@ jobs:
           echo "Created: shanji-app-${VERSION}-linux-x64.tar.gz"
 
           # ── .deb（Debian 12 / Ubuntu 20.04+）────────────────────
-          fpm "${FPM_COMMON[@]}" \
+          fpm "${FPM_FLAGS[@]}" \
             -t deb \
             --architecture amd64 \
             --deb-no-default-config-files \
-            -p "dist/shanji-app-${VERSION}-linux-x64.deb"
+            -p "dist/shanji-app-${VERSION}-linux-x64.deb" \
+            "${FPM_FILES[@]}"
           echo "Created: shanji-app-${VERSION}-linux-x64.deb"
 
           # ── .rpm（RHEL 8/9 / Fedora / CentOS Stream / openSUSE）─
-          fpm "${FPM_COMMON[@]}" \
+          fpm "${FPM_FLAGS[@]}" \
             -t rpm \
             --architecture x86_64 \
             --rpm-os linux \
-            -p "dist/shanji-app-${VERSION}-linux-x64.rpm"
+            -p "dist/shanji-app-${VERSION}-linux-x64.rpm" \
+            "${FPM_FILES[@]}"
           echo "Created: shanji-app-${VERSION}-linux-x64.rpm"
 
       - uses: actions/upload-artifact@v4
