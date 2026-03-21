@@ -2,6 +2,7 @@
 name = "shanji-core"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"

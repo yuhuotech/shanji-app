@@ -160,7 +160,7 @@ jobs:
           set -e
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          DMG_NAME="shanji-${VERSION}-macos-${{ matrix.arch }}.dmg"
+          DMG_NAME="shanji-app-${VERSION}-macos-${{ matrix.arch }}.dmg"
 
           hdiutil create \
             -volname "闪记 ${VERSION}" \
@@ -181,7 +181,7 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          DMG_NAME="shanji-${VERSION}-macos-${{ matrix.arch }}.dmg"
+          DMG_NAME="shanji-app-${VERSION}-macos-${{ matrix.arch }}.dmg"
 
           # 提交公证，等待结果（最长 10 分钟）
           xcrun notarytool submit "dist/${DMG_NAME}" \
@@ -221,7 +221,7 @@ jobs:
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
-          $dirName = "shanji-${version}-windows-x64"
+          $dirName = "shanji-app-${version}-windows-x64"
           $outDir  = "dist\$dirName"
           New-Item -ItemType Directory -Force $outDir | Out-Null
 
@@ -239,17 +239,17 @@ jobs:
 
           # 打包成 ZIP
           Compress-Archive -Path $outDir `
-            -DestinationPath "dist\shanji-${version}-windows-x64.zip"
-          Write-Host "Created: dist\shanji-${version}-windows-x64.zip"
+            -DestinationPath "dist\shanji-app-${version}-windows-x64.zip"
+          Write-Host "Created: dist\shanji-app-${version}-windows-x64.zip"
 
       - uses: actions/upload-artifact@v4
         with:
           name: shanji-windows-x64
           path: dist/*.zip
 
-  # ──────────────────────────────────────────────
-  # Linux x64（Ubuntu 22.04 LTS）
-  # ──────────────────────────────────────────────
+  # ──────────────────────────────────────────────────────────────────
+  # Linux x64：.tar.gz（通用）+ .deb（Debian/Ubuntu）+ .rpm（RHEL系）
+  # ──────────────────────────────────────────────────────────────────
   build-linux:
     runs-on: ubuntu-22.04
     steps:
@@ -285,7 +285,12 @@ jobs:
             libgles2-mesa-dev \
             libwayland-dev \
             libxrandr-dev \
-            libxi-dev
+            libxi-dev \
+            ruby ruby-dev rubygems build-essential \
+            rpm                                        # rpm 工具链（供 fpm 生成 .rpm）
+
+      - name: Install fpm
+        run: sudo gem install --no-document fpm
 
       - name: Build
         run: cargo build --release
@@ -295,30 +300,68 @@ jobs:
           set -e
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
-          DIR_NAME="shanji-${VERSION}-linux-x64"
-          OUT_DIR="dist/${DIR_NAME}"
-          mkdir -p "${OUT_DIR}"
+          STAGING="dist/staging"
+          mkdir -p "$STAGING/usr/bin" "$STAGING/usr/lib" dist
 
           # 复制可执行文件
-          cp "target/release/shanji" "${OUT_DIR}/"
+          cp "target/release/shanji" "$STAGING/usr/bin/shanji"
+          chmod 755 "$STAGING/usr/bin/shanji"
 
-          # 复制 ONNX Runtime .so
+          # 复制 ONNX Runtime .so（如存在）
           ORT_LIB=$(find "target/release/build" \
             -name "libonnxruntime*.so*" 2>/dev/null | head -1)
+          ORT_FPM_ARG=()
           if [ -n "$ORT_LIB" ]; then
-            cp "$ORT_LIB" "${OUT_DIR}/"
-            echo "Bundled ORT: $(basename $ORT_LIB)"
+            ORT_LIB_NAME=$(basename "$ORT_LIB")
+            cp "$ORT_LIB" "$STAGING/usr/lib/$ORT_LIB_NAME"
+            ORT_FPM_ARG=("$STAGING/usr/lib/$ORT_LIB_NAME=/usr/lib/$ORT_LIB_NAME")
+            echo "Bundled ORT: $ORT_LIB_NAME"
           fi
 
-          # 打包成 tar.gz
-          tar -czf "dist/shanji-${VERSION}-linux-x64.tar.gz" \
-            -C "dist" "${DIR_NAME}"
-          echo "Created: dist/shanji-${VERSION}-linux-x64.tar.gz"
+          FPM_COMMON=(
+            -s dir
+            -n shanji
+            -v "$VERSION"
+            --description "AI 语音输入工具 / AI voice input"
+            --url "https://github.com/${{ github.repository }}"
+            --license "MIT"
+            --maintainer "YuHuo"
+            "$STAGING/usr/bin/shanji=/usr/bin/shanji"
+            "${ORT_FPM_ARG[@]}"
+          )
+
+          # ── tar.gz（通用，解压即用）──────────────────────────────
+          DIR_NAME="shanji-app-${VERSION}-linux-x64"
+          TAR_DIR="dist/${DIR_NAME}"
+          mkdir -p "$TAR_DIR"
+          cp "$STAGING/usr/bin/shanji" "$TAR_DIR/"
+          [ -n "$ORT_LIB" ] && cp "$ORT_LIB" "$TAR_DIR/"
+          tar -czf "dist/shanji-app-${VERSION}-linux-x64.tar.gz" -C dist "$DIR_NAME"
+          echo "Created: shanji-app-${VERSION}-linux-x64.tar.gz"
+
+          # ── .deb（Debian 12 / Ubuntu 20.04+）────────────────────
+          fpm "${FPM_COMMON[@]}" \
+            -t deb \
+            --architecture amd64 \
+            --deb-no-default-config-files \
+            -p "dist/shanji-app-${VERSION}-linux-x64.deb"
+          echo "Created: shanji-app-${VERSION}-linux-x64.deb"
+
+          # ── .rpm（RHEL 8/9 / Fedora / CentOS Stream / openSUSE）─
+          fpm "${FPM_COMMON[@]}" \
+            -t rpm \
+            --architecture x86_64 \
+            --rpm-os linux \
+            -p "dist/shanji-app-${VERSION}-linux-x64.rpm"
+          echo "Created: shanji-app-${VERSION}-linux-x64.rpm"
 
       - uses: actions/upload-artifact@v4
         with:
           name: shanji-linux-x64
-          path: dist/*.tar.gz
+          path: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
 
   # ──────────────────────────────────────────────
   # 汇总：创建 GitHub Release 并上传所有产物
@@ -344,3 +387,5 @@ jobs:
             artifacts/**/*.dmg
             artifacts/**/*.zip
             artifacts/**/*.tar.gz
+            artifacts/**/*.deb
+            artifacts/**/*.rpm
