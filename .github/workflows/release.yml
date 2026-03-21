@@ -38,17 +38,17 @@ jobs:
         with:
           key: macos-${{ matrix.target }}
 
-      # 交叉编译 x86_64 时，ort 的 download-binaries 无法自动下载对应架构的库，
-      # 需要手动下载并通过 ONNXRUNTIME_LIB_DIR 指定路径。
-      - name: Download ORT for cross-compilation (x86_64 only)
+      # 交叉编译 x86_64 时，ort 的 download-binaries 不支持非 native 目标，
+      # 用 ORT_DYLIB_PATH 直接指向 universal2 dylib，ort-sys 会跳过所有探测逻辑。
+      # universal2 同时包含 arm64 + x86_64 两个架构切片，两种构建均可使用。
+      - name: Download ORT universal2 for cross-compilation (x86_64 only)
         if: matrix.cross == true
         run: |
           ORT_VERSION="1.19.2"
           curl -fsSL \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-x86_64-${ORT_VERSION}.tgz" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-universal2-${ORT_VERSION}.tgz" \
             | tar xz -C "$RUNNER_TEMP"
-          echo "ONNXRUNTIME_LIB_DIR=$RUNNER_TEMP/onnxruntime-osx-x86_64-${ORT_VERSION}/lib" >> "$GITHUB_ENV"
-          echo "ORT_STRATEGY=system" >> "$GITHUB_ENV"
+          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime-osx-universal2-${ORT_VERSION}/lib/libonnxruntime.dylib" >> "$GITHUB_ENV"
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
@@ -209,7 +209,7 @@ jobs:
             --password "$APPLE_ID_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait \
-            --timeout 600
+            --timeout 1800
 
           # 将公证票据 staple 到 DMG，让离线环境也能验证
           xcrun stapler staple "dist/${DMG_NAME}"
@@ -271,7 +271,7 @@ jobs:
   # Linux x64：.tar.gz（通用）+ .deb（Debian/Ubuntu）+ .rpm（RHEL系）
   # ──────────────────────────────────────────────────────────────────
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -286,7 +286,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
-            libasound2-dev \
+            libasound2-dev libasound2t64-dev \
             libssl-dev \
             libgtk-3-dev \
             libxdo-dev \
