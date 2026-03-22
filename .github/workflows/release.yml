@@ -101,6 +101,7 @@ jobs:
 
       - name: Sign .app bundle
         run: |
+          set -e
           # 写入 entitlements 文件
           ENTITLEMENTS="$RUNNER_TEMP/entitlements.plist"
           cat > "$ENTITLEMENTS" << 'ENTEOF'
@@ -116,19 +117,26 @@ jobs:
           </dict></plist>
           ENTEOF
 
-          # 先签 Frameworks 内的动态库，再签整个 .app
+          plutil -lint "$ENTITLEMENTS"
+
+          APP_BUNDLE="target/${{ matrix.target }}/release/bundle/osx/闪记.app"
+
+          # 先签 Frameworks 内的动态库，再签整个 .app。
+          # 不使用 --deep，避免主可执行文件拿到无效 entitlements blob。
           find "target/${{ matrix.target }}/release/bundle/osx/闪记.app/Contents/Frameworks" -name "*.dylib" | while read lib; do
-            codesign --force --options runtime \
+            codesign --force --timestamp --options runtime \
               --sign "$SIGNING_IDENTITY" \
               "$lib"
           done
 
-          codesign --force --deep --options runtime \
+          codesign --force --timestamp --options runtime \
             --entitlements "$ENTITLEMENTS" \
             --sign "$SIGNING_IDENTITY" \
-            "target/${{ matrix.target }}/release/bundle/osx/闪记.app"
+            "$APP_BUNDLE"
 
-          codesign --verify --deep --strict "target/${{ matrix.target }}/release/bundle/osx/闪记.app"
+          codesign --verify --strict --verbose=4 "$APP_BUNDLE"
+          codesign -d --entitlements - "$APP_BUNDLE"
+          spctl -a -vvv "$APP_BUNDLE"
           echo "✓ Code signing OK"
 
       - name: Create DMG and sign it
@@ -153,6 +161,7 @@ jobs:
             "dist/${DMG_NAME}"
 
           codesign --force \
+            --timestamp \
             --sign "$SIGNING_IDENTITY" \
             "dist/${DMG_NAME}"
           echo "✓ Created and signed dist/${DMG_NAME}"
