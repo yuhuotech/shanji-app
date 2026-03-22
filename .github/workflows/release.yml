@@ -142,6 +142,7 @@ jobs:
 
           rm -rf "$DMG_ROOT"
           mkdir -p "$DMG_ROOT"
+          mkdir -p dist
           ditto "$APP_BUNDLE" "$DMG_ROOT/闪记.app"
           ln -s /Applications "$DMG_ROOT/Applications"
 
