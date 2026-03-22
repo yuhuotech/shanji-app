@@ -969,7 +969,7 @@ fn install_history_playback_listener(app: slint::Weak<AppWindow>) {
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
-    shanji_core::ort_runtime::init_onnx_runtime()?;
+    log::info!("startup: begin UI initialization");
     let app = AppWindow::new()?;
     let overlay = OverlayWindow::new()?;
     let platform_runtime = std::rc::Rc::new(std::cell::RefCell::new(

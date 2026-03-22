@@ -2,8 +2,15 @@ use crate::error::{AppError, Result};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+static ORT_INIT_RESULT: OnceLock<Result<()>> = OnceLock::new();
 
 pub fn init_onnx_runtime() -> Result<()> {
+    if let Some(result) = ORT_INIT_RESULT.get() {
+        return result.clone();
+    }
+
     let dylib_path = locate_onnx_runtime_dylib()?;
     let builder = ort::init_from(&dylib_path).map_err(|err| {
         AppError::Internal(format!(
@@ -11,13 +18,19 @@ pub fn init_onnx_runtime() -> Result<()> {
             err
         ))
     })?;
-    if !builder.commit() {
-        return Err(AppError::Internal(
-            "ONNX Runtime environment was already initialized".to_string(),
-        ));
-    }
-    log::info!("Initialized ONNX Runtime from {}", dylib_path.display());
-    Ok(())
+    let result = if !builder.commit() {
+        log::info!("ONNX Runtime already initialized");
+        Ok(())
+    } else {
+        log::info!("Initialized ONNX Runtime from {}", dylib_path.display());
+        Ok(())
+    };
+
+    let _ = ORT_INIT_RESULT.set(result);
+    ORT_INIT_RESULT
+        .get()
+        .cloned()
+        .unwrap_or_else(|| Err(AppError::Internal("Failed to cache ORT init result".to_string())))
 }
 
 fn locate_onnx_runtime_dylib() -> Result<PathBuf> {

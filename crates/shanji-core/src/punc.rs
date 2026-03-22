@@ -27,6 +27,7 @@ struct PuncConfig {
 
 impl CtPuncModel {
     pub fn new(model_dir: &Path) -> Result<Self> {
+        crate::ort_runtime::init_onnx_runtime()?;
         let model_path = model_dir.join("model.onnx");
         let tokens_path = model_dir.join("tokens.txt");
         let json_path = model_dir.join("punc.json");

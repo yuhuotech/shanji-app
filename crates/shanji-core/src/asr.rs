@@ -92,6 +92,7 @@ impl AsrEngine {
     }
 
     pub fn load_model(&mut self, layout: &ResolvedModelLayout) -> Result<()> {
+        crate::ort_runtime::init_onnx_runtime()?;
         let runtime_config = ModelRuntimeConfig::from_layout(layout);
         let backend = match layout.backend {
             ModelBackend::Whole => {

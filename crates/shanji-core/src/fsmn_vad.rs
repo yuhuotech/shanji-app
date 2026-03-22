@@ -168,6 +168,7 @@ impl Default for VadConfig {
 
 impl FsmnVadSegmenter {
     pub fn new(model_dir: &Path) -> Result<Self> {
+        crate::ort_runtime::init_onnx_runtime()?;
         let config_path = model_dir.join("config.yaml");
         let model_path = model_dir.join("model_quant.onnx");
         let mvn_path = model_dir.join("am.mvn");

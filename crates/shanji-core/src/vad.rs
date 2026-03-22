@@ -81,6 +81,7 @@ impl VadDetector {
         min_speech_frames: u32,
         silence_timeout_ms: u32,
     ) -> Result<Self> {
+        crate::ort_runtime::init_onnx_runtime()?;
         let session = Session::builder()
             .map_err(|e| AppError::Asr(format!("VAD session builder failed: {}", e)))?
             .commit_from_file(model_path)
