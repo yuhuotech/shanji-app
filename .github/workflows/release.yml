@@ -21,9 +21,11 @@ jobs:
           - runner: macos-latest      # Apple Silicon aarch64（原生编译）
             arch: aarch64
             target: aarch64-apple-darwin
+            ort_suffix: arm64
           - runner: macos-15-intel    # Intel x86_64（原生编译）
             arch: x86_64
             target: x86_64-apple-darwin
+            ort_suffix: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -41,9 +43,9 @@ jobs:
           set -e
           ORT_VERSION="1.23.2"
           curl -fsSL \
-            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-universal2-${ORT_VERSION}.tgz" \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-${{ matrix.ort_suffix }}-${ORT_VERSION}.tgz" \
             | tar xz -C "$RUNNER_TEMP"
-          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime-osx-universal2-${ORT_VERSION}/lib/libonnxruntime.${ORT_VERSION}.dylib" >> "$GITHUB_ENV"
+          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime-osx-${{ matrix.ort_suffix }}-${ORT_VERSION}/lib/libonnxruntime.${ORT_VERSION}.dylib" >> "$GITHUB_ENV"
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
