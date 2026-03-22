@@ -6,7 +6,10 @@ use std::path::{Path, PathBuf};
 pub fn init_onnx_runtime() -> Result<()> {
     let dylib_path = locate_onnx_runtime_dylib()?;
     let builder = ort::init_from(&dylib_path).map_err(|err| {
-        AppError::Internal(format!("Failed to create ONNX Runtime environment: {}", err))
+        AppError::Internal(format!(
+            "Failed to create ONNX Runtime environment: {}",
+            err
+        ))
     })?;
     if !builder.commit() {
         return Err(AppError::Internal(
@@ -25,8 +28,9 @@ fn locate_onnx_runtime_dylib() -> Result<PathBuf> {
         }
     }
 
-    let exe = env::current_exe()
-        .map_err(|err| AppError::Internal(format!("Failed to resolve current executable: {}", err)))?;
+    let exe = env::current_exe().map_err(|err| {
+        AppError::Internal(format!("Failed to resolve current executable: {}", err))
+    })?;
 
     for ancestor in exe.ancestors() {
         for candidate in candidate_paths(ancestor) {

@@ -598,7 +598,6 @@ impl AppConfig {
                 let normalized = self.hotkeys.push_to_talk.trim().to_ascii_lowercase();
                 if matches!(normalized.as_str(), "alt+r" | "option") {
                     self.hotkeys.push_to_talk = HotkeyConfig::default().push_to_talk;
-                    modified = true;
                 }
             }
 

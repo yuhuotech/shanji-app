@@ -96,6 +96,7 @@ fn resolve_macos_system_proxy() -> Result<Option<SystemProxySettings>> {
 }
 
 #[cfg(not(target_os = "macos"))]
+#[allow(dead_code)]
 fn resolve_macos_system_proxy() -> Result<Option<SystemProxySettings>> {
     Ok(None)
 }
@@ -156,6 +157,7 @@ fn resolve_windows_system_proxy() -> Result<Option<SystemProxySettings>> {
     Ok(None)
 }
 
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 fn parse_macos_scutil_proxy_output(output: &str) -> Result<Option<SystemProxySettings>> {
     let mut config = SystemProxySettings {
         source: "macos_scutil",
@@ -376,6 +378,7 @@ fn parse_proxy_address(scheme: &str, address: &str) -> Result<Url> {
         .map_err(|e| AppError::Network(format!("系统代理地址格式无效: {with_scheme} ({e})")))
 }
 
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 fn find_scutil_value<'a>(output: &'a str, key: &str) -> Option<&'a str> {
     output.lines().find_map(|line| {
         let trimmed = line.trim();
@@ -384,6 +387,7 @@ fn find_scutil_value<'a>(output: &'a str, key: &str) -> Option<&'a str> {
     })
 }
 
+#[cfg_attr(not(any(test, target_os = "macos")), allow(dead_code))]
 fn split_key_value(line: &str) -> Option<(&str, &str)> {
     let (key, value) = line.split_once(':')?;
     Some((key.trim(), value.trim()))
