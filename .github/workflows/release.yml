@@ -159,10 +159,16 @@ jobs:
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
           DMG_NAME="shanji-app-${VERSION}-macos-${{ matrix.arch }}.dmg"
+          DMG_ROOT="$RUNNER_TEMP/dmg-root"
+
+          rm -rf "$DMG_ROOT"
+          mkdir -p "$DMG_ROOT"
+          ditto "dist/Shanji.app" "$DMG_ROOT/Shanji.app"
+          ln -s /Applications "$DMG_ROOT/Applications"
 
           hdiutil create \
             -volname "闪记 ${VERSION}" \
-            -srcfolder "dist/Shanji.app" \
+            -srcfolder "$DMG_ROOT" \
             -ov -format UDZO \
             "dist/${DMG_NAME}"
 
