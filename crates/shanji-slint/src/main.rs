@@ -41,8 +41,39 @@ fn init_logging() {
     let env = env_logger::Env::default().default_filter_or("info,ort=warn,reqwest=warn");
     let mut builder = env_logger::Builder::from_env(env);
     builder.format_timestamp_millis();
+    if let Some(log_file) = open_log_file() {
+        builder.target(env_logger::Target::Pipe(Box::new(log_file)));
+    }
     let _ = builder.try_init();
 }
+
+fn open_log_file() -> Option<std::fs::File> {
+    let log_dir = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)?
+        .join("Library/Logs/Shanji");
+    std::fs::create_dir_all(&log_dir).ok()?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_dir.join("shanji.log"))
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn show_startup_error_dialog(message: &str) {
+    let escaped = message.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!(
+        "display alert \"闪记启动失败\" message \"{}\" as critical",
+        escaped
+    );
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .status();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn show_startup_error_dialog(_message: &str) {}
 
 #[cfg(target_os = "macos")]
 fn set_dock_icon() {
@@ -936,7 +967,7 @@ fn install_history_playback_listener(app: slint::Weak<AppWindow>) {
     });
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
     shanji_core::ort_runtime::init_onnx_runtime()?;
     let app = AppWindow::new()?;
@@ -1384,6 +1415,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     Ok(slint::run_event_loop_until_quit()?)
+}
+
+fn main() {
+    if let Err(err) = run() {
+        let message = err.to_string();
+        log::error!("startup failed: {}", message);
+        show_startup_error_dialog(&message);
+        eprintln!("startup failed: {}", message);
+        std::process::exit(1);
+    }
 }
 
 fn handle_platform_hotkey_event(
