@@ -38,6 +38,9 @@ jobs:
         with:
           key: macos-${{ matrix.target }}
 
+      - name: Install cargo-bundle
+        run: cargo install cargo-bundle --locked
+
       - name: Download ORT 1.23.2 for packaging
         run: |
           set -e
@@ -84,42 +87,17 @@ jobs:
           set -e
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
+          CARGO_BUNDLE_SKIP_BUILD=1 cargo bundle -p shanji-app -f osx --release -t ${{ matrix.target }}
+          APP_BUNDLE="target/${{ matrix.target }}/release/bundle/osx/闪记.app"
 
-          APP_CONTENTS="dist/Shanji.app/Contents"
-          mkdir -p "${APP_CONTENTS}/MacOS"
-          mkdir -p "${APP_CONTENTS}/Frameworks"
-          mkdir -p "${APP_CONTENTS}/Resources"
-
-          # 复制可执行文件
-          cp "target/${{ matrix.target }}/release/shanji" "${APP_CONTENTS}/MacOS/shanji"
+          # cargo-bundle 负责标准 bundle 结构和图标，这里只补 release 版本号
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "${APP_BUNDLE}/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${VERSION}" "${APP_BUNDLE}/Contents/Info.plist"
 
           # 复制 ONNX Runtime 动态库（load-dynamic 运行时加载）
+          mkdir -p "${APP_BUNDLE}/Contents/Frameworks"
           ORT_FILENAME=$(basename "$ORT_DYLIB_PATH")
-          cp "$ORT_DYLIB_PATH" "${APP_CONTENTS}/Frameworks/${ORT_FILENAME}"
-
-          # 写入 Info.plist
-          cat > "${APP_CONTENTS}/Info.plist" <<PLIST
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-            "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>CFBundleExecutable</key>       <string>shanji</string>
-            <key>CFBundleIdentifier</key>       <string>com.yuhuo.shanjiapp</string>
-            <key>CFBundleName</key>             <string>闪记</string>
-            <key>CFBundleDisplayName</key>      <string>闪记</string>
-            <key>CFBundleVersion</key>          <string>${VERSION}</string>
-            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-            <key>CFBundlePackageType</key>      <string>APPL</string>
-            <key>NSMicrophoneUsageDescription</key>
-              <string>闪记需要麦克风权限进行语音识别</string>
-            <key>NSAccessibilityUsageDescription</key>
-              <string>闪记需要辅助功能权限以模拟键盘输入</string>
-            <key>NSHighResolutionCapable</key>  <true/>
-            <key>LSMinimumSystemVersion</key>   <string>11.0</string>
-          </dict>
-          </plist>
-          PLIST
+          cp "$ORT_DYLIB_PATH" "${APP_BUNDLE}/Contents/Frameworks/${ORT_FILENAME}"
 
       - name: Sign .app bundle
         run: |
@@ -139,7 +117,7 @@ jobs:
           ENTEOF
 
           # 先签 Frameworks 内的动态库，再签整个 .app
-          find "dist/Shanji.app/Contents/Frameworks" -name "*.dylib" | while read lib; do
+          find "target/${{ matrix.target }}/release/bundle/osx/闪记.app/Contents/Frameworks" -name "*.dylib" | while read lib; do
             codesign --force --options runtime \
               --sign "$SIGNING_IDENTITY" \
               "$lib"
@@ -148,9 +126,9 @@ jobs:
           codesign --force --deep --options runtime \
             --entitlements "$ENTITLEMENTS" \
             --sign "$SIGNING_IDENTITY" \
-            "dist/Shanji.app"
+            "target/${{ matrix.target }}/release/bundle/osx/闪记.app"
 
-          codesign --verify --deep --strict "dist/Shanji.app"
+          codesign --verify --deep --strict "target/${{ matrix.target }}/release/bundle/osx/闪记.app"
           echo "✓ Code signing OK"
 
       - name: Create DMG and sign it
@@ -160,10 +138,11 @@ jobs:
           VERSION="${VERSION#v}"
           DMG_NAME="shanji-app-${VERSION}-macos-${{ matrix.arch }}.dmg"
           DMG_ROOT="$RUNNER_TEMP/dmg-root"
+          APP_BUNDLE="target/${{ matrix.target }}/release/bundle/osx/闪记.app"
 
           rm -rf "$DMG_ROOT"
           mkdir -p "$DMG_ROOT"
-          ditto "dist/Shanji.app" "$DMG_ROOT/Shanji.app"
+          ditto "$APP_BUNDLE" "$DMG_ROOT/闪记.app"
           ln -s /Applications "$DMG_ROOT/Applications"
 
           hdiutil create \
