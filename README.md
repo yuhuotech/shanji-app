@@ -70,34 +70,29 @@
 
 ## 快速开始
 
+> 本节面向开发者和贡献者。如果你是普通用户，直接从 [Releases](https://github.com/yuhuotech/shanji-app/releases) 下载对应平台的安装包即可，无需安装 Rust 或手动下载模型，应用内可一键完成模型下载。
+
 ### 1. 准备环境
 
 - 安装 Rust stable
-- 安装 Python 3
 - 确保系统可以访问麦克风和输入模拟相关权限
 
 ### 2. 获取源码
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/yuhuotech/shanji-app.git
 cd shanji-app
 ```
 
-### 3. 下载模型
-
-闪记依赖本地语音识别模型，首次运行前建议先下载：
-
-```bash
-python scripts/download_models.py
-```
-
-### 4. 启动应用
+### 3. 启动应用
 
 ```bash
 cargo run -p shanji-app
 ```
 
-### 5. 生产构建
+首次启动后，在应用设置页面可以下载所需的语音识别模型。
+
+### 4. 生产构建
 
 ```bash
 cargo build -p shanji-app --release
@@ -198,7 +193,7 @@ shanji-app/
 
 ### 1. 为什么启动后没有识别结果？
 
-- 确认已经下载模型
+- 确认已在设置页面下载并加载了语音识别模型
 - 确认麦克风权限已授予
 - 确认当前选择的音频设备正确
 - 确认快捷键没有和其他应用冲突
@@ -222,8 +217,8 @@ shanji-app/
 
 ### 5. 这个项目有没有发布版？
 
-- 当前仓库以源码构建为主
-- 如果你要打包或下载模型发布，建议参考 [scripts/README.md](./scripts/README.md)
+- 有，普通用户直接从 [Releases](https://github.com/yuhuotech/shanji-app/releases) 下载安装即可
+- 开发者如需自行打包或导出模型，参考 [scripts/README.md](./scripts/README.md)
 
 ## 许可证
 
