@@ -9,6 +9,7 @@ pub mod hotwords;
 pub mod llm;
 pub mod model;
 pub mod network;
+pub mod ort_runtime;
 pub mod offline_transcribe;
 pub mod output;
 pub mod paths;

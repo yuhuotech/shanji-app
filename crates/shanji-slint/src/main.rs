@@ -936,8 +936,9 @@ fn install_history_playback_listener(app: slint::Weak<AppWindow>) {
     });
 }
 
-fn main() -> Result<(), slint::PlatformError> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     init_logging();
+    shanji_core::ort_runtime::init_onnx_runtime()?;
     let app = AppWindow::new()?;
     let overlay = OverlayWindow::new()?;
     let platform_runtime = std::rc::Rc::new(std::cell::RefCell::new(
@@ -1382,7 +1383,7 @@ fn main() -> Result<(), slint::PlatformError> {
         || set_dock_icon(),
     );
 
-    slint::run_event_loop_until_quit()
+    Ok(slint::run_event_loop_until_quit()?)
 }
 
 fn handle_platform_hotkey_event(

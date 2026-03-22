@@ -36,6 +36,15 @@ jobs:
         with:
           key: macos-${{ matrix.target }}
 
+      - name: Download ORT 1.23.2 for packaging
+        run: |
+          set -e
+          ORT_VERSION="1.23.2"
+          curl -fsSL \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-osx-universal2-${ORT_VERSION}.tgz" \
+            | tar xz -C "$RUNNER_TEMP"
+          echo "ORT_DYLIB_PATH=$RUNNER_TEMP/onnxruntime-osx-universal2-${ORT_VERSION}/lib/libonnxruntime.${ORT_VERSION}.dylib" >> "$GITHUB_ENV"
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
@@ -82,28 +91,9 @@ jobs:
           # 复制可执行文件
           cp "target/${{ matrix.target }}/release/shanji" "${APP_CONTENTS}/MacOS/shanji"
 
-          # 查找并捆绑 ONNX Runtime 动态库
-          ORT_LIB=$(find "target/${{ matrix.target }}/release/build" \
-            -name "libonnxruntime*.dylib" 2>/dev/null \
-            | grep -v "\.dSYM" | head -1)
-          if [ -n "$ORT_LIB" ]; then
-            ORT_FILENAME=$(basename "$ORT_LIB")
-            cp "$ORT_LIB" "${APP_CONTENTS}/Frameworks/${ORT_FILENAME}"
-            # 更新库自身的 install name
-            install_name_tool -id \
-              "@executable_path/../Frameworks/${ORT_FILENAME}" \
-              "${APP_CONTENTS}/Frameworks/${ORT_FILENAME}"
-            # 更新二进制引用（@rpath 或绝对路径两种情况都处理）
-            OLD_ID=$(otool -D "${APP_CONTENTS}/Frameworks/${ORT_FILENAME}" | tail -1)
-            install_name_tool -change \
-              "${OLD_ID}" \
-              "@executable_path/../Frameworks/${ORT_FILENAME}" \
-              "${APP_CONTENTS}/MacOS/shanji" 2>/dev/null || true
-            install_name_tool -change \
-              "@rpath/${ORT_FILENAME}" \
-              "@executable_path/../Frameworks/${ORT_FILENAME}" \
-              "${APP_CONTENTS}/MacOS/shanji" 2>/dev/null || true
-          fi
+          # 复制 ONNX Runtime 动态库（load-dynamic 运行时加载）
+          ORT_FILENAME=$(basename "$ORT_DYLIB_PATH")
+          cp "$ORT_DYLIB_PATH" "${APP_CONTENTS}/Frameworks/${ORT_FILENAME}"
 
           # 写入 Info.plist
           cat > "${APP_CONTENTS}/Info.plist" <<PLIST
