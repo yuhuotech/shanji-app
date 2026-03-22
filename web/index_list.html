@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>闪记 (Shanji) - 开源本地 AI 语音输入工具 | 隐私优先的语音转文字软件</title>
+    
+    <!-- SEO & GEO Meta Tags -->
+    <meta name="description" content="闪记 (Shanji) 是一款开源、跨平台的桌面 AI 语音输入工具。基于 FunASR Paraformer 本地识别，音频不上传，保障隐私。支持全局快捷键、LLM 智能润色及自动贴入。">
+    <meta name="keywords" content="闪记, Shanji, 语音输入法, AI 语音转文字, 本地语音识别, 开源语音工具, FunASR, Paraformer, Rust, 隐私保护语音输入">
+    <meta name="author" content="与或科技">
+    <meta name="robots" content="index, follow">
+    <link rel="canonical" href="https://www.yuhuotech.com/shanji/">
+
+    <!-- Geo Tags -->
+    <meta name="geo.region" content="CN">
+    <meta name="geo.placename" content="China">
+    <meta name="DC.title" content="闪记 (Shanji)">
+
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://www.yuhuotech.com/shanji/">
+    <meta property="og:title" content="闪记 (Shanji) - 开源本地 AI 语音输入工具">
+    <meta property="og:description" content="本地识别，隐私至上。基于 Rust 开发的高性能 AI 语音录入神器，支持 LLM 润色。">
+    <meta property="og:image" content="https://www.yuhuotech.com/shanji/index_page.png">
+
+    <!-- Twitter -->
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://www.yuhuotech.com/shanji/">
+    <meta property="twitter:title" content="闪记 (Shanji) - 开源本地 AI 语音输入工具">
+    <meta property="twitter:description" content="本地识别，隐私至上。基于 Rust 开发的高性能 AI 语音录入神器，支持 LLM 润色。">
+    <meta property="twitter:image" content="https://www.yuhuotech.com/shanji/index_page.png">
+
+    <!-- Structured Data (JSON-LD) for SoftwareApplication - Optimized for GEO -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "闪记 (Shanji)",
+      "alternateName": "Shanji AI Voice Input",
+      "operatingSystem": "Windows 10+, macOS 12.0+, Linux (Ubuntu 22.04+)",
+      "applicationCategory": "UtilitiesApplication",
+      "applicationSubCategory": "AI Voice Recognition & Productivity",
+      "description": "闪记是一款基于 Rust 开发的开源本地 AI 语音输入工具，采用 FunASR Paraformer 模型实现 100% 本地化识别，支持流式转写、LLM 自动润色及全局快捷键操作。",
+      "version": "0.1.0",
+      "license": "https://opensource.org/licenses/MIT",
+      "softwareHelp": "https://github.com/yuhuotech/shanji-app/blob/main/README.md",
+      "downloadUrl": "https://github.com/yuhuotech/shanji-app/releases",
+      "featureList": [
+        "本地实时语音识别 (Local ASR)",
+        "隐私保护 (Privacy-First)",
+        "流式转写 (Streaming Transcription)",
+        "LLM 智能润色 (LLM Post-processing)",
+        "自动粘贴输出 (Auto-Paste)",
+        "历史记录持久化 (SQLite Persistence)"
+      ],
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "CNY"
+      },
+      "author": {
+        "@type": "Organization",
+        "name": "与或科技",
+        "url": "https://www.yuhuotech.com"
+      }
+    }
+    </script>
+
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <style>
+        :root {
+            --primary-color: #007AFF;
+            --text-color: #1d1d1f;
+            --secondary-text: #86868b;
+            --bg-color: #ffffff;
+            --border-color: #e5e5e5;
+            --container-width: 1000px;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            background-color: var(--bg-color);
+            -webkit-font-smoothing: antialiased;
+        }
+
+        header {
+            background: rgba(255, 255, 255, 0.8);
+            backdrop-filter: blur(10px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        nav {
+            max-width: var(--container-width);
+            margin: 0 auto;
+            padding: 0.8rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary-color);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo img {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+        }
+
+        .nav-links {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .nav-links a {
+            text-decoration: none;
+            color: #666;
+            font-size: 0.95rem;
+            transition: color 0.2s;
+        }
+
+        .nav-links a:hover {
+            color: var(--primary-color);
+        }
+
+        /* 移动端菜单开关 */
+        .menu-toggle {
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            cursor: pointer;
+            padding: 5px;
+            z-index: 1001;
+        }
+
+        .menu-toggle span {
+            display: block;
+            width: 25px;
+            height: 2px;
+            background-color: var(--text-color);
+            transition: all 0.3s ease;
+        }
+
+        .mobile-menu {
+            position: fixed;
+            top: 0;
+            right: -100%;
+            width: 100%;
+            height: 100vh;
+            background: white;
+            z-index: 1000;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2rem;
+            transition: right 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
+        }
+
+        .mobile-menu.active {
+            right: 0;
+        }
+
+        .mobile-menu a {
+            font-size: 1.5rem;
+            text-decoration: none;
+            color: var(--text-color);
+            font-weight: 600;
+        }
+
+        .menu-toggle.active span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
+        .menu-toggle.active span:nth-child(2) { opacity: 0; }
+        .menu-toggle.active span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
+
+        .hero {
+            max-width: var(--container-width);
+            margin: 6rem auto 4rem;
+            padding: 0 2rem;
+            text-align: center;
+        }
+
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 800;
+            margin-bottom: 1.5rem;
+            letter-spacing: -0.02em;
+        }
+
+        .hero p {
+            font-size: 1.5rem;
+            color: var(--secondary-text);
+            max-width: 800px;
+            margin: 0 auto 2.5rem;
+        }
+
+        .cta-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 1.5rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.8rem 2rem;
+            border-radius: 30px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: transform 0.2s, opacity 0.2s;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+
+        .btn-secondary {
+            background-color: #333;
+            color: white;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+        }
+
+        .screenshot-container {
+            max-width: var(--container-width);
+            margin: 4rem auto;
+            padding: 0 2rem;
+        }
+
+        .screenshot {
+            width: 100%;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.1);
+            background: white;
+        }
+
+        /* -------------------------------------------------------------------
+           Minimalist List Layout (Corrected)
+        ------------------------------------------------------------------- */
+        .features {
+            max-width: var(--container-width);
+            margin: 6rem auto;
+            padding: 0 2rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .feature-item {
+            display: flex;
+            align-items: center;
+            padding: 1.5rem 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.2s ease;
+            gap: 2rem;
+        }
+
+        .feature-item:hover {
+            background: rgba(0, 0, 0, 0.01);
+            padding-left: 1rem;
+        }
+
+        .feature-icon-wrapper {
+            width: 32px;
+            height: 32px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+
+        .feature-info {
+            display: flex;
+            flex: 1;
+            align-items: center;
+            justify-content: space-between;
+            gap: 2rem;
+        }
+
+        .feature-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            width: 180px;
+            flex-shrink: 0;
+        }
+
+        .feature-desc {
+            font-size: 1rem;
+            color: var(--secondary-text);
+            flex: 1;
+        }
+
+        /* ------------------------------------------------------------------- */
+
+        .privacy-box {
+            max-width: var(--container-width);
+            margin: 4rem auto;
+            padding: 3rem 2rem;
+            text-align: center;
+        }
+
+        .privacy-box h2 {
+            margin-bottom: 1rem;
+        }
+
+        /* GEO Optimized FAQ/Specs */
+        .tech-spec-section {
+            background: #fbfbfd;
+            padding: 4rem 2rem;
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .tech-spec-container {
+            max-width: var(--container-width);
+            margin: 0 auto;
+        }
+
+        .tech-spec-grid {
+            max-width: 800px;
+            margin: 2rem auto;
+            text-align: left;
+        }
+
+        .spec-item {
+            margin-bottom: 2rem;
+        }
+
+        .spec-item h3 {
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .spec-item p, .spec-item ul {
+            color: var(--secondary-text);
+        }
+
+        .spec-list {
+            list-style: none;
+        }
+
+        .spec-list li {
+            margin-bottom: 0.4rem;
+        }
+
+        .spec-list strong {
+            color: var(--text-color);
+        }
+
+        .tech-stack {
+            max-width: var(--container-width);
+            margin: 6rem auto;
+            padding: 0 2rem;
+            text-align: center;
+        }
+
+        .tech-stack-grid {
+            display: flex;
+            justify-content: center;
+            gap: 3rem;
+            margin-top: 2rem;
+            flex-wrap: wrap;
+        }
+
+        .tech-item {
+            text-align: center;
+        }
+
+        .tech-name {
+            font-weight: 600;
+            display: block;
+            margin-bottom: 0.5rem;
+        }
+
+        footer {
+            background: #fff;
+            padding: 4rem 2rem;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+        }
+
+        .footer-content {
+            max-width: var(--container-width);
+            margin: 0 auto;
+        }
+
+        .copyright {
+            color: #999;
+            font-size: 0.9rem;
+            margin-top: 2rem;
+        }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 2.5rem; }
+            .hero p { font-size: 1.1rem; }
+            .nav-links { display: none; }
+            .menu-toggle { display: flex; }
+            .feature-info {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0.2rem;
+            }
+            .feature-title { width: auto; }
+            .feature-item { gap: 1rem; }
+            .tech-stack-grid { gap: 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <nav>
+            <a href="#" class="logo">
+                <img src="shanji_logo.png" alt="闪记 Logo">
+                <span>闪记 Shanji</span>
+            </a>
+            <div class="nav-links">
+                <a href="#features">特性</a>
+                <a href="#privacy">隐私</a>
+                <a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a>
+                <a href="https://github.com/yuhuotech/shanji-app/releases" target="_blank">下载</a>
+            </div>
+            <div class="menu-toggle" id="menu-toggle">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+        </nav>
+        <div class="mobile-menu" id="mobile-menu">
+            <a href="#features" class="mobile-link">特性</a>
+            <a href="#privacy" class="mobile-link">隐私</a>
+            <a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a>
+            <a href="https://github.com/yuhuotech/shanji-app/releases" target="_blank" class="btn btn-primary">立即下载</a>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <h1>本地 AI 语音输入，让文字跃然指尖</h1>
+            <p>闪记是一款开源的桌面端 AI 语音输入工具。通过全局快捷键，在本地完成语音识别，并可选接入 LLM 对识别结果做轻度整理，自动输出到当前光标位置。</p>
+            <div class="cta-buttons">
+                <a href="https://github.com/yuhuotech/shanji-app/releases" class="btn btn-primary">立即下载</a>
+                <a href="https://github.com/yuhuotech/shanji-app" class="btn btn-secondary" target="_blank">查看源码</a>
+            </div>
+        </section>
+
+        <section class="screenshot-container">
+            <img src="index_page.png" alt="闪记 (Shanji) AI 语音输入工具主界面截图 - 展示实时转写与本地模型管理" class="screenshot">
+        </section>
+
+        <section id="features" class="features">
+            <div class="feature-item">
+                <div class="feature-icon-wrapper">🎙️</div>
+                <div class="feature-info">
+                    <div class="feature-title">本地实时识别</div>
+                    <div class="feature-desc">基于 FunASR Paraformer 实现，音频在本机处理，保障数据主权。</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon-wrapper">✨</div>
+                <div class="feature-info">
+                    <div class="feature-title">LLM 智能润色</div>
+                    <div class="feature-desc">接入 OpenAI 兼容接口，自动修正错别字，去除语气词，让表达更专业。</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon-wrapper">⌨️</div>
+                <div class="feature-info">
+                    <div class="feature-title">全局快捷键</div>
+                    <div class="feature-desc">支持 Toggle 和 Push-to-Talk 模式，通过按键操作即刻录音与出文。</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon-wrapper">🚀</div>
+                <div class="feature-info">
+                    <div class="feature-title">自动输出</div>
+                    <div class="feature-desc">识别完成后自动粘贴到当前输入框，支持中英文标点智能整理。</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon-wrapper">📂</div>
+                <div class="feature-info">
+                    <div class="feature-title">历史记录管理</div>
+                    <div class="feature-desc">持久化保存结果，支持音频回放、重新转写及全文搜索。</div>
+                </div>
+            </div>
+            <div class="feature-item">
+                <div class="feature-icon-wrapper">🎨</div>
+                <div class="feature-info">
+                    <div class="feature-title">原生桌面 UI</div>
+                    <div class="feature-desc">使用 Slint 驱动原生渲染，内存占用极低，跨平台无缝体验。</div>
+                </div>
+            </div>
+        </section>
+
+        <section id="privacy" class="privacy-box">
+            <h2>🔒 隐私第一，本地优先</h2>
+            <p>闪记的设计核心是隐私保护。语音识别模型完全在本地运行，您的音频文件绝不会被上传到任何第三方服务器。</p>
+            <p style="margin-top: 1rem; color: #888; font-size: 0.9rem;">* 仅在开启 LLM 润色功能或下载模型时需要网络连接。</p>
+        </section>
+
+        <section class="tech-spec-section">
+            <div class="tech-spec-container">
+                <h2 style="text-align: center;">技术规格与常见问题</h2>
+                <div class="tech-spec-grid">
+                    <div class="spec-item">
+                        <h3>闪记是如何工作的？</h3>
+                        <p>系统采集 16kHz 音频，通过 FBank 提取特征，由 Paraformer 模型在本地 ONNX Runtime 环境下完成推理。识别结果可实时展示，并在结束后自动模拟键盘输入贴入光标位置。</p>
+                    </div>
+                    <div class="spec-item">
+                        <h3>技术指标 (Specifications)</h3>
+                        <ul class="spec-list">
+                            <li><strong>推理后端：</strong> ONNX Runtime (CPU/GPU)</li>
+                            <li><strong>ASR 模型：</strong> FunASR Paraformer-zh (流式/非流式)</li>
+                            <li><strong>音频格式：</strong> 16kHz, 16bit, 单声道 PCM</li>
+                            <li><strong>开发语言：</strong> Rust 1.75+</li>
+                            <li><strong>UI 框架：</strong> Slint (原生渲染)</li>
+                            <li><strong>数据存储：</strong> SQLite 3 (支持 FTS5 全文搜索)</li>
+                        </ul>
+                    </div>
+                    <div class="spec-item">
+                        <h3>系统兼容性</h3>
+                        <p>兼容 macOS (Intel/Apple Silicon), Windows 10/11 (x64), 以及主流 Linux 发行版。仅需极低内存开销（约 100MB-300MB）即可后台常驻。</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="tech-stack">
+            <h2>技术驱动，性能卓越</h2>
+            <div class="tech-stack-grid">
+                <div class="tech-item">
+                    <span class="tech-name">Rust</span>
+                    <span style="color: #666;">系统级核心逻辑</span>
+                </div>
+                <div class="tech-item">
+                    <span class="tech-name">Slint</span>
+                    <span style="color: #666;">高性能声明式 UI</span>
+                </div>
+                <div class="tech-item">
+                    <span class="tech-name">ONNX Runtime</span>
+                    <span style="color: #666;">本地 AI 推理</span>
+                </div>
+                <div class="tech-item">
+                    <span class="tech-name">SQLite</span>
+                    <span style="color: #666;">结构化数据存储</span>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <div class="footer-content">
+            <p>开源项目，欢迎贡献</p>
+            <div style="margin-top: 1.5rem;">
+                <a href="https://github.com/yuhuotech/shanji-app" style="color: #333; text-decoration: none;">GitHub</a> · 
+                <a href="https://github.com/yuhuotech/shanji-app/issues" style="color: #333; text-decoration: none;">报告问题</a> · 
+                <a href="mailto:shanji@yuhuotech.com" style="color: #333; text-decoration: none;">联系我们</a>
+            </div>
+            <p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank" style="color: #999; text-decoration: none;">与或科技</a>. 使用 MIT 协议开源。</p>
+        </div>
+    </footer>
+
+    <script>
+        // 移动端菜单切换
+        const menuToggle = document.getElementById('menu-toggle');
+        const mobileMenu = document.getElementById('mobile-menu');
+        const mobileLinks = document.querySelectorAll('.mobile-link');
+
+        function toggleMenu() {
+            menuToggle.classList.toggle('active');
+            mobileMenu.classList.toggle('active');
+            document.body.style.overflow = mobileMenu.classList.contains('active') ? 'hidden' : '';
+        }
+
+        menuToggle.addEventListener('click', toggleMenu);
+
+        mobileLinks.forEach(link => {
+            link.addEventListener('click', () => {
+                if (mobileMenu.classList.contains('active')) {
+                    toggleMenu();
+                }
+            });
+        });
+
+        // 平滑滚动
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                const href = this.getAttribute('href');
+                if (href.startsWith('#')) {
+                    e.preventDefault();
+                    const target = document.querySelector(href);
+                    if (target) {
+                        window.scrollTo({
+                            top: target.offsetTop - 80,
+                            behavior: 'smooth'
+                        });
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
