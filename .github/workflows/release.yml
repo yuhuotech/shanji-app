@@ -144,17 +144,18 @@ jobs:
           VERSION="${{ github.ref_name }}"
           VERSION="${VERSION#v}"
           DMG_NAME="shanji-app-${VERSION}-macos-${{ matrix.arch }}.dmg"
-          DMG_ROOT="$RUNNER_TEMP/dmg-root"
+          VOL_NAME="闪记 ${VERSION}-${{ matrix.arch }}"
+          DMG_ROOT="$(mktemp -d "$RUNNER_TEMP/dmg-root.XXXXXX")"
           APP_BUNDLE="target/${{ matrix.target }}/release/bundle/osx/闪记.app"
 
-          rm -rf "$DMG_ROOT"
-          mkdir -p "$DMG_ROOT"
           mkdir -p dist
+          rm -f "dist/${DMG_NAME}"
+          hdiutil detach "/Volumes/${VOL_NAME}" -force >/dev/null 2>&1 || true
           ditto "$APP_BUNDLE" "$DMG_ROOT/闪记.app"
           ln -s /Applications "$DMG_ROOT/Applications"
 
           hdiutil create \
-            -volname "闪记 ${VERSION}" \
+            -volname "$VOL_NAME" \
             -srcfolder "$DMG_ROOT" \
             -ov -format UDZO \
             "dist/${DMG_NAME}"
