@@ -186,7 +186,7 @@ jobs:
 
           # 将公证票据 staple 到 DMG，让离线环境也能验证
           xcrun stapler staple "dist/${DMG_NAME}"
-          spctl -a -vvv "dist/${DMG_NAME}"
+          spctl -a -t open --context context:primary-signature -vvv "dist/${DMG_NAME}"
           echo "✓ Notarization and stapling OK"
 
       - uses: actions/upload-artifact@v4
