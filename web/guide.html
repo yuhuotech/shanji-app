@@ -26,8 +26,8 @@
         .doc-layout { max-width: var(--container-width); margin: 0 auto; padding: 3rem 2rem 5rem; display: flex; gap: 3.5rem; align-items: flex-start; }
         .sidebar { width: 200px; flex-shrink: 0; position: sticky; top: 80px; }
         .sidebar-title { font-size: 1rem; font-weight: 700; color: var(--text-color); margin-bottom: 0.8rem; }
-        .sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
-        .sidebar-nav a { font-size: 0.85rem; color: var(--secondary-text); text-decoration: none; padding: 5px 8px 5px 0; border-radius: 7px; transition: all 0.15s; display: block; text-align: left; }
+        .sidebar-nav { display: block; }
+        .sidebar-nav a { display: block; width: 100%; font-size: 0.85rem; color: var(--secondary-text); text-decoration: none; padding: 5px 0; transition: color 0.15s; text-align: left; }
         .sidebar-nav a:hover { color: var(--text-color); }
         .sidebar-nav a.active { color: var(--primary-color); font-weight: 600; }
         .doc-content { flex: 1; min-width: 0; }
@@ -75,7 +75,8 @@
         @media (max-width: 768px) {
             .doc-layout { flex-direction: column; gap: 2rem; }
             .sidebar { width: 100%; position: static; }
-            .sidebar-nav { flex-direction: row; flex-wrap: wrap; }
+            .sidebar-nav { display: flex; flex-wrap: wrap; gap: 4px; }
+            .sidebar-nav a { width: auto; padding: 4px 10px; background: var(--item-hover-bg); border-radius: 6px; }
             .mode-cards { grid-template-columns: 1fr; }
             .nav-links { display: none; }
         }
