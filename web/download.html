@@ -36,6 +36,8 @@
         .os-name { font-size: 1.1rem; font-weight: 700; margin-bottom: 0.4rem; }
         .os-info { font-size: 0.8rem; color: var(--secondary-text); margin-bottom: 1.5rem; text-align: center; height: 2.4rem; }
         .btn-stack { width: 100%; display: flex; flex-direction: column; gap: 0.6rem; }
+        .btn-row { display: flex; gap: 0.6rem; width: 100%; }
+        .btn-row .btn-dl { flex: 1; padding: 0.6rem 0.2rem; font-size: 0.8rem; }
         .btn-dl { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0.6rem; border-radius: 10px; background: var(--primary-color); color: white; text-decoration: none; font-weight: 600; font-size: 0.85rem; transition: 0.2s; }
         .btn-dl:hover { background: var(--primary-hover); }
         .btn-dl.outline { background: transparent; border: 1.5px solid var(--primary-color); color: var(--primary-color); }
@@ -84,8 +86,10 @@
                 <div class="os-name">Linux</div>
                 <div class="os-info">多架构支持<br>.deb / .rpm / .tar.gz</div>
                 <div class="btn-stack">
-                    <a href="#" id="dl-linux-deb" class="btn-dl">.deb</a>
-                    <a href="#" id="dl-linux-rpm" class="btn-dl outline">.rpm</a>
+                    <div class="btn-row">
+                        <a href="#" id="dl-linux-deb" class="btn-dl">.deb</a>
+                        <a href="#" id="dl-linux-rpm" class="btn-dl outline">.rpm</a>
+                    </div>
                     <a href="#" id="dl-linux-tar" class="btn-dl outline">.tar.gz</a>
                 </div>
             </div>
