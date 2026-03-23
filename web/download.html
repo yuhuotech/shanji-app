@@ -29,7 +29,7 @@
         .toggle-group { background: var(--item-hover-bg); border: 1px solid var(--border-color); padding: 4px; border-radius: 12px; display: inline-flex; gap: 4px; }
         .toggle-btn { padding: 8px 20px; border-radius: 9px; border: none; background: transparent; color: var(--secondary-text); font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: all 0.2s; }
         .toggle-btn.active { background: var(--bg-color); color: var(--primary-color); box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
-        .download-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; margin-bottom: 6rem; }
+        .download-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; margin-bottom: 2rem; }
         .os-card { border: 1px solid var(--border-color); border-radius: 20px; padding: 2rem 1.5rem; display: flex; flex-direction: column; align-items: center; transition: all 0.3s ease; background: var(--bg-color); }
         .os-card:hover { border-color: var(--primary-color); transform: translateY(-4px); box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
         .os-icon { width: 40px; height: 40px; margin-bottom: 1.5rem; fill: var(--text-color); }
@@ -42,7 +42,22 @@
         .btn-dl:hover { background: var(--primary-hover); }
         .btn-dl.outline { background: transparent; border: 1.5px solid var(--primary-color); color: var(--primary-color); }
         .btn-dl.outline:hover { background: rgba(0, 122, 255, 0.05); }
-        .source-hint { margin-top: 4rem; padding: 2rem; border-radius: 16px; background: var(--item-hover-bg); border: 1px dashed var(--border-color); font-size: 0.9rem; }
+        .source-hint { padding: 1.5rem 2rem; border-radius: 16px; background: var(--item-hover-bg); border: 1px dashed var(--border-color); font-size: 0.9rem; }
+        .source-hint h4 { margin-bottom: 0.6rem; font-size: 0.95rem; }
+        .source-hint p { margin-top: 0.3rem; color: var(--secondary-text); }
+        .build-section { margin-top: 2rem; margin-bottom: 5rem; }
+        .build-section h2 { font-size: 1.4rem; font-weight: 800; margin-bottom: 0.4rem; }
+        .build-section .build-sub { font-size: 0.9rem; color: var(--secondary-text); margin-bottom: 2rem; }
+        .build-steps { display: flex; flex-direction: column; gap: 1rem; }
+        .build-step { display: flex; gap: 1.2rem; align-items: flex-start; padding: 1.2rem 1.4rem; border: 1px solid var(--border-color); border-radius: 14px; background: var(--bg-color); }
+        .step-num { width: 26px; height: 26px; border-radius: 50%; background: var(--primary-color); color: white; font-size: 0.75rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 1px; }
+        .step-body { flex: 1; }
+        .step-title { font-weight: 600; font-size: 0.95rem; margin-bottom: 0.3rem; }
+        .step-desc { font-size: 0.85rem; color: var(--secondary-text); margin-bottom: 0.6rem; }
+        .step-code { background: var(--frame-bg); color: var(--frame-text); font-family: "SF Mono", "JetBrains Mono", Menlo, monospace; font-size: 0.82rem; padding: 0.7rem 1rem; border-radius: 8px; white-space: pre; overflow-x: auto; line-height: 1.6; }
+        .build-note { margin-top: 1.2rem; padding: 1rem 1.4rem; border-radius: 12px; background: var(--item-hover-bg); border: 1px solid var(--border-color); font-size: 0.85rem; color: var(--secondary-text); }
+        .build-note a { color: var(--primary-color); text-decoration: none; }
+        .build-note a:hover { text-decoration: underline; }
         footer { padding: 1.2rem 2rem; background: var(--frame-bg); color: #ffffff; text-align: center; font-size: 0.8rem; margin-top: 4rem; }
         .footer-links { margin-bottom: 0.5rem; display: flex; justify-content: center; gap: 1.5rem; }
         .footer-links a { color: #ffffff; text-decoration: none; opacity: 0.9; }
@@ -98,6 +113,56 @@
             <h4>💡 下载提示</h4>
             <p>• <strong>架构选择</strong>：Mac 用户请根据芯片类型选择；Linux 提供多种包格式。</p>
             <p>• <strong>自动同步</strong>：本页链接已预渲染为最新版本，由 GitHub Actions 发布时自动更新。</p>
+        </div>
+
+        <div class="build-section">
+            <h2>从源码构建</h2>
+            <p class="build-sub">适合开发者或需要自定义构建的用户，需提前安装 Rust 工具链。</p>
+            <div class="build-steps">
+                <div class="build-step">
+                    <div class="step-num">1</div>
+                    <div class="step-body">
+                        <div class="step-title">安装 Rust</div>
+                        <div class="step-desc">访问 <a href="https://rustup.rs" target="_blank" style="color:var(--primary-color);">rustup.rs</a> 安装 Rust stable 工具链，或直接运行：</div>
+                        <div class="step-code">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</div>
+                    </div>
+                </div>
+                <div class="build-step">
+                    <div class="step-num">2</div>
+                    <div class="step-body">
+                        <div class="step-title">获取源码</div>
+                        <div class="step-desc">克隆仓库到本地：</div>
+                        <div class="step-code">git clone https://github.com/yuhuotech/shanji-app.git
+cd shanji-app</div>
+                    </div>
+                </div>
+                <div class="build-step">
+                    <div class="step-num">3</div>
+                    <div class="step-body">
+                        <div class="step-title">开发模式运行</div>
+                        <div class="step-desc">直接启动应用，首次编译需要一些时间：</div>
+                        <div class="step-code">cargo run -p shanji-app</div>
+                    </div>
+                </div>
+                <div class="build-step">
+                    <div class="step-num">4</div>
+                    <div class="step-body">
+                        <div class="step-title">构建发布版本</div>
+                        <div class="step-desc">编译优化后的发布产物，输出在 <code style="font-family:monospace;font-size:0.85em;">target/release/</code> 目录：</div>
+                        <div class="step-code">cargo build -p shanji-app --release</div>
+                    </div>
+                </div>
+                <div class="build-step">
+                    <div class="step-num">5</div>
+                    <div class="step-body">
+                        <div class="step-title">下载语音识别模型</div>
+                        <div class="step-desc">启动应用后，在设置页面点击「下载模型」即可完成模型初始化，无需手动操作。</div>
+                    </div>
+                </div>
+            </div>
+            <div class="build-note">
+                遇到问题？查看 <a href="https://github.com/yuhuotech/shanji-app/blob/main/README.md" target="_blank">README</a> 或在 <a href="https://github.com/yuhuotech/shanji-app/issues" target="_blank">GitHub Issues</a> 提问。
+            </div>
         </div>
     </main>
     <footer><div class="container"><div class="footer-links"><a href="index.html">官网首页</a><a href="mailto:shanji@yuhuotech.com">联系我们</a></div><p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank" style="color:white;text-decoration:none;">与或科技</a>. MIT Licensed.</p></div></footer>
