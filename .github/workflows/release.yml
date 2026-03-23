@@ -136,7 +136,6 @@ jobs:
 
           codesign --verify --strict --verbose=4 "$APP_BUNDLE"
           codesign -d --entitlements - "$APP_BUNDLE"
-          spctl -a -vvv "$APP_BUNDLE"
           echo "✓ Code signing OK"
 
       - name: Create DMG and sign it
@@ -186,6 +185,7 @@ jobs:
 
           # 将公证票据 staple 到 DMG，让离线环境也能验证
           xcrun stapler staple "dist/${DMG_NAME}"
+          spctl -a -vvv "dist/${DMG_NAME}"
           echo "✓ Notarization and stapling OK"
 
       - uses: actions/upload-artifact@v4

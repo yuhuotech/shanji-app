@@ -14,7 +14,14 @@ const SETTINGS_ITEM_ID: &str = "open-settings";
 const QUIT_ITEM_ID: &str = "quit-app";
 const TRAY_ICON_BYTES: &[u8] =
     include_bytes!("../../shanji-slint/assets/tray/tray_icon_template_32.png");
-static TRAY_ICON: OnceLock<Result<Icon, String>> = OnceLock::new();
+static TRAY_ICON_RGBA: OnceLock<Result<TrayIconRgba, String>> = OnceLock::new();
+
+#[derive(Debug, Clone)]
+struct TrayIconRgba {
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrayAction {
@@ -259,16 +266,17 @@ pub fn translate_tray_icon_event(event: TrayIconEvent) -> Option<PlatformTrayEve
 
 fn icon_for_state(state: &str) -> Result<Icon, tray_icon::BadIcon> {
     let _ = state;
-    TRAY_ICON
-        .get_or_init(load_tray_icon)
+    TRAY_ICON_RGBA
+        .get_or_init(load_tray_icon_rgba)
         .as_ref()
         .map(Clone::clone)
         .map_err(|_| tray_icon::BadIcon::ByteCountNotDivisibleBy4 {
             byte_count: TRAY_ICON_BYTES.len(),
         })
+        .and_then(|icon| Icon::from_rgba(icon.rgba, icon.width, icon.height))
 }
 
-fn load_tray_icon() -> Result<Icon, String> {
+fn load_tray_icon_rgba() -> Result<TrayIconRgba, String> {
     let reader = ImageReader::new(Cursor::new(TRAY_ICON_BYTES))
         .with_guessed_format()
         .map_err(|err| format!("Failed to detect tray icon format: {}", err))?;
@@ -277,8 +285,11 @@ fn load_tray_icon() -> Result<Icon, String> {
         .map_err(|err| format!("Failed to decode tray icon PNG: {}", err))?
         .into_rgba8();
     let (width, height) = image.dimensions();
-    Icon::from_rgba(image.into_raw(), width, height)
-        .map_err(|err| format!("Failed to build tray icon: {}", err))
+    Ok(TrayIconRgba {
+        rgba: image.into_raw(),
+        width,
+        height,
+    })
 }
 
 #[cfg(test)]
@@ -295,7 +306,7 @@ mod tests {
 
     #[test]
     fn loads_embedded_tray_icon() {
-        let icon = load_tray_icon().expect("tray icon should decode");
+        let icon = load_tray_icon_rgba().expect("tray icon should decode");
         let _ = icon;
     }
 }
