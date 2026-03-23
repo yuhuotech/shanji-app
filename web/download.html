@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>下载 闪记 (Shanji) - 获取最新版本 | 官方镜像</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <style>
+        :root { --primary-color: #007AFF; --primary-hover: #0063CC; --text-color: #1d1d1f; --secondary-text: #86868b; --bg-color: #ffffff; --frame-bg: #1d1d1f; --frame-text: #ffffff; --frame-secondary: #a1a1a6; --border-color: #e5e5e5; --item-hover-bg: rgba(0, 0, 0, 0.02); --container-width: 1000px; }
+        [data-theme="dark"] { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255, 255, 255, 0.05); }
+        @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255, 255, 255, 0.05); } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: var(--text-color); background-color: var(--bg-color); -webkit-font-smoothing: antialiased; transition: background 0.3s, color 0.3s; }
+        .container { max-width: var(--container-width); margin: 0 auto; padding: 0 2rem; }
+        header { background: var(--frame-bg); position: sticky; top: 0; z-index: 100; color: var(--frame-text); box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        nav { max-width: var(--container-width); margin: 0 auto; padding: 0.6rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .logo { text-decoration: none; display: flex; align-items: center; gap: 10px; }
+        .logo img { width: 28px; height: 28px; border-radius: 6px; }
+        .logo-text { display: flex; align-items: baseline; gap: 4px; }
+        .brand-name { font-size: 1.1rem; font-weight: 800; color: var(--frame-text); letter-spacing: -0.01em; }
+        .brand-tag { font-size: 0.8rem; font-weight: 400; color: var(--frame-secondary); letter-spacing: 0.02em; }
+        .nav-links { display: flex; gap: 1.8rem; }
+        .nav-links a { text-decoration: none; color: var(--frame-secondary); font-size: 0.85rem; font-weight: 500; }
+        .nav-links a:hover { color: var(--frame-text); }
+        .hero { margin: 5rem auto 3rem; text-align: center; }
+        .hero h1 { font-size: 2.6rem; font-weight: 800; margin-bottom: 1rem; }
+        .version-badge { display: inline-block; padding: 4px 12px; background: var(--item-hover-bg); border: 1px solid var(--border-color); border-radius: 20px; font-size: 0.9rem; color: var(--secondary-text); font-weight: 600; }
+        .source-selector { display: flex; justify-content: center; margin: 3rem 0; }
+        .toggle-group { background: var(--item-hover-bg); border: 1px solid var(--border-color); padding: 4px; border-radius: 12px; display: inline-flex; gap: 4px; }
+        .toggle-btn { padding: 8px 20px; border-radius: 9px; border: none; background: transparent; color: var(--secondary-text); font-weight: 600; font-size: 0.9rem; cursor: pointer; transition: all 0.2s; }
+        .toggle-btn.active { background: var(--bg-color); color: var(--primary-color); box-shadow: 0 2px 8px rgba(0,0,0,0.05); }
+        .download-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1.5rem; margin-bottom: 6rem; }
+        .os-card { border: 1px solid var(--border-color); border-radius: 20px; padding: 2rem 1.5rem; display: flex; flex-direction: column; align-items: center; transition: all 0.3s ease; background: var(--bg-color); }
+        .os-card:hover { border-color: var(--primary-color); transform: translateY(-4px); box-shadow: 0 10px 30px rgba(0,0,0,0.05); }
+        .os-icon { width: 40px; height: 40px; margin-bottom: 1.5rem; fill: var(--text-color); }
+        .os-name { font-size: 1.1rem; font-weight: 700; margin-bottom: 0.4rem; }
+        .os-info { font-size: 0.8rem; color: var(--secondary-text); margin-bottom: 1.5rem; text-align: center; height: 2.4rem; }
+        .btn-stack { width: 100%; display: flex; flex-direction: column; gap: 0.6rem; }
+        .btn-dl { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 0.6rem; border-radius: 10px; background: var(--primary-color); color: white; text-decoration: none; font-weight: 600; font-size: 0.85rem; transition: 0.2s; }
+        .btn-dl:hover { background: var(--primary-hover); }
+        .btn-dl.outline { background: transparent; border: 1.5px solid var(--primary-color); color: var(--primary-color); }
+        .btn-dl.outline:hover { background: rgba(0, 122, 255, 0.05); }
+        .source-hint { margin-top: 4rem; padding: 2rem; border-radius: 16px; background: var(--item-hover-bg); border: 1px dashed var(--border-color); font-size: 0.9rem; }
+        footer { padding: 1.2rem 2rem; background: var(--frame-bg); color: #ffffff; text-align: center; font-size: 0.8rem; margin-top: 4rem; }
+        .footer-links { margin-bottom: 0.5rem; display: flex; justify-content: center; gap: 1.5rem; }
+        .footer-links a { color: #ffffff; text-decoration: none; opacity: 0.9; }
+        .copyright { opacity: 0.85; margin-top: 0.5rem; color: #a1a1a6; }
+        @media (max-width: 768px) { .download-grid { grid-template-columns: 1fr; } .nav-links { display: none; } }
+    </style>
+</head>
+<body>
+    <header><nav><a href="index.html" class="logo"><img src="shanji_logo.png" alt="闪记 Logo"><div class="logo-text"><span class="brand-name">闪记</span><span class="brand-tag">Shanji</span></div></a><div class="nav-links"><a href="index.html">返回首页</a><a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a></div></nav></header>
+    <main class="container">
+        <section class="hero">
+            <h1>下载 闪记 (Shanji)</h1>
+            <div class="version-badge" id="version-text"><!--VERSION_START-->最新版本: v0.1.4<!--VERSION_END--></div>
+        </section>
+        <div class="source-selector">
+            <div class="toggle-group">
+                <button class="toggle-btn active" id="btn-github" onclick="setSource('github')">GitHub 官方源</button>
+                <button class="toggle-btn" id="btn-proxy" onclick="setSource('proxy')">国内加速镜像</button>
+            </div>
+        </div>
+        <div class="download-grid">
+            <div class="os-card">
+                <svg class="os-icon" viewBox="0 0 24 24"><path d="M17.05 20.28c-.96.95-2.04 1.9-3.41 1.97-1.35.05-1.78-.77-3.32-.77-1.55 0-2.03.75-3.33.8-1.34.05-2.58-1.05-3.53-2.01-1.95-1.93-3.43-5.46-1.42-8.94 1-1.73 2.76-2.82 4.7-2.85 1.48-.03 2.89 1 3.8 1 .9 0 2.62-1.25 4.41-1.07 1.74.07 3.33.71 4.39 2.21-2.18 1.28-1.83 4.15.53 5.31-.95 2.25-2.26 4.39-3.42 5.35zM13 2c0 2.22-1.83 4.03-4.1 4.03-.02-1.39.5-2.73 1.45-3.7C11.3 1.38 12.65.34 14.15 0c.05 1.36-.5 2.64-1.15 2z"/></svg>
+                <div class="os-name">macOS</div>
+                <div class="os-info">macOS 12.0+<br>Apple Silicon & Intel</div>
+                <div class="btn-stack">
+                    <a href="#" id="dl-mac-arm" class="btn-dl">Silicon (aarch64)</a>
+                    <a href="#" id="dl-mac-x64" class="btn-dl outline">Intel Chip (x86_64)</a>
+                </div>
+            </div>
+            <div class="os-card">
+                <svg class="os-icon" viewBox="0 0 24 24"><path d="M3 12V4.75L9 4V12H3zm11 0V3L21 2v10h-7zm0 9V12h7v9l-7-1zm-11 0V12h6v8l-6-1z"/></svg>
+                <div class="os-name">Windows</div>
+                <div class="os-info">Windows 10 / 11<br>64-bit 系统</div>
+                <div class="btn-stack">
+                    <a href="#" id="dl-win-x64" class="btn-dl">下载 .zip 包</a>
+                </div>
+            </div>
+            <div class="os-card">
+                <svg class="os-icon" viewBox="0 0 24 24"><path d="M12 2c-.53 0-1.04.14-1.47.38C10.1 2.62 9.77 3 9.5 3.5c-.27.5-.4 1.05-.4 1.62 0 .58.13 1.14.39 1.63.26.49.59.88 1.01 1.13.43.25.95.39 1.5.39.55 0 1.07-.14 1.5-.39.43-.25.76-.64 1.02-1.13.26-.49.39-1.05.39-1.63 0-.57-.13-1.12-.4-1.62-.27-.5-.6-0.88-1.03-1.12C13.04 2.14 12.53 2 12 2zm-1.5 6.5C8.01 8.5 6 10.51 6 13v1c0 .55.45 1 1 1h1v4c0 1.1.9 2 2 2h4c1.1 0 2-.9 2-2v-4h1c.55 0 1-.45 1-1v-1c0-2.49-2.01-4.5-4.5-4.5h-3z"/></svg>
+                <div class="os-name">Linux</div>
+                <div class="os-info">多架构支持<br>.deb / .rpm / .tar.gz</div>
+                <div class="btn-stack">
+                    <a href="#" id="dl-linux-deb" class="btn-dl">.deb</a>
+                    <a href="#" id="dl-linux-rpm" class="btn-dl outline">.rpm</a>
+                    <a href="#" id="dl-linux-tar" class="btn-dl outline">.tar.gz</a>
+                </div>
+            </div>
+        </div>
+        <div class="source-hint">
+            <h4>💡 下载提示</h4>
+            <p>• <strong>架构选择</strong>：Mac 用户请根据芯片类型选择；Linux 提供多种包格式。</p>
+            <p>• <strong>自动同步</strong>：本页链接已预渲染为最新版本，由 GitHub Actions 发布时自动更新。</p>
+        </div>
+    </main>
+    <footer><div class="container"><div class="footer-links"><a href="index.html">官网首页</a><a href="mailto:shanji@yuhuotech.com">联系我们</a></div><p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank" style="color:white;text-decoration:none;">与或科技</a>. MIT Licensed.</p></div></footer>
+    <script>
+        const PROXY = 'https://ghfast.top/';
+        /*ASSETS_START*/
+        const releaseAssets = {
+            "mac-arm": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-macos-aarch64.dmg",
+            "mac-x64": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-macos-x86_64.dmg",
+            "win-x64": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-windows-x64.zip",
+            "linux-deb": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-linux-x64.deb",
+            "linux-rpm": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-linux-x64.rpm",
+            "linux-tar": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-linux-x64.tar.gz"
+        };
+        /*ASSETS_END*/
+        function setSource(source) {
+            const prefix = source === 'proxy' ? PROXY : '';
+            document.getElementById('btn-github').classList.toggle('active', source === 'github');
+            document.getElementById('btn-proxy').classList.toggle('active', source === 'proxy');
+            for (const [key, url] of Object.entries(releaseAssets)) {
+                const el = document.getElementById(`dl-${key}`);
+                if (el) el.href = prefix + url;
+            }
+        }
+        setSource('github');
+        function updateTheme() { const h = new Date().getHours(); const html = document.documentElement; if ((h < 6 || h >= 18) && !window.matchMedia('(prefers-color-scheme: light)').matches) html.setAttribute('data-theme', 'dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) html.setAttribute('data-theme', 'dark'); else html.removeAttribute('data-theme'); }
+        updateTheme(); window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
+    </script>
+</body>
+</html>

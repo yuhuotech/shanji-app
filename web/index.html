@@ -4,665 +4,90 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>闪记 (Shanji) - 开源本地 AI 语音输入工具 | 隐私优先的语音转文字软件</title>
-    
-    <!-- SEO & GEO Meta Tags -->
     <meta name="description" content="闪记 (Shanji) 是一款开源、跨平台的桌面 AI 语音输入工具。基于 FunASR Paraformer 本地识别，音频不上传，保障隐私。支持全局快捷键、LLM 智能润色及自动贴入。">
     <meta name="keywords" content="闪记, Shanji, 语音输入法, AI 语音转文字, 本地语音识别, 开源语音工具, FunASR, Paraformer, Rust, 隐私保护语音输入">
     <meta name="author" content="与或科技">
-    <meta name="robots" content="index, follow">
     <link rel="canonical" href="https://www.yuhuotech.com/shanji/">
-
-    <!-- Structured Data (JSON-LD) for SoftwareApplication - Optimized for GEO -->
-    <script type="application/ld+json">
-    {
-      "@context": "https://schema.org",
-      "@type": "SoftwareApplication",
-      "name": "闪记 (Shanji)",
-      "alternateName": "Shanji AI Voice Input",
-      "operatingSystem": "Windows 10+, macOS 12.0+, Linux (Ubuntu 22.04+)",
-      "applicationCategory": "UtilitiesApplication",
-      "applicationSubCategory": "AI Voice Recognition & Productivity",
-      "description": "闪记是一款基于 Rust 开发的开源本地 AI 语音输入工具，采用 FunASR Paraformer 模型实现 100% 本地化识别，支持流式转写、LLM 自动润色及全局快捷键操作。",
-      "version": "0.1.0",
-      "license": "https://opensource.org/licenses/MIT",
-      "softwareHelp": "https://github.com/yuhuotech/shanji-app/blob/main/README.md",
-      "downloadUrl": "https://github.com/yuhuotech/shanji-app/releases",
-      "featureList": [
-        "本地实时语音识别 (Local ASR)",
-        "隐私保护 (Privacy-First)",
-        "流式转写 (Streaming Transcription)",
-        "LLM 智能润色 (LLM Post-processing)",
-        "自动粘贴输出 (Auto-Paste)",
-        "历史记录持久化 (SQLite Persistence)"
-      ],
-      "offers": {
-        "@type": "Offer",
-        "price": "0",
-        "priceCurrency": "CNY"
-      },
-      "author": {
-        "@type": "Organization",
-        "name": "与或科技",
-        "url": "https://www.yuhuotech.com"
-      }
-    }
-    </script>
-
     <link rel="icon" href="favicon.ico" type="image/x-icon">
     <style>
-        /* -------------------------------------------------------------------
-           Variable Definitions (Light Theme as Default)
-        ------------------------------------------------------------------- */
-        :root {
-            --primary-color: #007AFF;
-            --text-color: #1d1d1f;
-            --secondary-text: #86868b;
-            --bg-color: #ffffff;
-            --header-bg: rgba(255, 255, 255, 0.8);
-            --border-color: #e5e5e5;
-            --item-hover-bg: rgba(0, 0, 0, 0.03);
-            --faq-bg: #fbfbfd;
-            --container-width: 1000px;
-            --btn-secondary-bg: #f5f5f7;
-            --btn-secondary-text: #1d1d1f;
-            --screenshot-shadow: rgba(0,0,0,0.1);
-        }
-
-        /* -------------------------------------------------------------------
-           Dark Theme Definitions
-        ------------------------------------------------------------------- */
-        [data-theme="dark"] {
-            --text-color: #f5f5f7;
-            --secondary-text: #a1a1a6;
-            --bg-color: #121212;
-            --header-bg: rgba(18, 18, 18, 0.8);
-            --border-color: #333333;
-            --item-hover-bg: rgba(255, 255, 255, 0.05);
-            --faq-bg: #1c1c1e;
-            --btn-secondary-bg: #2c2c2e;
-            --btn-secondary-text: #f5f5f7;
-            --screenshot-shadow: rgba(0,0,0,0.4);
-        }
-
-        /* Auto sync with system theme */
-        @media (prefers-color-scheme: dark) {
-            :root:not([data-theme="light"]) {
-                --text-color: #f5f5f7;
-                --secondary-text: #a1a1a6;
-                --bg-color: #121212;
-                --header-bg: rgba(18, 18, 18, 0.8);
-                --border-color: #333333;
-                --item-hover-bg: rgba(255, 255, 255, 0.05);
-                --faq-bg: #1c1c1e;
-                --btn-secondary-bg: #2c2c2e;
-                --btn-secondary-text: #f5f5f7;
-                --screenshot-shadow: rgba(0,0,0,0.4);
-            }
-        }
-
-        /* -------------------------------------------------------------------
-           Base Styles
-        ------------------------------------------------------------------- */
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-            line-height: 1.6;
-            color: var(--text-color);
-            background-color: var(--bg-color);
-            transition: background-color 0.3s ease, color 0.3s ease;
-            -webkit-font-smoothing: antialiased;
-        }
-
-        header {
-            background: var(--header-bg);
-            backdrop-filter: blur(20px);
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        nav {
-            max-width: var(--container-width);
-            margin: 0 auto;
-            padding: 0.8rem 2rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .logo {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: var(--primary-color);
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .logo img {
-            width: 32px;
-            height: 32px;
-            border-radius: 8px;
-            filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
-        }
-
-        .nav-links {
-            display: flex;
-            gap: 2rem;
-        }
-
-        .nav-links a {
-            text-decoration: none;
-            color: var(--secondary-text);
-            font-size: 0.95rem;
-            transition: color 0.2s;
-        }
-
-        .nav-links a:hover {
-            color: var(--primary-color);
-        }
-
-        /* 移动端菜单开关 */
-        .menu-toggle {
-            display: none;
-            flex-direction: column;
-            gap: 6px;
-            cursor: pointer;
-            padding: 5px;
-            z-index: 1001;
-        }
-
-        .menu-toggle span {
-            display: block;
-            width: 25px;
-            height: 2px;
-            background-color: var(--text-color);
-            transition: all 0.3s ease;
-        }
-
-        .mobile-menu {
-            position: fixed;
-            top: 0;
-            right: -100%;
-            width: 100%;
-            height: 100vh;
-            background: var(--bg-color);
-            z-index: 1000;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 2rem;
-            transition: right 0.3s cubic-bezier(0.165, 0.84, 0.44, 1);
-        }
-
-        .mobile-menu.active {
-            right: 0;
-        }
-
-        .mobile-menu a {
-            font-size: 1.5rem;
-            text-decoration: none;
-            color: var(--text-color);
-            font-weight: 600;
-        }
-
-        .menu-toggle.active span:nth-child(1) { transform: translateY(8px) rotate(45deg); }
-        .menu-toggle.active span:nth-child(2) { opacity: 0; }
-        .menu-toggle.active span:nth-child(3) { transform: translateY(-8px) rotate(-45deg); }
-
-        /* Hero Section */
-        .hero {
-            max-width: var(--container-width);
-            margin: 6rem auto 4rem;
-            padding: 0 2rem;
-            text-align: center;
-        }
-
-        .hero h1 {
-            font-size: 3.5rem;
-            font-weight: 800;
-            margin-bottom: 1.5rem;
-            letter-spacing: -0.02em;
-        }
-
-        .hero p {
-            font-size: 1.5rem;
-            color: var(--secondary-text);
-            max-width: 800px;
-            margin: 0 auto 2.5rem;
-        }
-
-        .cta-buttons {
-            display: flex;
-            justify-content: center;
-            gap: 1.5rem;
-            flex-wrap: wrap;
-        }
-
-        .btn {
-            padding: 0.8rem 2rem;
-            border-radius: 30px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            text-decoration: none;
-            transition: transform 0.2s, opacity 0.2s;
-        }
-
-        .btn-primary {
-            background-color: var(--primary-color);
-            color: white;
-        }
-
-        .btn-secondary {
-            background-color: var(--btn-secondary-bg);
-            color: var(--btn-secondary-text);
-        }
-
-        .btn:hover {
-            transform: translateY(-2px);
-            opacity: 0.9;
-        }
-
-        .screenshot-container {
-            max-width: var(--container-width);
-            margin: 4rem auto;
-            padding: 0 2rem;
-        }
-
-        .screenshot {
-            width: 100%;
-            border-radius: 12px;
-            box-shadow: 0 20px 60px var(--screenshot-shadow);
-            border: 1px solid var(--border-color);
-        }
-
-        /* -------------------------------------------------------------------
-           Minimalist List Layout (No Jumps)
-        ------------------------------------------------------------------- */
-        .features {
-            max-width: var(--container-width);
-            margin: 6rem auto;
-            padding: 0 2rem;
-            border-top: 1px solid var(--border-color);
-        }
-
-        .feature-item {
-            display: flex;
-            align-items: center;
-            padding: 1.5rem 0.5rem;
-            border-bottom: 1px solid var(--border-color);
-            transition: background 0.2s ease;
-            gap: 2rem;
-            /* No transformation or padding-left changes here */
-        }
-
-        .feature-item:hover {
-            background: var(--item-hover-bg);
-        }
-
-        .feature-icon-wrapper {
-            width: 32px;
-            height: 32px;
-            flex-shrink: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.25rem;
-        }
-
-        .feature-info {
-            display: flex;
-            flex: 1;
-            align-items: center;
-            justify-content: space-between;
-            gap: 2rem;
-        }
-
-        .feature-title {
-            font-size: 1.1rem;
-            font-weight: 600;
-            width: 180px;
-            flex-shrink: 0;
-        }
-
-        .feature-desc {
-            font-size: 1rem;
-            color: var(--secondary-text);
-            flex: 1;
-        }
-
-        /* ------------------------------------------------------------------- */
-
-        .privacy-box {
-            max-width: var(--container-width);
-            margin: 4rem auto;
-            padding: 3rem 2rem;
-            text-align: center;
-        }
-
-        .privacy-box h2 {
-            margin-bottom: 1rem;
-        }
-
-        .tech-spec-section {
-            background: var(--faq-bg);
-            padding: 5rem 2rem;
-            border-top: 1px solid var(--border-color);
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .tech-spec-container {
-            max-width: var(--container-width);
-            margin: 0 auto;
-        }
-
-        .tech-spec-grid {
-            max-width: 800px;
-            margin: 3rem auto 0;
-            text-align: left;
-        }
-
-        .spec-item {
-            margin-bottom: 2.5rem;
-        }
-
-        .spec-item h3 {
-            font-size: 1.15rem;
-            margin-bottom: 0.8rem;
-        }
-
-        .spec-item p, .spec-item ul {
-            color: var(--secondary-text);
-        }
-
-        .spec-list {
-            list-style: none;
-        }
-
-        .spec-list li {
-            margin-bottom: 0.5rem;
-            padding-left: 0;
-        }
-
-        .spec-list strong {
-            color: var(--text-color);
-        }
-
-        .tech-stack {
-            max-width: var(--container-width);
-            margin: 6rem auto;
-            padding: 0 2rem;
-            text-align: center;
-        }
-
-        .tech-stack-grid {
-            display: flex;
-            justify-content: center;
-            gap: 3rem;
-            margin-top: 2rem;
-            flex-wrap: wrap;
-        }
-
-        .tech-item {
-            text-align: center;
-        }
-
-        .tech-name {
-            font-weight: 600;
-            display: block;
-            margin-bottom: 0.5rem;
-        }
-
-        footer {
-            padding: 4rem 2rem;
-            border-top: 1px solid var(--border-color);
-            text-align: center;
-        }
-
-        .footer-content {
-            max-width: var(--container-width);
-            margin: 0 auto;
-        }
-
-        .copyright {
-            color: #999;
-            font-size: 0.9rem;
-            margin-top: 2rem;
-        }
-
-        @media (max-width: 768px) {
-            .hero h1 { font-size: 2.5rem; }
-            .hero p { font-size: 1.1rem; }
-            .nav-links { display: none; }
-            .menu-toggle { display: flex; }
-            .feature-info {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 0.2rem;
-            }
-            .feature-title { width: auto; }
-            .feature-item { gap: 1rem; }
-            .tech-stack-grid { gap: 1.5rem; }
-            .hero { margin: 4rem auto 2rem; }
-        }
+        :root { --primary-color: #007AFF; --primary-hover: #0063CC; --text-color: #1d1d1f; --secondary-text: #86868b; --bg-color: #ffffff; --frame-bg: #1d1d1f; --frame-text: #ffffff; --frame-secondary: #a1a1a6; --border-color: #e5e5e5; --item-hover-bg: rgba(0, 0, 0, 0.02); --container-width: 1000px; --btn-secondary-bg: #f5f5f7; --btn-secondary-text: #1d1d1f; }
+        [data-theme="dark"] { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255, 255, 255, 0.05); --btn-secondary-bg: #1c1c1e; --btn-secondary-text: #f5f5f7; }
+        @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255, 255, 255, 0.05); --btn-secondary-bg: #1c1c1e; --btn-secondary-text: #f5f5f7; } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: var(--text-color); background-color: var(--bg-color); -webkit-font-smoothing: antialiased; transition: background 0.3s, color 0.3s; }
+        .container { max-width: var(--container-width); margin: 0 auto; padding: 0 2rem; }
+        header { background: var(--frame-bg); position: sticky; top: 0; z-index: 100; color: var(--frame-text); box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        nav { max-width: var(--container-width); margin: 0 auto; padding: 0.6rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .logo { text-decoration: none; display: flex; align-items: center; gap: 10px; }
+        .logo img { width: 30px; height: 30px; border-radius: 7px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .logo-text { display: flex; align-items: baseline; gap: 4px; }
+        .brand-name { font-size: 1.2rem; font-weight: 800; color: var(--frame-text); letter-spacing: -0.01em; }
+        .brand-tag { font-size: 0.85rem; font-weight: 400; color: var(--frame-secondary); letter-spacing: 0.02em; }
+        .nav-links { display: flex; gap: 1.8rem; }
+        .nav-links a { text-decoration: none; color: var(--frame-secondary); font-size: 0.88rem; font-weight: 500; transition: color 0.2s; }
+        .nav-links a:hover { color: var(--frame-text); }
+        .hero { margin: 5rem auto 3.5rem; text-align: center; }
+        .hero h1 { font-size: 2.6rem; font-weight: 800; margin-bottom: 1.2rem; letter-spacing: -0.01em; line-height: 1.2; }
+        .hero p { font-size: 1.15rem; color: var(--secondary-text); max-width: 640px; margin: 0 auto 3rem; line-height: 1.6; }
+        .cta-buttons { display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap; align-items: center; }
+        .btn-download-main { display: flex; align-items: center; gap: 10px; padding: 0.7rem 1.4rem; background: var(--primary-color); color: white; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 0.95rem; transition: background 0.2s; }
+        .btn-download-main:hover { background: var(--primary-hover); }
+        .btn-secondary { display: flex; align-items: center; gap: 8px; padding: 0.7rem 1.4rem; background: var(--btn-secondary-bg); color: var(--btn-secondary-text); text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 0.95rem; border: 1px solid var(--border-color); transition: all 0.2s; }
+        .btn-secondary:hover { transform: translateY(-1px); }
+        .platform-icon { width: 18px; height: 18px; fill: currentColor; }
+        .platform-name { opacity: 0.7; font-size: 0.75rem; font-weight: 400; display: block; }
+        .features { margin: 6rem auto; border-top: 1px solid var(--border-color); }
+        .feature-item { display: flex; align-items: center; padding: 1.5rem 0.5rem; border-bottom: 1px solid var(--border-color); transition: background 0.2s; gap: 2rem; }
+        .feature-item:hover { background: var(--item-hover-bg); }
+        .feature-info { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 2rem; }
+        .feature-title { font-size: 1.05rem; font-weight: 600; width: 160px; flex-shrink: 0; }
+        .feature-desc { font-size: 0.95rem; color: var(--secondary-text); flex: 1; }
+        .screenshot-container { margin: 4rem auto; }
+        .screenshot { width: 100%; border-radius: 14px; box-shadow: 0 20px 60px rgba(0,0,0,0.1); border: 1px solid var(--border-color); }
+        .tech-spec-section { margin: 8rem auto; max-width: 800px; }
+        .tech-spec-section h2 { text-align: center; font-size: 1.8rem; font-weight: 800; margin-bottom: 3.5rem; }
+        .spec-table { border-top: 1px solid var(--border-color); }
+        .spec-row { display: flex; padding: 1.2rem 0; border-bottom: 1px solid var(--border-color); gap: 3rem; align-items: flex-start; }
+        .spec-label { width: 140px; flex-shrink: 0; font-size: 0.9rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+        .spec-value { flex: 1; font-size: 0.95rem; color: var(--secondary-text); line-height: 1.5; }
+        footer { padding: 1.2rem 2rem; background: var(--frame-bg); color: #ffffff; text-align: center; font-size: 0.8rem; margin-top: 4rem; }
+        .footer-links { margin-bottom: 0.5rem; display: flex; justify-content: center; gap: 1.5rem; }
+        .footer-links a { color: #ffffff; text-decoration: none; opacity: 0.9; }
+        .copyright { opacity: 0.85; margin-top: 0.5rem; color: #a1a1a6; }
+        .copyright a { color: #ffffff; text-decoration: none; font-weight: 500; }
+        @media (max-width: 768px) { .hero h1 { font-size: 2.2rem; } .hero p { font-size: 1.05rem; } .spec-row { gap: 1.5rem; } .spec-label { width: 100px; } .feature-info { flex-direction: column; align-items: flex-start; gap: 0.2rem; } .nav-links { display: none; } }
     </style>
 </head>
 <body>
-
-    <header>
-        <nav>
-            <a href="#" class="logo">
-                <img src="shanji_logo.png" alt="闪记 Logo">
-                <span>闪记 Shanji</span>
-            </a>
-            <div class="nav-links">
-                <a href="#features">特性</a>
-                <a href="#privacy">隐私</a>
-                <a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a>
-                <a href="https://github.com/yuhuotech/shanji-app/releases" target="_blank">下载</a>
-            </div>
-            <div class="menu-toggle" id="menu-toggle">
-                <span></span><span></span><span></span>
-            </div>
-        </nav>
-        <div class="mobile-menu" id="mobile-menu">
-            <a href="#features" class="mobile-link">特性</a>
-            <a href="#privacy" class="mobile-link">隐私</a>
-            <a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a>
-            <a href="https://github.com/yuhuotech/shanji-app/releases" target="_blank" class="btn btn-primary">立即下载</a>
-        </div>
-    </header>
-
-    <main>
-        <section class="hero">
-            <h1>本地 AI 语音输入，让文字跃然指尖</h1>
-            <p>闪记是一款开源的桌面端 AI 语音输入工具。通过全局快捷键，在本地完成语音识别，并支持 LLM 智能润色，自动输出到当前光标位置。</p>
+    <header><nav><a href="#" class="logo"><img src="shanji_logo.png" alt="闪记 Logo"><div class="logo-text"><span class="brand-name">闪记</span><span class="brand-tag">Shanji</span></div></a><div class="nav-links"><a href="#features">特性</a><a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a><a href="download.html">下载</a></div></nav></header>
+    <main class="container">
+        <section class="hero"><h1>本地 AI 语音输入，让文字跃然指尖</h1><p>闪记是一款开源的桌面端 AI 语音输入工具。通过全局快捷键，在本地完成语音识别，并支持 LLM 智能润色，自动输出到当前光标位置。</p>
             <div class="cta-buttons">
-                <a href="https://github.com/yuhuotech/shanji-app/releases" class="btn btn-primary">立即下载</a>
-                <a href="https://github.com/yuhuotech/shanji-app" class="btn btn-secondary" target="_blank">查看源码</a>
+                <a href="download.html" class="btn-download-main">
+                    <svg class="platform-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
+                    <div style="text-align: left; line-height: 1.1;"><div>立即下载 闪记</div><span class="platform-name"><!--VERSION_START-->v0.1.4<!--VERSION_END--></span></div>
+                </a>
+                <a href="https://github.com/yuhuotech/shanji-app" class="btn-secondary" target="_blank">
+                    <svg class="platform-icon" viewBox="0 0 24 24" style="fill: currentColor;"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+                    查看源码
+                </a>
             </div>
         </section>
-
-        <section class="screenshot-container">
-            <img src="index_page.png" alt="闪记 (Shanji) AI 语音输入工具主界面截图 - 展示实时转写与本地模型管理" class="screenshot">
-        </section>
-
+        <section class="screenshot-container"><img src="index_page.png" alt="闪记应用主界面" class="screenshot"></section>
         <section id="features" class="features">
-            <div class="feature-item">
-                <div class="feature-icon-wrapper">🎙️</div>
-                <div class="feature-info">
-                    <div class="feature-title">本地实时识别</div>
-                    <div class="feature-desc">基于 FunASR Paraformer 实现，音频在本机处理，保障隐私。</div>
-                </div>
-            </div>
-            <div class="feature-item">
-                <div class="feature-icon-wrapper">✨</div>
-                <div class="feature-info">
-                    <div class="feature-title">LLM 智能润色</div>
-                    <div class="feature-desc">接入 OpenAI 兼容接口，自动修正错别字，去除语气词，让表达更专业。</div>
-                </div>
-            </div>
-            <div class="feature-item">
-                <div class="feature-icon-wrapper">⌨️</div>
-                <div class="feature-info">
-                    <div class="feature-title">全局快捷键</div>
-                    <div class="feature-desc">支持 Toggle 和 Push-to-Talk 模式，通过按键操作即刻录音与出文。</div>
-                </div>
-            </div>
-            <div class="feature-item">
-                <div class="feature-icon-wrapper">🚀</div>
-                <div class="feature-info">
-                    <div class="feature-title">自动输出</div>
-                    <div class="feature-desc">识别完成后自动粘贴到当前输入框，支持中英文标点智能整理。</div>
-                </div>
-            </div>
-            <div class="feature-item">
-                <div class="feature-icon-wrapper">📂</div>
-                <div class="feature-info">
-                    <div class="feature-title">历史记录管理</div>
-                    <div class="feature-desc">持久化保存结果，支持音频回放、重新转写及全文搜索。</div>
-                </div>
-            </div>
-            <div class="feature-item">
-                <div class="feature-icon-wrapper">🎨</div>
-                <div class="feature-info">
-                    <div class="feature-title">原生桌面 UI</div>
-                    <div class="feature-desc">使用 Slint 驱动原生渲染，内存占用极低，跨平台无缝体验。</div>
-                </div>
-            </div>
+            <div class="feature-item"><div class="feature-icon-wrapper">🎙️</div><div class="feature-info"><div class="feature-title">本地实时识别</div><div class="feature-desc">基于 FunASR Paraformer 实现，音频在本机处理，保障数据主权。</div></div></div>
+            <div class="feature-item"><div class="feature-icon-wrapper">✨</div><div class="feature-info"><div class="feature-title">LLM 智能润色</div><div class="feature-desc">接入 OpenAI 兼容接口，自动修正错别字，去除语气词，让表达更专业。</div></div></div>
+            <div class="feature-item"><div class="feature-icon-wrapper">⌨️</div><div class="feature-info"><div class="feature-title">全局快捷键</div><div class="feature-desc">支持多种录音模式，通过按键操作即刻录音与出文。</div></div></div>
+            <div class="feature-item"><div class="feature-icon-wrapper">🚀</div><div class="feature-info"><div class="feature-title">自动输出</div><div class="feature-desc">识别完成后自动粘贴到当前输入框，支持标点智能整理。</div></div></div>
+            <div class="feature-item"><div class="feature-icon-wrapper">📂</div><div class="feature-info"><div class="feature-title">历史记录管理</div><div class="feature-desc">持久化保存结果，支持音频回放、重新转写及全文搜索。</div></div></div>
+            <div class="feature-item"><div class="feature-icon-wrapper">🎨</div><div class="feature-info"><div class="feature-title">原生桌面 UI</div><div class="feature-desc">Slint 驱动原生渲染，内存占用极低，跨平台无缝体验。</div></div></div>
         </section>
-
-        <section id="privacy" class="privacy-box">
-            <h2>🔒 隐私第一，本地优先</h2>
-            <p>闪记的设计核心是隐私保护。语音识别模型完全在本地运行，您的音频文件绝不会被上传到任何第三方服务器。</p>
-            <p style="margin-top: 1rem; color: #888; font-size: 0.9rem;">* 仅在开启 LLM 润色功能或下载模型时需要网络连接。</p>
-        </section>
-
-        <section class="tech-spec-section">
-            <div class="tech-spec-container">
-                <h2 style="text-align: center;">技术规格与常见问题</h2>
-                <div class="tech-spec-grid">
-                    <div class="spec-item">
-                        <h3>闪记是如何工作的？</h3>
-                        <p>系统采集 16kHz 音频，通过 FBank 提取特征，由 Paraformer 模型在本地 ONNX Runtime 环境下完成推理。识别结果可实时展示，并在结束后自动模拟键盘输入贴入光标位置。</p>
-                    </div>
-                    <div class="spec-item">
-                        <h3>技术指标 (Specifications)</h3>
-                        <ul class="spec-list">
-                            <li><strong>推理后端：</strong> ONNX Runtime (CPU/GPU)</li>
-                            <li><strong>ASR 模型：</strong> FunASR Paraformer-zh (流式/非流式)</li>
-                            <li><strong>音频格式：</strong> 16kHz, 16bit, 单声道 PCM</li>
-                            <li><strong>开发语言：</strong> Rust 1.75+</li>
-                            <li><strong>UI 框架：</strong> Slint (原生渲染)</li>
-                            <li><strong>数据存储：</strong> SQLite 3 (支持 FTS5 全文搜索)</li>
-                        </ul>
-                    </div>
-                    <div class="spec-item">
-                        <h3>系统兼容性</h3>
-                        <p>兼容 macOS (Intel/Apple Silicon), Windows 10/11 (x64), 以及主流 Linux 发行版。极轻量化设计，常驻后台仅占用约 150MB 内存。</p>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <section class="tech-stack">
-            <h2>技术驱动，性能卓越</h2>
-            <div class="tech-stack-grid">
-                <div class="tech-item">
-                    <span class="tech-name">Rust</span>
-                    <span style="color: var(--secondary-text);">系统级核心逻辑</span>
-                </div>
-                <div class="tech-item">
-                    <span class="tech-name">Slint</span>
-                    <span style="color: var(--secondary-text);">高性能声明式 UI</span>
-                </div>
-                <div class="tech-item">
-                    <span class="tech-name">ONNX Runtime</span>
-                    <span style="color: var(--secondary-text);">本地 AI 推理</span>
-                </div>
-                <div class="tech-item">
-                    <span class="tech-name">SQLite</span>
-                    <span style="color: var(--secondary-text);">结构化数据存储</span>
-                </div>
-            </div>
-        </section>
+        <section class="tech-spec-section"><h2>技术规格</h2><div class="spec-table"><div class="spec-row"><div class="spec-label">工作流</div><div class="spec-value">系统实时采集 16kHz 音频，通过 FBank 提取特征，由 Paraformer 模型在本地完成推理。</div></div><div class="spec-row"><div class="spec-label">ASR 模型</div><div class="spec-value"><strong>Paraformer-zh</strong> (支持流式与非流式识别)</div></div><div class="spec-row"><div class="spec-label">推理引擎</div><div class="spec-value"><strong>ONNX Runtime</strong> (优化后的本地推理后端)</div></div><div class="spec-row"><div class="spec-label">开发语言</div><div class="spec-value"><strong>Rust 1.75+</strong> / Slint UI Framework</div></div><div class="spec-row"><div class="spec-label">本地存储</div><div class="spec-value"><strong>SQLite 3</strong> (集成 FTS5 全文搜索支持)</div></div></div></section>
     </main>
-
-    <footer>
-        <div class="footer-content">
-            <div style="margin-bottom: 1.5rem;">
-                <a href="https://github.com/yuhuotech/shanji-app" style="color: #666; text-decoration: none; margin: 0 10px;">GitHub</a> · 
-                <a href="mailto:shanji@yuhuotech.com" style="color: #666; text-decoration: none; margin: 0 10px;">联系我们</a>
-            </div>
-            <p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank" style="color: #999; text-decoration: none;">与或科技</a>. 使用 MIT 协议开源。</p>
-        </div>
-    </footer>
-
+    <footer><div class="container"><div class="footer-links"><a href="index.html">官网首页</a><a href="mailto:shanji@yuhuotech.com">联系我们</a></div><p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank" style="color:white;text-decoration:none;">与或科技</a>. MIT Licensed.</p></div></footer>
     <script>
-        // 1. Dark/Light Mode Logic
-        function updateTheme() {
-            const hour = new Date().getHours();
-            const isNight = hour < 6 || hour >= 18;
-            const html = document.documentElement;
-            
-            // Check if system preference is available
-            const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            
-            if (isNight && !window.matchMedia('(prefers-color-scheme: light)').matches) {
-                html.setAttribute('data-theme', 'dark');
-            } else if (systemDark) {
-                html.setAttribute('data-theme', 'dark');
-            } else {
-                html.removeAttribute('data-theme');
-            }
-        }
-        
-        updateTheme();
-        // Update on system change
-        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
-        // Hourly check
-        setInterval(updateTheme, 60000);
-
-        // 2. Mobile Menu Toggle
-        const menuToggle = document.getElementById('menu-toggle');
-        const mobileMenu = document.getElementById('mobile-menu');
-        const mobileLinks = document.querySelectorAll('.mobile-link');
-
-        function toggleMenu() {
-            menuToggle.classList.toggle('active');
-            mobileMenu.classList.toggle('active');
-            document.body.style.overflow = mobileMenu.classList.contains('active') ? 'hidden' : '';
-        }
-
-        menuToggle.addEventListener('click', toggleMenu);
-        mobileLinks.forEach(link => link.addEventListener('click', () => {
-            if (mobileMenu.classList.contains('active')) toggleMenu();
-        }));
-
-        // 3. Smooth Scroll
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                const href = this.getAttribute('href');
-                if (href.startsWith('#')) {
-                    e.preventDefault();
-                    const target = document.querySelector(href);
-                    if (target) {
-                        window.scrollTo({
-                            top: target.offsetTop - 80,
-                            behavior: 'smooth'
-                        });
-                    }
-                }
-            });
-        });
+        function updateTheme() { const h = new Date().getHours(); const html = document.documentElement; if ((h < 6 || h >= 18) && !window.matchMedia('(prefers-color-scheme: light)').matches) html.setAttribute('data-theme', 'dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) html.setAttribute('data-theme', 'dark'); else html.removeAttribute('data-theme'); }
+        updateTheme(); window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
     </script>
 </body>
 </html>
