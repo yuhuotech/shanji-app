@@ -6,6 +6,7 @@ license = "MIT"
 
 [dependencies]
 global-hotkey = "0.6"
+image = { version = "0.25", default-features = false, features = ["png"] }
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
 shanji-core = { path = "../shanji-core" }

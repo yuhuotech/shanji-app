@@ -6105,6 +6105,7 @@ version = "0.1.0"
 dependencies = [
  "device_query",
  "global-hotkey",
+ "image",
  "log",
  "readkey",
  "serde",

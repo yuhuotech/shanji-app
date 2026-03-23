@@ -1,6 +1,9 @@
+use image::ImageReader;
 use serde::{Deserialize, Serialize};
 use shanji_core::config::AppState;
-use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
+use std::io::Cursor;
+use std::sync::OnceLock;
+use tray_icon::menu::{Menu, MenuEvent, MenuItem};
 use tray_icon::{Icon, MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 
 const TRAY_ICON_ID: &str = "shanji-tray";
@@ -9,6 +12,9 @@ const RECORD_ITEM_ID: &str = "toggle-recording";
 const HISTORY_ITEM_ID: &str = "open-history";
 const SETTINGS_ITEM_ID: &str = "open-settings";
 const QUIT_ITEM_ID: &str = "quit-app";
+const TRAY_ICON_BYTES: &[u8] =
+    include_bytes!("../../shanji-slint/assets/tray/tray_icon_template_32.png");
+static TRAY_ICON: OnceLock<Result<Icon, String>> = OnceLock::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TrayAction {
@@ -43,7 +49,6 @@ pub enum PlatformTrayEvent {
 pub struct TrayRuntime {
     tray_icon: TrayIcon,
     open_item: MenuItem,
-    record_item: MenuItem,
     history_item: MenuItem,
     settings_item: MenuItem,
     quit_item: MenuItem,
@@ -74,14 +79,7 @@ impl TrayMenuModel {
     }
 }
 
-pub fn build_tray_menu(app_name: &str, state: AppState, minimize_to_tray: bool) -> TrayMenuModel {
-    let record_label = match state {
-        AppState::Idle => "Start recording",
-        AppState::Recording => "Stop recording",
-        AppState::Transcribing => "Recording busy",
-        AppState::Rewriting => "Rewrite in progress",
-    };
-
+pub fn build_tray_menu(app_name: &str, state: AppState, _minimize_to_tray: bool) -> TrayMenuModel {
     let icon_state = match state {
         AppState::Idle => "idle",
         AppState::Recording => "recording",
@@ -90,54 +88,32 @@ pub fn build_tray_menu(app_name: &str, state: AppState, minimize_to_tray: bool) 
     }
     .to_string();
 
-    let mut items = vec![
+    let items = vec![
         TrayMenuItemSpec {
             action: Some(TrayAction::ShowMainWindow),
-            label: "Open Shanji".to_string(),
-            enabled: true,
-            separator: false,
-        },
-        TrayMenuItemSpec {
-            action: None,
-            label: String::new(),
-            enabled: false,
-            separator: true,
-        },
-        TrayMenuItemSpec {
-            action: Some(TrayAction::ToggleRecording),
-            label: record_label.to_string(),
-            enabled: !matches!(state, AppState::Transcribing | AppState::Rewriting),
-            separator: false,
-        },
-        TrayMenuItemSpec {
-            action: Some(TrayAction::OpenHistory),
-            label: "Open history".to_string(),
+            label: "显示主界面".to_string(),
             enabled: true,
             separator: false,
         },
         TrayMenuItemSpec {
             action: Some(TrayAction::OpenSettings),
-            label: "Open settings".to_string(),
+            label: "系统设置".to_string(),
             enabled: true,
             separator: false,
         },
         TrayMenuItemSpec {
-            action: None,
-            label: String::new(),
-            enabled: false,
-            separator: true,
+            action: Some(TrayAction::OpenHistory),
+            label: "历史记录".to_string(),
+            enabled: true,
+            separator: false,
         },
         TrayMenuItemSpec {
             action: Some(TrayAction::Quit),
-            label: "Quit".to_string(),
+            label: "退出".to_string(),
             enabled: true,
             separator: false,
         },
     ];
-
-    if !minimize_to_tray {
-        items.retain(|item| item.action != Some(TrayAction::ShowMainWindow) || !item.separator);
-    }
 
     TrayMenuModel {
         tooltip: format!("{} native desktop app", app_name),
@@ -149,38 +125,27 @@ pub fn build_tray_menu(app_name: &str, state: AppState, minimize_to_tray: bool) 
 impl TrayRuntime {
     pub fn new(model: &TrayMenuModel) -> Result<Self, String> {
         let menu = Menu::new();
-        let open_item = MenuItem::with_id(OPEN_ITEM_ID, "Open Shanji", true, None);
-        let record_item = MenuItem::with_id(RECORD_ITEM_ID, "Start recording", true, None);
-        let history_item = MenuItem::with_id(HISTORY_ITEM_ID, "Open history", true, None);
-        let settings_item = MenuItem::with_id(SETTINGS_ITEM_ID, "Open settings", true, None);
-        let quit_item = MenuItem::with_id(QUIT_ITEM_ID, "Quit", true, None);
-        let separator_a = PredefinedMenuItem::separator();
-        let separator_b = PredefinedMenuItem::separator();
+        let open_item = MenuItem::with_id(OPEN_ITEM_ID, "显示主界面", true, None);
+        let settings_item = MenuItem::with_id(SETTINGS_ITEM_ID, "系统设置", true, None);
+        let history_item = MenuItem::with_id(HISTORY_ITEM_ID, "历史记录", true, None);
+        let quit_item = MenuItem::with_id(QUIT_ITEM_ID, "退出", true, None);
 
-        menu.append_items(&[
-            &open_item,
-            &separator_a,
-            &record_item,
-            &history_item,
-            &settings_item,
-            &separator_b,
-            &quit_item,
-        ])
-        .map_err(|err| format!("Failed to build tray menu: {}", err))?;
+        menu.append_items(&[&open_item, &settings_item, &history_item, &quit_item])
+            .map_err(|err| format!("Failed to build tray menu: {}", err))?;
 
         let tray_icon = TrayIconBuilder::new()
             .with_id(TRAY_ICON_ID)
             .with_icon(icon_for_state(&model.icon_state).map_err(|err| err.to_string())?)
+            .with_icon_as_template(true)
             .with_tooltip(&model.tooltip)
             .with_menu(Box::new(menu))
-            .with_menu_on_left_click(false)
+            .with_menu_on_left_click(true)
             .build()
             .map_err(|err| format!("Failed to create tray icon: {}", err))?;
 
         let runtime = Self {
             tray_icon,
             open_item,
-            record_item,
             history_item,
             settings_item,
             quit_item,
@@ -190,10 +155,14 @@ impl TrayRuntime {
     }
 
     pub fn update(&self, model: &TrayMenuModel) -> Result<(), String> {
+        let icon = icon_for_state(&model.icon_state).map_err(|err| err.to_string())?;
+        #[cfg(target_os = "macos")]
         self.tray_icon
-            .set_icon(Some(
-                icon_for_state(&model.icon_state).map_err(|err| err.to_string())?,
-            ))
+            .set_icon_with_as_template(Some(icon), true)
+            .map_err(|err| format!("Failed to update tray icon: {}", err))?;
+        #[cfg(not(target_os = "macos"))]
+        self.tray_icon
+            .set_icon(Some(icon))
             .map_err(|err| format!("Failed to update tray icon: {}", err))?;
         self.tray_icon
             .set_tooltip(Some(&model.tooltip))
@@ -204,10 +173,6 @@ impl TrayRuntime {
                 Some(TrayAction::ShowMainWindow) => {
                     self.open_item.set_text(&item.label);
                     self.open_item.set_enabled(item.enabled);
-                }
-                Some(TrayAction::ToggleRecording) => {
-                    self.record_item.set_text(&item.label);
-                    self.record_item.set_enabled(item.enabled);
                 }
                 Some(TrayAction::OpenHistory) => {
                     self.history_item.set_text(&item.label);
@@ -221,7 +186,7 @@ impl TrayRuntime {
                     self.quit_item.set_text(&item.label);
                     self.quit_item.set_enabled(item.enabled);
                 }
-                None => {}
+                Some(TrayAction::ToggleRecording) | None => {}
             }
         }
 
@@ -234,8 +199,6 @@ impl TrayRuntime {
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == *self.open_item.id() {
                 events.push(PlatformTrayEvent::Action(TrayAction::ShowMainWindow));
-            } else if event.id == *self.record_item.id() {
-                events.push(PlatformTrayEvent::Action(TrayAction::ToggleRecording));
             } else if event.id == *self.history_item.id() {
                 events.push(PlatformTrayEvent::Action(TrayAction::OpenHistory));
             } else if event.id == *self.settings_item.id() {
@@ -267,10 +230,10 @@ impl TrayRuntime {
 pub fn translate_menu_event(event: MenuEvent) -> Option<PlatformTrayEvent> {
     match event.id.0.as_str() {
         OPEN_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::ShowMainWindow)),
-        RECORD_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::ToggleRecording)),
         HISTORY_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::OpenHistory)),
         SETTINGS_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::OpenSettings)),
         QUIT_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::Quit)),
+        RECORD_ITEM_ID => Some(PlatformTrayEvent::Action(TrayAction::ToggleRecording)),
         _ => None,
     }
 }
@@ -295,49 +258,27 @@ pub fn translate_tray_icon_event(event: TrayIconEvent) -> Option<PlatformTrayEve
 }
 
 fn icon_for_state(state: &str) -> Result<Icon, tray_icon::BadIcon> {
-    let (r, g, b) = match state {
-        "recording" => (0xD9, 0x5D, 0x39),
-        "transcribing" => (0xE0, 0xA4, 0x3A),
-        "rewriting" => (0x45, 0x79, 0xB5),
-        _ => (0x18, 0x23, 0x2F),
-    };
-
-    let size = 16u32;
-    let mut rgba = Vec::with_capacity((size * size * 4) as usize);
-    for y in 0..size {
-        for x in 0..size {
-            if is_mic_pixel(x, y) {
-                rgba.extend_from_slice(&[r, g, b, 255]);
-            } else {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
-            }
-        }
-    }
-
-    Icon::from_rgba(rgba, size, size)
+    let _ = state;
+    TRAY_ICON
+        .get_or_init(load_tray_icon)
+        .as_ref()
+        .map(Clone::clone)
+        .map_err(|_| tray_icon::BadIcon::ByteCountNotDivisibleBy4 {
+            byte_count: TRAY_ICON_BYTES.len(),
+        })
 }
 
-// 16×16 麦克风轮廓（根据 logo 主体简化）
-//
-//  ......XXXX......   row 1   顶部圆角
-//  .....XXXXXX.....   row 2-7 话筒主体
-//  ......XXXX......   row 8   底部圆角
-//  ....X......X....   row 9-10 支架两侧
-//  ....XXXXXXXX....   row 11  弧底
-//  .......XX.......   row 12-13 竖杆
-//  .....XXXXXX.....   row 14  底座
-//
-fn is_mic_pixel(x: u32, y: u32) -> bool {
-    match y {
-        1 => x >= 6 && x <= 9,
-        2..=7 => x >= 5 && x <= 10,
-        8 => x >= 6 && x <= 9,
-        9..=10 => x == 4 || x == 11,
-        11 => x >= 4 && x <= 11,
-        12..=13 => x == 7 || x == 8,
-        14 => x >= 5 && x <= 10,
-        _ => false,
-    }
+fn load_tray_icon() -> Result<Icon, String> {
+    let reader = ImageReader::new(Cursor::new(TRAY_ICON_BYTES))
+        .with_guessed_format()
+        .map_err(|err| format!("Failed to detect tray icon format: {}", err))?;
+    let image = reader
+        .decode()
+        .map_err(|err| format!("Failed to decode tray icon PNG: {}", err))?
+        .into_rgba8();
+    let (width, height) = image.dimensions();
+    Icon::from_rgba(image.into_raw(), width, height)
+        .map_err(|err| format!("Failed to build tray icon: {}", err))
 }
 
 #[cfg(test)]
@@ -349,6 +290,12 @@ mod tests {
         let model = build_tray_menu("Shanji", AppState::Recording, true);
 
         assert_eq!(model.icon_state, "recording");
-        assert!(model.inventory_text().contains("Stop recording"));
+        assert!(model.inventory_text().contains("显示主界面"));
+    }
+
+    #[test]
+    fn loads_embedded_tray_icon() {
+        let icon = load_tray_icon().expect("tray icon should decode");
+        let _ = icon;
     }
 }
