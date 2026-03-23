@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>使用说明 - 闪记 (Shanji)</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <style>
+        :root { --primary-color: #007AFF; --primary-hover: #0063CC; --text-color: #1d1d1f; --secondary-text: #86868b; --bg-color: #ffffff; --frame-bg: #1d1d1f; --frame-text: #ffffff; --frame-secondary: #a1a1a6; --border-color: #e5e5e5; --item-hover-bg: rgba(0,0,0,0.02); --sidebar-bg: #f5f5f7; --container-width: 1000px; }
+        [data-theme="dark"] { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255,255,255,0.05); --sidebar-bg: #0a0a0a; }
+        @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255,255,255,0.05); --sidebar-bg: #0a0a0a; } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: var(--text-color); background: var(--bg-color); -webkit-font-smoothing: antialiased; transition: background 0.3s, color 0.3s; }
+        header { background: var(--frame-bg); position: sticky; top: 0; z-index: 100; color: var(--frame-text); box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        nav { max-width: var(--container-width); margin: 0 auto; padding: 0.6rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .logo { text-decoration: none; display: flex; align-items: center; gap: 10px; }
+        .logo img { width: 28px; height: 28px; border-radius: 6px; }
+        .logo-text { display: flex; align-items: baseline; gap: 4px; }
+        .brand-name { font-size: 1.1rem; font-weight: 800; color: var(--frame-text); letter-spacing: -0.01em; }
+        .brand-tag { font-size: 0.8rem; font-weight: 400; color: var(--frame-secondary); }
+        .nav-links { display: flex; gap: 1.8rem; }
+        .nav-links a { text-decoration: none; color: var(--frame-secondary); font-size: 0.85rem; font-weight: 500; transition: color 0.2s; }
+        .nav-links a:hover, .nav-links a.active { color: var(--frame-text); }
+
+        /* Layout */
+        .doc-layout { max-width: var(--container-width); margin: 0 auto; padding: 3rem 2rem 5rem; display: flex; gap: 3.5rem; align-items: flex-start; }
+        .sidebar { width: 200px; flex-shrink: 0; position: sticky; top: 80px; }
+        .sidebar-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); margin-bottom: 0.8rem; }
+        .sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
+        .sidebar-nav a { font-size: 0.85rem; color: var(--secondary-text); text-decoration: none; padding: 5px 10px; border-radius: 7px; transition: all 0.15s; }
+        .sidebar-nav a:hover { background: var(--item-hover-bg); color: var(--text-color); }
+        .sidebar-nav a.active { background: var(--item-hover-bg); color: var(--primary-color); font-weight: 600; }
+        .doc-content { flex: 1; min-width: 0; }
+
+        /* Content styles */
+        .doc-section { margin-bottom: 4rem; }
+        .doc-section:last-child { margin-bottom: 0; }
+        .section-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--primary-color); margin-bottom: 0.5rem; }
+        .doc-section h2 { font-size: 1.5rem; font-weight: 800; margin-bottom: 1rem; letter-spacing: -0.01em; }
+        .doc-section h3 { font-size: 1.05rem; font-weight: 700; margin: 1.8rem 0 0.6rem; }
+        .doc-section p { font-size: 0.95rem; color: var(--secondary-text); margin-bottom: 0.8rem; line-height: 1.7; }
+        .doc-section p strong { color: var(--text-color); }
+        .step-list { list-style: none; display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 1rem; }
+        .step-list li { display: flex; gap: 0.8rem; align-items: flex-start; font-size: 0.95rem; color: var(--secondary-text); }
+        .step-num { width: 22px; height: 22px; border-radius: 50%; background: var(--primary-color); color: white; font-size: 0.72rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; }
+        .step-num.grey { background: var(--border-color); color: var(--secondary-text); }
+        .key-combo { display: inline-flex; align-items: center; gap: 3px; }
+        .key { display: inline-block; padding: 1px 7px; background: var(--item-hover-bg); border: 1px solid var(--border-color); border-radius: 5px; font-size: 0.8rem; font-family: "SF Mono", Menlo, monospace; color: var(--text-color); }
+        .info-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin: 1rem 0; }
+        .info-table th { text-align: left; padding: 8px 12px; background: var(--item-hover-bg); border-bottom: 2px solid var(--border-color); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--secondary-text); }
+        .info-table td { padding: 10px 12px; border-bottom: 1px solid var(--border-color); color: var(--secondary-text); }
+        .info-table td:first-child { color: var(--text-color); font-weight: 600; }
+        .tip-box { background: var(--item-hover-bg); border: 1px solid var(--border-color); border-left: 3px solid var(--primary-color); border-radius: 0 10px 10px 0; padding: 0.9rem 1.2rem; margin: 1rem 0; font-size: 0.88rem; color: var(--secondary-text); }
+        .tip-box strong { color: var(--text-color); }
+
+        /* Image placeholder */
+        .img-placeholder { width: 100%; aspect-ratio: 16/9; background: var(--item-hover-bg); border: 2px dashed var(--border-color); border-radius: 14px; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: 1.2rem 0; gap: 0.4rem; }
+        .img-placeholder span { font-size: 0.8rem; color: var(--secondary-text); }
+        .img-placeholder .img-label { font-weight: 600; font-size: 0.9rem; color: var(--text-color); }
+
+        /* Mode cards */
+        .mode-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin: 1rem 0; }
+        .mode-card { border: 1px solid var(--border-color); border-radius: 14px; padding: 1.2rem; }
+        .mode-card h4 { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.4rem; }
+        .mode-card p { font-size: 0.85rem; color: var(--secondary-text); margin: 0; }
+        .mode-card .tag { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 1px 8px; border-radius: 20px; background: rgba(0,122,255,0.1); color: var(--primary-color); margin-bottom: 0.6rem; }
+
+        footer { padding: 1.2rem 2rem; background: var(--frame-bg); color: #ffffff; text-align: center; font-size: 0.8rem; margin-top: 4rem; }
+        .footer-links { margin-bottom: 0.5rem; display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap; }
+        .footer-links a { color: #ffffff; text-decoration: none; opacity: 0.7; transition: opacity 0.2s; }
+        .footer-links a:hover { opacity: 1; }
+        .copyright { color: #a1a1a6; margin-top: 0.4rem; }
+        .copyright a { color: #ffffff; text-decoration: none; font-weight: 500; }
+
+        @media (max-width: 768px) {
+            .doc-layout { flex-direction: column; gap: 2rem; }
+            .sidebar { width: 100%; position: static; }
+            .sidebar-nav { flex-direction: row; flex-wrap: wrap; }
+            .mode-cards { grid-template-columns: 1fr; }
+            .nav-links { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="index.html" class="logo">
+                <img src="shanji_logo.png" alt="闪记 Logo">
+                <div class="logo-text"><span class="brand-name">闪记</span><span class="brand-tag">Shanji</span></div>
+            </a>
+            <div class="nav-links">
+                <a href="guide.html" class="active">使用说明</a>
+                <a href="faq.html">常见问题</a>
+                <a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a>
+                <a href="download.html">下载</a>
+            </div>
+        </nav>
+    </header>
+
+    <div class="doc-layout">
+        <aside class="sidebar">
+            <div class="sidebar-title">目录</div>
+            <nav class="sidebar-nav">
+                <a href="#quickstart">快速上手</a>
+                <a href="#model">下载模型</a>
+                <a href="#recording">录音模式</a>
+                <a href="#hotkey">快捷键</a>
+                <a href="#llm">LLM 润色</a>
+                <a href="#history">历史记录</a>
+                <a href="#hotwords">热词库</a>
+                <a href="#tray">系统托盘</a>
+            </nav>
+        </aside>
+
+        <main class="doc-content">
+
+            <!-- 快速上手 -->
+            <section class="doc-section" id="quickstart">
+                <div class="section-label">入门</div>
+                <h2>快速上手</h2>
+                <p>闪记安装完成后，只需几步即可开始使用语音输入。</p>
+                <ol class="step-list">
+                    <li><div class="step-num">1</div><div>安装并启动闪记，应用会出现在系统托盘（菜单栏）中。</div></li>
+                    <li><div class="step-num">2</div><div>首次使用需要在设置中<strong>下载语音识别模型</strong>，下载完成后即可离线使用。</div></li>
+                    <li><div class="step-num">3</div><div>授予应用<strong>麦克风权限</strong>（系统会自动提示）。</div></li>
+                    <li><div class="step-num">4</div><div>将光标定位到任意输入框，按下默认快捷键开始录音，说完再按一次，识别结果会自动贴入光标位置。</div></li>
+                </ol>
+                <div class="img-placeholder">
+                    <div class="img-label">图：首次启动引导界面</div>
+                    <span>截图待补充</span>
+                </div>
+            </section>
+
+            <!-- 下载模型 -->
+            <section class="doc-section" id="model">
+                <div class="section-label">配置</div>
+                <h2>下载语音识别模型</h2>
+                <p>闪记使用 <strong>FunASR Paraformer</strong> 进行本地语音识别，首次使用需要下载模型文件（约 200–400 MB），之后完全离线运行。</p>
+                <ol class="step-list">
+                    <li><div class="step-num">1</div><div>打开闪记主窗口，点击顶部的<strong>设置</strong>图标。</div></li>
+                    <li><div class="step-num">2</div><div>进入 <strong>ASR 模型</strong> 页面，选择需要的模型版本。</div></li>
+                    <li><div class="step-num">3</div><div>点击<strong>下载</strong>，等待下载完成（支持断点续传）。</div></li>
+                    <li><div class="step-num">4</div><div>模型加载完成后，状态栏会显示"就绪"。</div></li>
+                </ol>
+                <div class="tip-box"><strong>网络提示：</strong>国内用户如果下载较慢，可以在设置中启用代理，或手动放置模型文件到应用数据目录。</div>
+                <div class="img-placeholder">
+                    <div class="img-label">图：模型下载界面</div>
+                    <span>截图待补充</span>
+                </div>
+            </section>
+
+            <!-- 录音模式 -->
+            <section class="doc-section" id="recording">
+                <div class="section-label">核心功能</div>
+                <h2>录音模式</h2>
+                <p>闪记支持两种录音模式，适应不同的使用习惯：</p>
+                <div class="mode-cards">
+                    <div class="mode-card">
+                        <div class="tag">推荐</div>
+                        <h4>Toggle 模式</h4>
+                        <p>按一次快捷键开始录音，再按一次停止并输出结果。适合连续说较长内容的场景。</p>
+                    </div>
+                    <div class="mode-card">
+                        <div class="tag">Push-to-Talk</div>
+                        <h4>按住说话</h4>
+                        <p>按住快捷键说话，松开即停止录音并输出。适合偶发性输入，避免误触。</p>
+                    </div>
+                </div>
+                <p>可以在设置 → 录音模式 中切换，也可以通过快捷键在两种模式间快速切换。</p>
+                <div class="img-placeholder">
+                    <div class="img-label">图：录音中的悬浮窗（实时显示转写内容）</div>
+                    <span>截图待补充</span>
+                </div>
+            </section>
+
+            <!-- 快捷键 -->
+            <section class="doc-section" id="hotkey">
+                <div class="section-label">核心功能</div>
+                <h2>快捷键</h2>
+                <p>所有快捷键均可在设置中自定义，默认配置如下：</p>
+                <table class="info-table">
+                    <thead><tr><th>操作</th><th>默认快捷键（macOS）</th><th>说明</th></tr></thead>
+                    <tbody>
+                        <tr><td>开始 / 停止录音</td><td><span class="key-combo"><span class="key">⌥</span><span class="key">Space</span></span></td><td>Toggle 模式主键</td></tr>
+                        <tr><td>按住说话</td><td><span class="key-combo"><span class="key">⌥</span><span class="key">Z</span></span></td><td>按住录音，松开输出</td></tr>
+                        <tr><td>切换润色开关</td><td><span class="key-combo"><span class="key">⌥</span><span class="key">P</span></span></td><td>快速开启/关闭 LLM 润色</td></tr>
+                        <tr><td>打开历史记录</td><td><span class="key-combo"><span class="key">⌥</span><span class="key">H</span></span></td><td>打开历史面板</td></tr>
+                        <tr><td>打开主窗口</td><td><span class="key-combo"><span class="key">⌥</span><span class="key">S</span></span></td><td>唤起主界面</td></tr>
+                    </tbody>
+                </table>
+                <div class="tip-box"><strong>与其他应用冲突？</strong>在设置 → 快捷键 中修改为其他组合键即可，支持所有常见修饰键。</div>
+            </section>
+
+            <!-- LLM 润色 -->
+            <section class="doc-section" id="llm">
+                <div class="section-label">进阶功能</div>
+                <h2>LLM 润色</h2>
+                <p>开启 LLM 润色后，识别结果会先发送给配置的 AI 接口进行轻度整理，再贴入光标位置。<strong>只有文字发送给 LLM，音频始终留在本地。</strong></p>
+
+                <h3>配置步骤</h3>
+                <ol class="step-list">
+                    <li><div class="step-num">1</div><div>在设置 → LLM 润色 中填写服务商的 <strong>Base URL</strong> 和 <strong>API Key</strong>。</div></li>
+                    <li><div class="step-num">2</div><div>填写模型名称（如 <code style="font-family:monospace;font-size:0.85em;">gpt-4o-mini</code>、<code style="font-family:monospace;font-size:0.85em;">deepseek-chat</code>）。</div></li>
+                    <li><div class="step-num">3</div><div>选择一个内置提示词预设，或自定义 System Prompt。</div></li>
+                    <li><div class="step-num">4</div><div>保存后，通过快捷键切换润色开关即可生效。</div></li>
+                </ol>
+
+                <h3>支持的服务商</h3>
+                <p>兼容所有 OpenAI API 风格的接口，包括：</p>
+                <table class="info-table">
+                    <thead><tr><th>服务商</th><th>Base URL</th></tr></thead>
+                    <tbody>
+                        <tr><td>OpenAI</td><td>https://api.openai.com/v1</td></tr>
+                        <tr><td>DeepSeek</td><td>https://api.deepseek.com/v1</td></tr>
+                        <tr><td>阿里云百炼</td><td>https://dashscope.aliyuncs.com/compatible-mode/v1</td></tr>
+                        <tr><td>月之暗面 (Kimi)</td><td>https://api.moonshot.cn/v1</td></tr>
+                        <tr><td>智谱 AI</td><td>https://open.bigmodel.cn/api/paas/v4</td></tr>
+                        <tr><td>Ollama（本地）</td><td>http://localhost:11434/v1</td></tr>
+                    </tbody>
+                </table>
+
+                <h3>内置提示词预设</h3>
+                <table class="info-table">
+                    <thead><tr><th>预设名称</th><th>适用场景</th></tr></thead>
+                    <tbody>
+                        <tr><td>轻度整理</td><td>去除语气词、修正明显错字，保留原意和口语感</td></tr>
+                        <tr><td>书面化</td><td>转换为正式书面表达，适合邮件、文档</td></tr>
+                        <tr><td>结构化</td><td>将散乱表达整理为分点或段落结构</td></tr>
+                    </tbody>
+                </table>
+
+                <div class="img-placeholder">
+                    <div class="img-label">图：LLM 润色配置界面</div>
+                    <span>截图待补充</span>
+                </div>
+            </section>
+
+            <!-- 历史记录 -->
+            <section class="doc-section" id="history">
+                <div class="section-label">功能</div>
+                <h2>历史记录</h2>
+                <p>闪记会自动保存每次识别的结果，持久化存储在本地 SQLite 数据库中。</p>
+                <h3>你可以做什么</h3>
+                <ol class="step-list">
+                    <li><div class="step-num grey">·</div><div><strong>查看和搜索</strong>：支持全文搜索，快速找回之前的输入内容。</div></li>
+                    <li><div class="step-num grey">·</div><div><strong>复制</strong>：一键复制历史条目的原始识别结果或润色后的文字。</div></li>
+                    <li><div class="step-num grey">·</div><div><strong>音频回放</strong>：回放对应的录音片段，确认识别准确性。</div></li>
+                    <li><div class="step-num grey">·</div><div><strong>重新转写</strong>：对同一段音频重新进行识别（切换模型后可用）。</div></li>
+                    <li><div class="step-num grey">·</div><div><strong>删除</strong>：删除单条记录或批量清除。</div></li>
+                </ol>
+                <div class="tip-box">历史记录文件位于 <code style="font-family:monospace;font-size:0.85em;">$APP_DATA/shanji/history.db</code>，可以自行备份。</div>
+                <div class="img-placeholder">
+                    <div class="img-label">图：历史记录面板</div>
+                    <span>截图待补充</span>
+                </div>
+            </section>
+
+            <!-- 热词库 -->
+            <section class="doc-section" id="hotwords">
+                <div class="section-label">功能</div>
+                <h2>热词库</h2>
+                <p>热词库可以提升特定领域词汇的识别准确率，尤其是人名、品牌名、专业术语等。</p>
+                <h3>内置词库</h3>
+                <p>闪记预置了多个领域的热词库，可按需开启：</p>
+                <ol class="step-list">
+                    <li><div class="step-num grey">·</div><div>AI 编码与技术</div></li>
+                    <li><div class="step-num grey">·</div><div>计算机与互联网</div></li>
+                    <li><div class="step-num grey">·</div><div>跨境电商</div></li>
+                    <li><div class="step-num grey">·</div><div>自媒体与内容创作</div></li>
+                    <li><div class="step-num grey">·</div><div>网络流行语</div></li>
+                </ol>
+                <h3>自定义词库</h3>
+                <p>在设置 → 热词库 中，可以导入自定义词表文件（每行一个词），或直接在界面中编辑。每个词库可以独立开启或关闭。</p>
+                <div class="img-placeholder">
+                    <div class="img-label">图：热词库管理界面</div>
+                    <span>截图待补充</span>
+                </div>
+            </section>
+
+            <!-- 系统托盘 -->
+            <section class="doc-section" id="tray">
+                <div class="section-label">功能</div>
+                <h2>系统托盘</h2>
+                <p>闪记以系统托盘图标常驻后台，不占用 Dock 或任务栏空间。通过托盘图标可以：</p>
+                <ol class="step-list">
+                    <li><div class="step-num grey">·</div><div>查看当前状态（就绪 / 录音中 / 处理中）</div></li>
+                    <li><div class="step-num grey">·</div><div>快速打开主窗口、设置或历史记录</div></li>
+                    <li><div class="step-num grey">·</div><div>切换 LLM 润色开关</div></li>
+                    <li><div class="step-num grey">·</div><div>退出应用</div></li>
+                </ol>
+                <div class="tip-box">建议将闪记设置为<strong>开机自启</strong>，在设置 → 通用 中开启，这样每次开机后即可直接使用快捷键。</div>
+            </section>
+
+        </main>
+    </div>
+
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="index.html">官网首页</a>
+                <a href="guide.html">使用说明</a>
+                <a href="faq.html">常见问题</a>
+                <a href="privacy.html">隐私政策</a>
+                <a href="contact.html">联系我们</a>
+                <a href="contact.html#donate">支持项目</a>
+            </div>
+            <p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank">与或科技</a>. MIT Licensed.</p>
+        </div>
+    </footer>
+
+    <script>
+        function updateTheme() { const h = new Date().getHours(); const html = document.documentElement; if ((h < 6 || h >= 18) && !window.matchMedia('(prefers-color-scheme: light)').matches) html.setAttribute('data-theme', 'dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) html.setAttribute('data-theme', 'dark'); else html.removeAttribute('data-theme'); }
+        updateTheme(); window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
+
+        // Sidebar active state on scroll
+        const sections = document.querySelectorAll('.doc-section');
+        const links = document.querySelectorAll('.sidebar-nav a');
+        const observer = new IntersectionObserver(entries => {
+            entries.forEach(e => {
+                if (e.isIntersecting) {
+                    links.forEach(l => l.classList.remove('active'));
+                    const active = document.querySelector(`.sidebar-nav a[href="#${e.target.id}"]`);
+                    if (active) active.classList.add('active');
+                }
+            });
+        }, { rootMargin: '-20% 0px -70% 0px' });
+        sections.forEach(s => observer.observe(s));
+    </script>
+</body>
+</html>

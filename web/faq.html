@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>常见问题 - 闪记 (Shanji)</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <style>
+        :root { --primary-color: #007AFF; --primary-hover: #0063CC; --text-color: #1d1d1f; --secondary-text: #86868b; --bg-color: #ffffff; --frame-bg: #1d1d1f; --frame-text: #ffffff; --frame-secondary: #a1a1a6; --border-color: #e5e5e5; --item-hover-bg: rgba(0,0,0,0.02); --container-width: 1000px; }
+        [data-theme="dark"] { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255,255,255,0.05); }
+        @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255,255,255,0.05); } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: var(--text-color); background: var(--bg-color); -webkit-font-smoothing: antialiased; transition: background 0.3s, color 0.3s; }
+        header { background: var(--frame-bg); position: sticky; top: 0; z-index: 100; color: var(--frame-text); box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        nav { max-width: var(--container-width); margin: 0 auto; padding: 0.6rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .logo { text-decoration: none; display: flex; align-items: center; gap: 10px; }
+        .logo img { width: 28px; height: 28px; border-radius: 6px; }
+        .logo-text { display: flex; align-items: baseline; gap: 4px; }
+        .brand-name { font-size: 1.1rem; font-weight: 800; color: var(--frame-text); letter-spacing: -0.01em; }
+        .brand-tag { font-size: 0.8rem; font-weight: 400; color: var(--frame-secondary); }
+        .nav-links { display: flex; gap: 1.8rem; }
+        .nav-links a { text-decoration: none; color: var(--frame-secondary); font-size: 0.85rem; font-weight: 500; transition: color 0.2s; }
+        .nav-links a:hover, .nav-links a.active { color: var(--frame-text); }
+
+        .container { max-width: var(--container-width); margin: 0 auto; padding: 0 2rem; }
+        .hero { margin: 5rem auto 3.5rem; text-align: center; }
+        .hero h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: 0.6rem; }
+        .hero p { color: var(--secondary-text); font-size: 1rem; }
+
+        .faq-body { max-width: 720px; margin: 0 auto; padding-bottom: 6rem; }
+        .faq-group { margin-bottom: 3rem; }
+        .faq-group-title { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--primary-color); margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--border-color); }
+
+        .faq-item { border-bottom: 1px solid var(--border-color); }
+        .faq-question { width: 100%; background: none; border: none; text-align: left; padding: 1.1rem 0; font-size: 0.97rem; font-weight: 600; color: var(--text-color); cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+        .faq-question:hover { color: var(--primary-color); }
+        .faq-icon { width: 18px; height: 18px; flex-shrink: 0; border: 1.5px solid var(--border-color); border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: transform 0.25s, border-color 0.2s; }
+        .faq-icon svg { width: 10px; height: 10px; fill: none; stroke: var(--secondary-text); stroke-width: 2.5; stroke-linecap: round; transition: stroke 0.2s; }
+        .faq-item.open .faq-icon { transform: rotate(45deg); border-color: var(--primary-color); }
+        .faq-item.open .faq-icon svg { stroke: var(--primary-color); }
+        .faq-answer { max-height: 0; overflow: hidden; transition: max-height 0.3s ease, padding 0.3s ease; }
+        .faq-answer-inner { padding: 0 0 1.2rem; font-size: 0.92rem; color: var(--secondary-text); line-height: 1.75; }
+        .faq-answer-inner a { color: var(--primary-color); text-decoration: none; }
+        .faq-answer-inner a:hover { text-decoration: underline; }
+        .faq-answer-inner code { font-family: "SF Mono", Menlo, monospace; font-size: 0.85em; background: var(--item-hover-bg); padding: 1px 5px; border-radius: 4px; }
+        .faq-item.open .faq-answer { max-height: 600px; }
+
+        .still-stuck { margin-top: 3rem; padding: 1.5rem 2rem; background: var(--item-hover-bg); border: 1px solid var(--border-color); border-radius: 16px; text-align: center; }
+        .still-stuck p { color: var(--secondary-text); font-size: 0.92rem; margin-bottom: 0.8rem; }
+        .still-stuck a { display: inline-flex; align-items: center; gap: 6px; padding: 0.5rem 1.2rem; background: var(--primary-color); color: white; border-radius: 8px; text-decoration: none; font-size: 0.88rem; font-weight: 600; transition: background 0.2s; }
+        .still-stuck a:hover { background: var(--primary-hover); }
+
+        footer { padding: 1.2rem 2rem; background: var(--frame-bg); color: #ffffff; text-align: center; font-size: 0.8rem; margin-top: 4rem; }
+        .footer-links { margin-bottom: 0.5rem; display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap; }
+        .footer-links a { color: #ffffff; text-decoration: none; opacity: 0.7; transition: opacity 0.2s; }
+        .footer-links a:hover { opacity: 1; }
+        .copyright { color: #a1a1a6; margin-top: 0.4rem; }
+        .copyright a { color: #ffffff; text-decoration: none; font-weight: 500; }
+        @media (max-width: 768px) { .nav-links { display: none; } }
+    </style>
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="index.html" class="logo">
+                <img src="shanji_logo.png" alt="闪记 Logo">
+                <div class="logo-text"><span class="brand-name">闪记</span><span class="brand-tag">Shanji</span></div>
+            </a>
+            <div class="nav-links">
+                <a href="guide.html">使用说明</a>
+                <a href="faq.html" class="active">常见问题</a>
+                <a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a>
+                <a href="download.html">下载</a>
+            </div>
+        </nav>
+    </header>
+
+    <main class="container">
+        <div class="hero">
+            <h1>常见问题</h1>
+            <p>找不到答案？欢迎在 <a href="https://github.com/yuhuotech/shanji-app/issues" target="_blank" style="color:var(--primary-color);">GitHub Issues</a> 提问。</p>
+        </div>
+
+        <div class="faq-body">
+
+            <div class="faq-group">
+                <div class="faq-group-title">安装与启动</div>
+
+                <div class="faq-item">
+                    <button class="faq-question">启动后没有任何识别结果，怎么回事？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        请依次排查：<br>
+                        1. <strong>模型是否已下载</strong>：在设置 → ASR 模型 中确认模型状态为"已加载"。<br>
+                        2. <strong>麦克风权限</strong>：系统设置 → 隐私与安全性 → 麦克风，确认闪记已获得授权。<br>
+                        3. <strong>录音设备</strong>：在设置 → 音频 中确认选择了正确的输入设备。<br>
+                        4. <strong>快捷键冲突</strong>：尝试在设置中修改快捷键，看是否与其他应用冲突。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">模型下载失败或速度很慢？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        模型文件托管在 GitHub，国内访问速度可能受限。建议：<br>
+                        · 在设置中配置网络代理；<br>
+                        · 或手动下载模型文件后放置到应用数据目录（路径见设置 → ASR 模型）。<br>
+                        下载支持断点续传，中断后重新点击下载即可继续。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">支持哪些操作系统？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        · <strong>macOS</strong>：12.0 及以上，支持 Apple Silicon（推荐）和 Intel。<br>
+                        · <strong>Windows</strong>：Windows 10 / 11，64-bit。<br>
+                        · <strong>Linux</strong>：Ubuntu 22.04 / Debian 12 及兼容发行版，提供 .deb、.rpm、.tar.gz 格式。
+                    </div></div>
+                </div>
+            </div>
+
+            <div class="faq-group">
+                <div class="faq-group-title">使用与输出</div>
+
+                <div class="faq-item">
+                    <button class="faq-question">自动粘贴失败，文字没有出现在输入框？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        部分系统或应用限制了输入模拟权限。<br>
+                        · <strong>macOS</strong>：需要在系统设置 → 隐私与安全性 → 辅助功能 中授权闪记。<br>
+                        · 授权后如仍失败，在设置 → 输出 中开启"剪贴板回退"，文字会自动复制到剪贴板，手动 Cmd+V 粘贴即可。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">快捷键和我其他软件冲突了怎么办？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        在设置 → 快捷键 中修改为任意其他组合键。推荐使用不常用的修饰键组合，例如 <code>⌃⌥</code> + 字母。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">识别结果有错别字，能不能提高准确率？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        可以从以下几个方向改善：<br>
+                        · 开启<strong>热词库</strong>中与你使用场景匹配的词库，或添加自定义热词；<br>
+                        · 开启 <strong>LLM 润色</strong>的"轻度整理"预设，可自动修正常见错字；<br>
+                        · 确认麦克风质量和录音环境，背景噪音会明显影响准确率。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">支持哪两种录音模式，有什么区别？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        · <strong>Toggle 模式</strong>：按一次开始录音，再按一次停止并输出。适合连续说较长内容。<br>
+                        · <strong>Push-to-Talk</strong>：按住快捷键说话，松开后立即输出。适合偶发性输入，不用担心误触。<br>
+                        可在设置 → 录音模式 中切换。
+                    </div></div>
+                </div>
+            </div>
+
+            <div class="faq-group">
+                <div class="faq-group-title">LLM 润色</div>
+
+                <div class="faq-item">
+                    <button class="faq-question">支持哪些 LLM 服务？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        兼容所有 OpenAI API 风格的接口，包括 OpenAI、DeepSeek、阿里云百炼、月之暗面（Kimi）、智谱 AI、Ollama 等。在设置中填写对应的 Base URL 和 API Key 即可。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">LLM 润色会把我的音频发送出去吗？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        <strong>不会。</strong>音频始终在本地处理，发送给 LLM 的只有语音识别后的文字内容。详见 <a href="privacy.html">隐私政策</a>。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">不想用 LLM，可以只用本地识别吗？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        完全可以。LLM 润色默认关闭，不配置 API Key 时识别结果直接输出，全程不需要联网。
+                    </div></div>
+                </div>
+            </div>
+
+            <div class="faq-group">
+                <div class="faq-group-title">隐私与数据</div>
+
+                <div class="faq-item">
+                    <button class="faq-question">我的音频数据会上传到云端吗？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        <strong>不会。</strong>语音识别完全在本地通过 ONNX Runtime 完成，音频数据不会离开你的设备。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">本地存储了哪些数据？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        · <code>config.json</code>：应用配置（不含 API Key 明文）<br>
+                        · <code>history.db</code>：历史识别记录（SQLite）<br>
+                        · <code>models/</code>：下载的 ONNX 模型文件<br>
+                        · 音频片段（如开启录音保存功能）<br>
+                        API Key 保存在系统钥匙串（Keychain），不写入配置文件。
+                    </div></div>
+                </div>
+
+                <div class="faq-item">
+                    <button class="faq-question">需要联网才能使用吗？<div class="faq-icon"><svg viewBox="0 0 12 12"><path d="M6 2v8M2 6h8"/></svg></div></button>
+                    <div class="faq-answer"><div class="faq-answer-inner">
+                        本地语音识别<strong>完全离线</strong>，无需联网。以下情况需要网络：<br>
+                        · 首次下载模型文件；<br>
+                        · 使用 LLM 润色功能（调用远程 API）；<br>
+                        · 使用 Ollama 等本地服务时无需联网。
+                    </div></div>
+                </div>
+            </div>
+
+            <div class="still-stuck">
+                <p>没找到你的问题？</p>
+                <a href="https://github.com/yuhuotech/shanji-app/issues" target="_blank">在 GitHub 提问</a>
+            </div>
+
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="index.html">官网首页</a>
+                <a href="guide.html">使用说明</a>
+                <a href="faq.html">常见问题</a>
+                <a href="privacy.html">隐私政策</a>
+                <a href="contact.html">联系我们</a>
+                <a href="contact.html#donate">支持项目</a>
+            </div>
+            <p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank">与或科技</a>. MIT Licensed.</p>
+        </div>
+    </footer>
+
+    <script>
+        function updateTheme() { const h = new Date().getHours(); const html = document.documentElement; if ((h < 6 || h >= 18) && !window.matchMedia('(prefers-color-scheme: light)').matches) html.setAttribute('data-theme', 'dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) html.setAttribute('data-theme', 'dark'); else html.removeAttribute('data-theme'); }
+        updateTheme(); window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
+
+        document.querySelectorAll('.faq-question').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const item = btn.parentElement;
+                const isOpen = item.classList.contains('open');
+                document.querySelectorAll('.faq-item.open').forEach(el => el.classList.remove('open'));
+                if (!isOpen) item.classList.add('open');
+            });
+        });
+    </script>
+</body>
+</html>

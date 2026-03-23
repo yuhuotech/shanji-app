@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>联系我们 - 闪记 (Shanji)</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <style>
+        :root { --primary-color: #007AFF; --primary-hover: #0063CC; --text-color: #1d1d1f; --secondary-text: #86868b; --bg-color: #ffffff; --frame-bg: #1d1d1f; --frame-text: #ffffff; --frame-secondary: #a1a1a6; --border-color: #e5e5e5; --item-hover-bg: rgba(0,0,0,0.02); --container-width: 1000px; }
+        [data-theme="dark"] { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255,255,255,0.05); }
+        @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255,255,255,0.05); } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: var(--text-color); background: var(--bg-color); -webkit-font-smoothing: antialiased; transition: background 0.3s, color 0.3s; }
+        header { background: var(--frame-bg); position: sticky; top: 0; z-index: 100; color: var(--frame-text); box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        nav { max-width: var(--container-width); margin: 0 auto; padding: 0.6rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .logo { text-decoration: none; display: flex; align-items: center; gap: 10px; }
+        .logo img { width: 28px; height: 28px; border-radius: 6px; }
+        .logo-text { display: flex; align-items: baseline; gap: 4px; }
+        .brand-name { font-size: 1.1rem; font-weight: 800; color: var(--frame-text); letter-spacing: -0.01em; }
+        .brand-tag { font-size: 0.8rem; font-weight: 400; color: var(--frame-secondary); }
+        .nav-links { display: flex; gap: 1.8rem; }
+        .nav-links a { text-decoration: none; color: var(--frame-secondary); font-size: 0.85rem; font-weight: 500; transition: color 0.2s; }
+        .nav-links a:hover { color: var(--frame-text); }
+
+        .container { max-width: var(--container-width); margin: 0 auto; padding: 0 2rem; }
+        .hero { margin: 5rem auto 3.5rem; text-align: center; }
+        .hero h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: 0.6rem; }
+        .hero p { color: var(--secondary-text); font-size: 1rem; }
+
+        .page-body { max-width: 760px; margin: 0 auto; padding-bottom: 6rem; display: flex; flex-direction: column; gap: 3rem; }
+
+        /* Section header */
+        .section-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--primary-color); margin-bottom: 1rem; }
+        .section-heading { font-size: 1.3rem; font-weight: 800; margin-bottom: 0.5rem; }
+        .section-desc { font-size: 0.9rem; color: var(--secondary-text); margin-bottom: 1.5rem; line-height: 1.65; }
+
+        /* Contact card */
+        .contact-card { display: flex; align-items: center; gap: 1rem; padding: 1.2rem 1.4rem; border: 1px solid var(--border-color); border-radius: 14px; text-decoration: none; color: var(--text-color); transition: all 0.2s; }
+        .contact-card:hover { border-color: var(--primary-color); transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+        .contact-icon { width: 42px; height: 42px; border-radius: 10px; background: var(--item-hover-bg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+        .contact-icon svg { width: 20px; height: 20px; fill: var(--text-color); }
+        .contact-info .label { font-weight: 600; font-size: 0.95rem; }
+        .contact-info .sub { font-size: 0.83rem; color: var(--secondary-text); margin-top: 1px; }
+
+        /* VIP group */
+        .vip-card { border: 1px solid var(--border-color); border-radius: 16px; overflow: hidden; }
+        .vip-header { padding: 1.2rem 1.4rem; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; gap: 0.8rem; }
+        .vip-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; background: linear-gradient(135deg, #FF9500, #FF6B00); color: white; border-radius: 20px; font-size: 0.75rem; font-weight: 700; }
+        .vip-title { font-weight: 700; font-size: 1rem; }
+        .vip-body { display: grid; grid-template-columns: 1fr auto; gap: 1.5rem; padding: 1.4rem; align-items: start; }
+        .vip-desc { font-size: 0.9rem; color: var(--secondary-text); line-height: 1.7; }
+        .vip-desc strong { color: var(--text-color); }
+        .vip-desc .steps { margin-top: 0.8rem; display: flex; flex-direction: column; gap: 0.4rem; }
+        .vip-desc .step { display: flex; gap: 0.6rem; align-items: flex-start; }
+        .step-dot { width: 18px; height: 18px; border-radius: 50%; background: var(--primary-color); color: white; font-size: 0.65rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-top: 2px; }
+        .qr-placeholder { width: 120px; height: 120px; background: var(--item-hover-bg); border: 2px dashed var(--border-color); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; flex-shrink: 0; }
+        .qr-placeholder span { font-size: 0.65rem; color: var(--secondary-text); text-align: center; line-height: 1.3; }
+        .qr-placeholder .qr-icon { font-size: 1.6rem; }
+
+        /* Donate section */
+        .donate-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+        .donate-card { border: 1px solid var(--border-color); border-radius: 16px; padding: 1.4rem; display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+        .donate-card .pay-label { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 0.95rem; }
+        .pay-icon { width: 22px; height: 22px; border-radius: 5px; }
+        .donate-qr { width: 150px; height: 150px; background: var(--item-hover-bg); border: 2px dashed var(--border-color); border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; }
+        .donate-qr .qr-icon { font-size: 2rem; }
+        .donate-qr span { font-size: 0.7rem; color: var(--secondary-text); text-align: center; }
+        .donate-note { font-size: 0.8rem; color: var(--secondary-text); text-align: center; }
+
+        .donate-thanks { margin-top: 1rem; padding: 1rem 1.4rem; background: var(--item-hover-bg); border-radius: 12px; font-size: 0.88rem; color: var(--secondary-text); text-align: center; line-height: 1.6; }
+        .donate-thanks strong { color: var(--text-color); }
+
+        footer { padding: 1.2rem 2rem; background: var(--frame-bg); color: #ffffff; text-align: center; font-size: 0.8rem; margin-top: 4rem; }
+        .footer-links { margin-bottom: 0.5rem; display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap; }
+        .footer-links a { color: #ffffff; text-decoration: none; opacity: 0.7; transition: opacity 0.2s; }
+        .footer-links a:hover { opacity: 1; }
+        .copyright { color: #a1a1a6; margin-top: 0.4rem; }
+        .copyright a { color: #ffffff; text-decoration: none; font-weight: 500; }
+        @media (max-width: 600px) {
+            .donate-cards { grid-template-columns: 1fr; }
+            .vip-body { grid-template-columns: 1fr; }
+            .nav-links { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="index.html" class="logo">
+                <img src="shanji_logo.png" alt="闪记 Logo">
+                <div class="logo-text"><span class="brand-name">闪记</span><span class="brand-tag">Shanji</span></div>
+            </a>
+            <div class="nav-links">
+                <a href="guide.html">使用说明</a>
+                <a href="faq.html">常见问题</a>
+                <a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a>
+                <a href="download.html">下载</a>
+            </div>
+        </nav>
+    </header>
+
+    <main class="container">
+        <div class="hero">
+            <h1>联系与支持</h1>
+            <p>有问题、建议，或想支持这个项目，都可以在这里找到入口。</p>
+        </div>
+
+        <div class="page-body">
+
+            <!-- 联系我们 -->
+            <div>
+                <div class="section-title">联系我们</div>
+                <div class="section-heading">有问题尽管说</div>
+                <p class="section-desc">无论是 Bug 反馈、功能建议，还是合作咨询，都欢迎联系。</p>
+                <div style="display: flex; flex-direction: column; gap: 0.8rem;">
+                    <a href="mailto:shanji@yuhuotech.com" class="contact-card">
+                        <div class="contact-icon">
+                            <svg viewBox="0 0 24 24"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 4l-8 5-8-5V6l8 5 8-5v2z"/></svg>
+                        </div>
+                        <div class="contact-info">
+                            <div class="label">发送邮件</div>
+                            <div class="sub">shanji@yuhuotech.com</div>
+                        </div>
+                    </a>
+                    <a href="https://github.com/yuhuotech/shanji-app/issues" target="_blank" class="contact-card">
+                        <div class="contact-icon">
+                            <svg viewBox="0 0 24 24"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
+                        </div>
+                        <div class="contact-info">
+                            <div class="label">GitHub Issues</div>
+                            <div class="sub">提交 Bug 或功能建议</div>
+                        </div>
+                    </a>
+                </div>
+            </div>
+
+            <!-- VIP 服务群 -->
+            <div>
+                <div class="section-title">社区</div>
+                <div class="section-heading">VIP 服务群</div>
+                <p class="section-desc">面向捐赠用户的专属交流群，在群内可以第一时间获取版本更新、优先反馈问题，也欢迎交流使用心得。</p>
+                <div class="vip-card">
+                    <div class="vip-header">
+                        <div class="vip-badge">⭐ VIP</div>
+                        <div class="vip-title">闪记捐赠用户服务群</div>
+                    </div>
+                    <div class="vip-body">
+                        <div class="vip-desc">
+                            <strong>如何加入：</strong>
+                            <div class="steps">
+                                <div class="step"><div class="step-dot">1</div><div>在下方完成任意金额的捐赠</div></div>
+                                <div class="step"><div class="step-dot">2</div><div>扫码添加群二维码，备注<strong>捐赠订单号</strong>（支付宝 / 微信账单中可查看）</div></div>
+                                <div class="step"><div class="step-dot">3</div><div>验证通过后即可加入</div></div>
+                            </div>
+                        </div>
+                        <div class="qr-placeholder">
+                            <div class="qr-icon">💬</div>
+                            <span>群二维码<br>待添加</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 捐赠 -->
+            <div id="donate">
+                <div class="section-title">支持项目</div>
+                <div class="section-heading">请开发者喝杯咖啡</div>
+                <p class="section-desc">闪记是免费开源项目，如果它帮到了你，可以考虑请开发者喝杯咖啡。你的支持会直接投入到功能开发和持续维护中。</p>
+                <div class="donate-cards">
+                    <div class="donate-card">
+                        <div class="pay-label">
+                            <svg class="pay-icon" viewBox="0 0 40 40" fill="none">
+                                <rect width="40" height="40" rx="8" fill="#07C160"/>
+                                <path d="M28.5 17.5c0-4.14-4.03-7.5-9-7.5s-9 3.36-9 7.5c0 3.71 3.11 6.82 7.34 7.36.29.06.68.2.78.45.09.22.06.57.03.8l-.13.76c-.04.22-.18.87.76.47.94-.4 5.07-2.99 6.92-5.12 1.28-1.4 1.3-2.56 2.3-3.72z" fill="white"/>
+                                <path d="M35 20.5c0-3.59-3.58-6.5-8-6.5s-8 2.91-8 6.5S22.58 27 27 27c.73 0 1.44-.09 2.1-.26l2.4 1.26-.47-1.88C33.12 25.12 35 22.93 35 20.5z" fill="#07C160"/>
+                                <circle cx="22" cy="20.5" r="1" fill="white"/>
+                                <circle cx="27" cy="20.5" r="1" fill="white"/>
+                                <circle cx="32" cy="20.5" r="1" fill="white"/>
+                            </svg>
+                            微信支付
+                        </div>
+                        <div class="donate-qr">
+                            <div class="qr-icon">📱</div>
+                            <span>微信收款码<br>待添加</span>
+                        </div>
+                        <div class="donate-note">扫码后备注「闪记捐赠」</div>
+                    </div>
+                    <div class="donate-card">
+                        <div class="pay-label">
+                            <svg class="pay-icon" viewBox="0 0 40 40" fill="none">
+                                <rect width="40" height="40" rx="8" fill="#1677FF"/>
+                                <path d="M8 22.5c0 0 8.5-1.5 14 2.5 5.5 4 10 2 10 2S26.5 30 21 27c-5.5-3-13-4.5-13-4.5z" fill="#00AAEE"/>
+                                <path d="M10 13h20v2H10z" fill="white"/>
+                                <path d="M10 17h20v2H10z" fill="white"/>
+                                <path d="M10 21h8v2H10z" fill="white"/>
+                            </svg>
+                            支付宝
+                        </div>
+                        <div class="donate-qr">
+                            <div class="qr-icon">📱</div>
+                            <span>支付宝收款码<br>待添加</span>
+                        </div>
+                        <div class="donate-note">扫码后备注「闪记捐赠」</div>
+                    </div>
+                </div>
+                <div class="donate-thanks">
+                    感谢每一位支持者 ❤️<br>
+                    <strong>捐赠不设门槛，一杯奶茶的金额就很暖心。</strong>
+                </div>
+            </div>
+
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="index.html">官网首页</a>
+                <a href="guide.html">使用说明</a>
+                <a href="faq.html">常见问题</a>
+                <a href="privacy.html">隐私政策</a>
+                <a href="contact.html">联系我们</a>
+                <a href="contact.html#donate">支持项目</a>
+            </div>
+            <p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank">与或科技</a>. MIT Licensed.</p>
+        </div>
+    </footer>
+
+    <script>
+        function updateTheme() { const h = new Date().getHours(); const html = document.documentElement; if ((h < 6 || h >= 18) && !window.matchMedia('(prefers-color-scheme: light)').matches) html.setAttribute('data-theme', 'dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) html.setAttribute('data-theme', 'dark'); else html.removeAttribute('data-theme'); }
+        updateTheme(); window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
+    </script>
+</body>
+</html>

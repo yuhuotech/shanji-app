@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>隐私政策 - 闪记 (Shanji)</title>
+    <link rel="icon" href="favicon.ico" type="image/x-icon">
+    <style>
+        :root { --primary-color: #007AFF; --primary-hover: #0063CC; --text-color: #1d1d1f; --secondary-text: #86868b; --bg-color: #ffffff; --frame-bg: #1d1d1f; --frame-text: #ffffff; --frame-secondary: #a1a1a6; --border-color: #e5e5e5; --item-hover-bg: rgba(0,0,0,0.02); --container-width: 1000px; }
+        [data-theme="dark"] { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255,255,255,0.05); }
+        @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --text-color: #f5f5f7; --secondary-text: #a1a1a6; --bg-color: #000000; --frame-bg: #161617; --frame-text: #f5f5f7; --frame-secondary: #86868b; --border-color: #2c2c2e; --item-hover-bg: rgba(255,255,255,0.05); } }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; line-height: 1.6; color: var(--text-color); background: var(--bg-color); -webkit-font-smoothing: antialiased; transition: background 0.3s, color 0.3s; }
+        header { background: var(--frame-bg); position: sticky; top: 0; z-index: 100; color: var(--frame-text); box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        nav { max-width: var(--container-width); margin: 0 auto; padding: 0.6rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+        .logo { text-decoration: none; display: flex; align-items: center; gap: 10px; }
+        .logo img { width: 28px; height: 28px; border-radius: 6px; }
+        .logo-text { display: flex; align-items: baseline; gap: 4px; }
+        .brand-name { font-size: 1.1rem; font-weight: 800; color: var(--frame-text); letter-spacing: -0.01em; }
+        .brand-tag { font-size: 0.8rem; font-weight: 400; color: var(--frame-secondary); }
+        .nav-links { display: flex; gap: 1.8rem; }
+        .nav-links a { text-decoration: none; color: var(--frame-secondary); font-size: 0.85rem; font-weight: 500; transition: color 0.2s; }
+        .nav-links a:hover { color: var(--frame-text); }
+
+        .container { max-width: var(--container-width); margin: 0 auto; padding: 0 2rem; }
+        .hero { margin: 5rem auto 1.5rem; text-align: center; }
+        .hero h1 { font-size: 2.2rem; font-weight: 800; margin-bottom: 0.6rem; }
+        .hero p { color: var(--secondary-text); font-size: 0.92rem; }
+
+        .privacy-body { max-width: 680px; margin: 0 auto; padding-bottom: 6rem; }
+
+        .summary-banner { background: rgba(0,122,255,0.06); border: 1px solid rgba(0,122,255,0.15); border-radius: 14px; padding: 1.4rem 1.8rem; margin: 2rem 0 3rem; }
+        .summary-banner h3 { font-size: 0.95rem; font-weight: 700; margin-bottom: 0.8rem; }
+        .summary-list { list-style: none; display: flex; flex-direction: column; gap: 0.5rem; }
+        .summary-list li { display: flex; align-items: flex-start; gap: 0.6rem; font-size: 0.9rem; color: var(--secondary-text); }
+        .summary-list li::before { content: "✓"; color: #34C759; font-weight: 700; flex-shrink: 0; margin-top: 1px; }
+
+        .privacy-section { margin-bottom: 2.8rem; padding-bottom: 2.8rem; border-bottom: 1px solid var(--border-color); }
+        .privacy-section:last-of-type { border-bottom: none; }
+        .privacy-q { font-size: 1.1rem; font-weight: 700; margin-bottom: 0.8rem; }
+        .privacy-a { font-size: 0.93rem; color: var(--secondary-text); line-height: 1.75; }
+        .privacy-a p { margin-bottom: 0.6rem; }
+        .privacy-a p:last-child { margin-bottom: 0; }
+        .privacy-a strong { color: var(--text-color); }
+        .privacy-a code { font-family: "SF Mono", Menlo, monospace; font-size: 0.85em; background: var(--item-hover-bg); padding: 1px 5px; border-radius: 4px; }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; margin: 0.8rem 0; }
+        .data-table th { text-align: left; padding: 7px 12px; background: var(--item-hover-bg); border-bottom: 2px solid var(--border-color); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--secondary-text); }
+        .data-table td { padding: 9px 12px; border-bottom: 1px solid var(--border-color); color: var(--secondary-text); vertical-align: top; }
+        .data-table td:first-child { color: var(--text-color); font-weight: 600; white-space: nowrap; }
+        .tag-local { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 1px 7px; border-radius: 20px; background: rgba(52,199,89,0.12); color: #34C759; }
+        .tag-optional { display: inline-block; font-size: 0.7rem; font-weight: 600; padding: 1px 7px; border-radius: 20px; background: rgba(255,149,0,0.12); color: #FF9500; }
+
+        .contact-note { margin-top: 2rem; font-size: 0.88rem; color: var(--secondary-text); text-align: center; }
+        .contact-note a { color: var(--primary-color); text-decoration: none; }
+
+        footer { padding: 1.2rem 2rem; background: var(--frame-bg); color: #ffffff; text-align: center; font-size: 0.8rem; margin-top: 4rem; }
+        .footer-links { margin-bottom: 0.5rem; display: flex; justify-content: center; gap: 1.5rem; flex-wrap: wrap; }
+        .footer-links a { color: #ffffff; text-decoration: none; opacity: 0.7; transition: opacity 0.2s; }
+        .footer-links a:hover { opacity: 1; }
+        .copyright { color: #a1a1a6; margin-top: 0.4rem; }
+        .copyright a { color: #ffffff; text-decoration: none; font-weight: 500; }
+        @media (max-width: 768px) { .nav-links { display: none; } }
+    </style>
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="index.html" class="logo">
+                <img src="shanji_logo.png" alt="闪记 Logo">
+                <div class="logo-text"><span class="brand-name">闪记</span><span class="brand-tag">Shanji</span></div>
+            </a>
+            <div class="nav-links">
+                <a href="guide.html">使用说明</a>
+                <a href="faq.html">常见问题</a>
+                <a href="https://github.com/yuhuotech/shanji-app" target="_blank">GitHub</a>
+                <a href="download.html">下载</a>
+            </div>
+        </nav>
+    </header>
+
+    <main class="container">
+        <div class="hero">
+            <h1>隐私政策</h1>
+            <p>我们用一些直接的问题来说明闪记是怎么对待你的数据的。</p>
+        </div>
+
+        <div class="privacy-body">
+
+            <div class="summary-banner">
+                <h3>核心承诺</h3>
+                <ul class="summary-list">
+                    <li>音频数据始终留在你的设备上，永远不会上传到任何服务器</li>
+                    <li>不收集任何使用数据、崩溃报告或遥测信息</li>
+                    <li>LLM 润色只发送识别后的文字，不涉及音频</li>
+                    <li>API Key 保存在系统钥匙串，不写入任何配置文件</li>
+                    <li>所有本地数据你可以随时查看、备份和删除</li>
+                </ul>
+            </div>
+
+            <div class="privacy-section">
+                <div class="privacy-q">我说的话会被上传吗？</div>
+                <div class="privacy-a">
+                    <p><strong>不会。</strong>闪记的语音识别完全在你的设备本地完成，使用的是 FunASR Paraformer ONNX 模型，通过 ONNX Runtime 在本地推理，整个过程不需要联网，音频数据不会发送到任何地方。</p>
+                    <p>你说的每一句话，从采集到识别结束，始终只存在于你自己的电脑上。</p>
+                </div>
+            </div>
+
+            <div class="privacy-section">
+                <div class="privacy-q">开启 LLM 润色后，会发送什么出去？</div>
+                <div class="privacy-a">
+                    <p>启用 LLM 润色时，只有<strong>语音识别后的文字内容</strong>会发送给你配置的 AI 服务商（如 OpenAI、DeepSeek 等）。音频本身从不参与这个过程。</p>
+                    <p>发送的内容大致等同于你在聊天框里手动输入文字让 AI 润色——性质相同，没有额外的数据。你选择什么服务商，就适用该服务商自己的隐私政策。</p>
+                    <p>如果你不希望文字内容离开本地，关闭 LLM 润色功能即可，或使用 Ollama 等本地大模型服务。</p>
+                </div>
+            </div>
+
+            <div class="privacy-section">
+                <div class="privacy-q">本地存储了什么？</div>
+                <div class="privacy-a">
+                    <table class="data-table">
+                        <thead><tr><th>数据</th><th>位置</th><th>说明</th></tr></thead>
+                        <tbody>
+                            <tr>
+                                <td>应用配置</td>
+                                <td><code>config.json</code></td>
+                                <td><span class="tag-local">本地</span> 快捷键、模型选择、输出偏好等设置</td>
+                            </tr>
+                            <tr>
+                                <td>历史记录</td>
+                                <td><code>history.db</code></td>
+                                <td><span class="tag-local">本地</span> 每次识别的文字结果，SQLite 格式，可随时删除</td>
+                            </tr>
+                            <tr>
+                                <td>模型文件</td>
+                                <td><code>models/</code></td>
+                                <td><span class="tag-local">本地</span> ONNX 格式的 ASR 模型，约 200–400 MB</td>
+                            </tr>
+                            <tr>
+                                <td>API Key</td>
+                                <td>系统钥匙串</td>
+                                <td><span class="tag-local">本地</span> 由操作系统加密保管，不写入配置文件</td>
+                            </tr>
+                            <tr>
+                                <td>录音片段</td>
+                                <td><code>audio/</code></td>
+                                <td><span class="tag-optional">可选</span> 仅在开启音频保存时保留，默认不保存</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <p>所有数据位于 <code>$APP_DATA/shanji/</code> 目录下，你可以随时打开、备份或整体删除。</p>
+                </div>
+            </div>
+
+            <div class="privacy-section">
+                <div class="privacy-q">闪记会收集使用数据或崩溃报告吗？</div>
+                <div class="privacy-a">
+                    <p><strong>不会。</strong>闪记不内置任何数据统计、崩溃上报或用户行为追踪模块。应用运行期间不会向任何服务器发送任何遥测数据。</p>
+                    <p>这是一个开源项目，代码完全公开在 GitHub，你可以自行审计任何网络行为。</p>
+                </div>
+            </div>
+
+            <div class="privacy-section">
+                <div class="privacy-q">如果有疑问或数据相关请求怎么联系？</div>
+                <div class="privacy-a">
+                    <p>发邮件到 <a href="mailto:shanji@yuhuotech.com" style="color:var(--primary-color);">shanji@yuhuotech.com</a>，或在 <a href="https://github.com/yuhuotech/shanji-app/issues" target="_blank" style="color:var(--primary-color);">GitHub Issues</a> 提问。</p>
+                </div>
+            </div>
+
+            <p class="contact-note">本页面最后更新：2026 年 3 月 · 如有变更会在此更新</p>
+
+        </div>
+    </main>
+
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="index.html">官网首页</a>
+                <a href="guide.html">使用说明</a>
+                <a href="faq.html">常见问题</a>
+                <a href="privacy.html">隐私政策</a>
+                <a href="contact.html">联系我们</a>
+                <a href="contact.html#donate">支持项目</a>
+            </div>
+            <p class="copyright">© 2026 <a href="https://www.yuhuotech.com" target="_blank">与或科技</a>. MIT Licensed.</p>
+        </div>
+    </footer>
+
+    <script>
+        function updateTheme() { const h = new Date().getHours(); const html = document.documentElement; if ((h < 6 || h >= 18) && !window.matchMedia('(prefers-color-scheme: light)').matches) html.setAttribute('data-theme', 'dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) html.setAttribute('data-theme', 'dark'); else html.removeAttribute('data-theme'); }
+        updateTheme(); window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
+    </script>
+</body>
+</html>
