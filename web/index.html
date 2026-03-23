@@ -30,8 +30,22 @@
         .hero h1 { font-size: 2.6rem; font-weight: 800; margin-bottom: 1.2rem; letter-spacing: -0.01em; line-height: 1.2; }
         .hero p { font-size: 1.15rem; color: var(--secondary-text); max-width: 640px; margin: 0 auto 3rem; line-height: 1.6; }
         .cta-buttons { display: flex; justify-content: center; gap: 1rem; flex-wrap: wrap; align-items: center; }
-        .btn-download-main { display: flex; align-items: center; gap: 10px; padding: 0.7rem 1.4rem; background: var(--primary-color); color: white; text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 0.95rem; transition: background 0.2s; }
+        .btn-download-wrapper { position: relative; display: inline-flex; }
+        .btn-download-main { display: flex; align-items: center; gap: 10px; padding: 0.7rem 1.4rem; background: var(--primary-color); color: white; text-decoration: none; border-radius: 10px 0 0 10px; font-weight: 600; font-size: 0.95rem; transition: background 0.2s; }
         .btn-download-main:hover { background: var(--primary-hover); }
+        .btn-download-arrow { display: flex; align-items: center; justify-content: center; width: 36px; background: var(--primary-color); color: white; border: none; border-left: 1px solid rgba(255,255,255,0.25); border-radius: 0 10px 10px 0; cursor: pointer; transition: background 0.2s; flex-shrink: 0; }
+        .btn-download-arrow:hover { background: var(--primary-hover); }
+        .btn-download-arrow svg { width: 14px; height: 14px; fill: currentColor; transition: transform 0.2s; }
+        .btn-download-arrow.open svg { transform: rotate(180deg); }
+        .dl-dropdown { position: absolute; top: calc(100% + 8px); left: 0; background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 12px; box-shadow: 0 8px 30px rgba(0,0,0,0.12); min-width: 220px; z-index: 200; overflow: hidden; display: none; }
+        .dl-dropdown.open { display: block; }
+        .dl-dropdown-group { padding: 6px 0; border-bottom: 1px solid var(--border-color); }
+        .dl-dropdown-group:last-child { border-bottom: none; }
+        .dl-dropdown-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--secondary-text); padding: 4px 14px 2px; display: flex; align-items: center; gap: 6px; }
+        .dl-dropdown-label svg { width: 12px; height: 12px; fill: currentColor; }
+        .dl-dropdown a { display: flex; align-items: center; justify-content: space-between; padding: 7px 14px; font-size: 0.88rem; color: var(--text-color); text-decoration: none; transition: background 0.15s; }
+        .dl-dropdown a:hover { background: var(--item-hover-bg); }
+        .dl-dropdown a .dl-badge { font-size: 0.72rem; color: var(--secondary-text); background: var(--btn-secondary-bg); padding: 1px 7px; border-radius: 20px; }
         .btn-secondary { display: flex; align-items: center; gap: 8px; padding: 0.7rem 1.4rem; background: var(--btn-secondary-bg); color: var(--btn-secondary-text); text-decoration: none; border-radius: 10px; font-weight: 600; font-size: 0.95rem; border: 1px solid var(--border-color); transition: all 0.2s; }
         .btn-secondary:hover { transform: translateY(-1px); }
         .platform-icon { width: 18px; height: 18px; fill: currentColor; }
@@ -63,10 +77,32 @@
     <main class="container">
         <section class="hero"><h1>本地 AI 语音输入，让文字跃然指尖</h1><p>闪记是一款开源的桌面端 AI 语音输入工具。通过全局快捷键，在本地完成语音识别，并支持 LLM 智能润色，自动输出到当前光标位置。</p>
             <div class="cta-buttons">
-                <a href="download.html" class="btn-download-main">
-                    <svg class="platform-icon" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/></svg>
-                    <div style="text-align: left; line-height: 1.1;"><div>立即下载 闪记</div><span class="platform-name"><!--VERSION_START-->v0.1.4<!--VERSION_END--></span></div>
-                </a>
+                <div class="btn-download-wrapper">
+                    <a id="btn-main-dl" href="download.html" class="btn-download-main">
+                        <svg id="os-icon" class="platform-icon" viewBox="0 0 24 24"><path d="M5 20h14v-2H5v2zm7-18l-5 5h3v4h4v-4h3L12 2z"/></svg>
+                        <div style="text-align: left; line-height: 1.1;"><div>立即下载 闪记</div><span class="platform-name" id="os-label"><!--VERSION_START-->v0.1.4<!--VERSION_END--></span></div>
+                    </a>
+                    <button class="btn-download-arrow" id="dl-arrow" aria-label="选择其他平台">
+                        <svg viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg>
+                    </button>
+                    <div class="dl-dropdown" id="dl-dropdown">
+                        <div class="dl-dropdown-group">
+                            <div class="dl-dropdown-label"><svg viewBox="0 0 24 24"><path d="M17.05 20.28c-.96.95-2.04 1.9-3.41 1.97-1.35.05-1.78-.77-3.32-.77-1.55 0-2.03.75-3.33.8-1.34.05-2.58-1.05-3.53-2.01-1.95-1.93-3.43-5.46-1.42-8.94 1-1.73 2.76-2.82 4.7-2.85 1.48-.03 2.89 1 3.8 1 .9 0 2.62-1.25 4.41-1.07 1.74.07 3.33.71 4.39 2.21-2.18 1.28-1.83 4.15.53 5.31-.95 2.25-2.26 4.39-3.42 5.35zM13 2c0 2.22-1.83 4.03-4.1 4.03-.02-1.39.5-2.73 1.45-3.7C11.3 1.38 12.65.34 14.15 0c.05 1.36-.5 2.64-1.15 2z"/></svg>macOS</div>
+                            <a id="dl-mac-arm" href="#"><span>Apple Silicon (aarch64)</span><span class="dl-badge">.dmg</span></a>
+                            <a id="dl-mac-x64" href="#"><span>Intel Chip (x86_64)</span><span class="dl-badge">.dmg</span></a>
+                        </div>
+                        <div class="dl-dropdown-group">
+                            <div class="dl-dropdown-label"><svg viewBox="0 0 24 24"><path d="M3 12V4.75L9 4V12H3zm11 0V3L21 2v10h-7zm0 9V12h7v9l-7-1zm-11 0V12h6v8l-6-1z"/></svg>Windows</div>
+                            <a id="dl-win-x64" href="#"><span>Windows x64</span><span class="dl-badge">.zip</span></a>
+                        </div>
+                        <div class="dl-dropdown-group">
+                            <div class="dl-dropdown-label"><svg viewBox="0 0 24 24"><path d="M12 2c-.53 0-1.04.14-1.47.38C10.1 2.62 9.77 3 9.5 3.5c-.27.5-.4 1.05-.4 1.62 0 .58.13 1.14.39 1.63.26.49.59.88 1.01 1.13.43.25.95.39 1.5.39.55 0 1.07-.14 1.5-.39.43-.25.76-.64 1.02-1.13.26-.49.39-1.05.39-1.63 0-.57-.13-1.12-.4-1.62-.27-.5-.6-.88-1.03-1.12C13.04 2.14 12.53 2 12 2zm-1.5 6.5C8.01 8.5 6 10.51 6 13v1c0 .55.45 1 1 1h1v4c0 1.1.9 2 2 2h4c1.1 0 2-.9 2-2v-4h1c.55 0 1-.45 1-1v-1c0-2.49-2.01-4.5-4.5-4.5h-3z"/></svg>Linux</div>
+                            <a id="dl-linux-deb" href="#"><span>Linux x64</span><span class="dl-badge">.deb</span></a>
+                            <a id="dl-linux-rpm" href="#"><span>Linux x64</span><span class="dl-badge">.rpm</span></a>
+                            <a id="dl-linux-tar" href="#"><span>Linux x64</span><span class="dl-badge">.tar.gz</span></a>
+                        </div>
+                    </div>
+                </div>
                 <a href="https://github.com/yuhuotech/shanji-app" class="btn-secondary" target="_blank">
                     <svg class="platform-icon" viewBox="0 0 24 24" style="fill: currentColor;"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
                     查看源码
@@ -88,6 +124,74 @@
     <script>
         function updateTheme() { const h = new Date().getHours(); const html = document.documentElement; if ((h < 6 || h >= 18) && !window.matchMedia('(prefers-color-scheme: light)').matches) html.setAttribute('data-theme', 'dark'); else if (window.matchMedia('(prefers-color-scheme: dark)').matches) html.setAttribute('data-theme', 'dark'); else html.removeAttribute('data-theme'); }
         updateTheme(); window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTheme);
+
+        // ── Download button: OS detection + dropdown ──────────────────────
+        /*ASSETS_START*/
+        const releaseAssets = {
+            "mac-arm":   "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-macos-aarch64.dmg",
+            "mac-x64":   "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-macos-x86_64.dmg",
+            "win-x64":   "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-windows-x64.zip",
+            "linux-deb": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-linux-x64.deb",
+            "linux-rpm": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-linux-x64.rpm",
+            "linux-tar": "https://github.com/yuhuotech/shanji-app/releases/download/v0.1.4/shanji-app-0.1.4-linux-x64.tar.gz"
+        };
+        /*ASSETS_END*/
+
+        const ICON_APPLE   = '<path d="M17.05 20.28c-.96.95-2.04 1.9-3.41 1.97-1.35.05-1.78-.77-3.32-.77-1.55 0-2.03.75-3.33.8-1.34.05-2.58-1.05-3.53-2.01-1.95-1.93-3.43-5.46-1.42-8.94 1-1.73 2.76-2.82 4.7-2.85 1.48-.03 2.89 1 3.8 1 .9 0 2.62-1.25 4.41-1.07 1.74.07 3.33.71 4.39 2.21-2.18 1.28-1.83 4.15.53 5.31-.95 2.25-2.26 4.39-3.42 5.35zM13 2c0 2.22-1.83 4.03-4.1 4.03-.02-1.39.5-2.73 1.45-3.7C11.3 1.38 12.65.34 14.15 0c.05 1.36-.5 2.64-1.15 2z"/>';
+        const ICON_WINDOWS = '<path d="M3 12V4.75L9 4V12H3zm11 0V3L21 2v10h-7zm0 9V12h7v9l-7-1zm-11 0V12h6v8l-6-1z"/>';
+        const ICON_LINUX   = '<path d="M12 2c-.53 0-1.04.14-1.47.38C10.1 2.62 9.77 3 9.5 3.5c-.27.5-.4 1.05-.4 1.62 0 .58.13 1.14.39 1.63.26.49.59.88 1.01 1.13.43.25.95.39 1.5.39.55 0 1.07-.14 1.5-.39.43-.25.76-.64 1.02-1.13.26-.49.39-1.05.39-1.63 0-.57-.13-1.12-.4-1.62-.27-.5-.6-.88-1.03-1.12C13.04 2.14 12.53 2 12 2zm-1.5 6.5C8.01 8.5 6 10.51 6 13v1c0 .55.45 1 1 1h1v4c0 1.1.9 2 2 2h4c1.1 0 2-.9 2-2v-4h1c.55 0 1-.45 1-1v-1c0-2.49-2.01-4.5-4.5-4.5h-3z"/>';
+        const ICON_GENERIC = '<path d="M5 20h14v-2H5v2zm7-18l-5 5h3v4h4v-4h3L12 2z"/>';
+
+        function detectOS() {
+            const ua = navigator.userAgent;
+            if (/Mac/.test(ua)) return 'mac';
+            if (/Win/.test(ua)) return 'win';
+            if (/Linux/.test(ua)) return 'linux';
+            return 'unknown';
+        }
+
+        function initDownloadButton() {
+            // Fill dropdown links
+            for (const [key, url] of Object.entries(releaseAssets)) {
+                const el = document.getElementById('dl-' + key);
+                if (el) el.href = url;
+            }
+
+            // Set primary button based on OS
+            const os = detectOS();
+            const icon = document.getElementById('os-icon');
+            const btn  = document.getElementById('btn-main-dl');
+
+            if (os === 'mac') {
+                icon.innerHTML = ICON_APPLE;
+                btn.href = releaseAssets['mac-arm'];
+            } else if (os === 'win') {
+                icon.innerHTML = ICON_WINDOWS;
+                btn.href = releaseAssets['win-x64'];
+            } else if (os === 'linux') {
+                icon.innerHTML = ICON_LINUX;
+                btn.href = releaseAssets['linux-deb'];
+            } else {
+                icon.innerHTML = ICON_GENERIC;
+                btn.href = 'download.html';
+            }
+        }
+
+        // Dropdown toggle
+        const arrow    = document.getElementById('dl-arrow');
+        const dropdown = document.getElementById('dl-dropdown');
+        arrow.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const open = dropdown.classList.toggle('open');
+            arrow.classList.toggle('open', open);
+        });
+        document.addEventListener('click', function() {
+            dropdown.classList.remove('open');
+            arrow.classList.remove('open');
+        });
+        dropdown.addEventListener('click', function(e) { e.stopPropagation(); });
+
+        initDownloadButton();
     </script>
 </body>
 </html>
