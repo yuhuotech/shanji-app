@@ -24,10 +24,10 @@
 
         /* Layout */
         .doc-layout { max-width: var(--container-width); margin: 0 auto; padding: 3rem 2rem 5rem; display: flex; gap: 3.5rem; align-items: flex-start; }
-        .sidebar { width: 200px; flex-shrink: 0; position: sticky; top: 80px; }
-        .sidebar-title { font-size: 1rem; font-weight: 700; color: var(--text-color); margin-bottom: 0.8rem; }
-        .sidebar-nav { display: block; }
-        .sidebar-nav a { display: block; width: 100%; font-size: 0.85rem; color: var(--secondary-text); text-decoration: none; padding: 5px 0; transition: color 0.15s; text-align: left; }
+        .sidebar { width: 200px; flex-shrink: 0; position: sticky; top: 80px; margin: 0; padding: 0; }
+        .sidebar-title { font-size: 1rem; font-weight: 700; color: var(--text-color); margin: 0 0 0.8rem; padding: 0; }
+        .sidebar-nav { margin: 0; padding: 0; }
+        .sidebar-nav a { display: block; margin: 0; padding: 5px 0; font-size: 0.85rem; color: var(--secondary-text); text-decoration: none; transition: color 0.15s; }
         .sidebar-nav a:hover { color: var(--text-color); }
         .sidebar-nav a.active { color: var(--primary-color); font-weight: 600; }
         .doc-content { flex: 1; min-width: 0; }
@@ -75,8 +75,8 @@
         @media (max-width: 768px) {
             .doc-layout { flex-direction: column; gap: 2rem; }
             .sidebar { width: 100%; position: static; }
-            .sidebar-nav { display: flex; flex-wrap: wrap; gap: 4px; }
-            .sidebar-nav a { width: auto; padding: 4px 10px; background: var(--item-hover-bg); border-radius: 6px; }
+            .sidebar-nav { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; }
+            .sidebar-nav a { width: auto; margin: 0; padding: 4px 12px; background: var(--item-hover-bg); border-radius: 6px; }
             .mode-cards { grid-template-columns: 1fr; }
             .nav-links { display: none; }
         }
@@ -101,7 +101,7 @@
     <div class="doc-layout">
         <aside class="sidebar">
             <div class="sidebar-title">目录</div>
-            <nav class="sidebar-nav">
+            <div class="sidebar-nav">
                 <a href="#quickstart">快速上手</a>
                 <a href="#model">下载模型</a>
                 <a href="#recording">录音模式</a>
@@ -110,7 +110,7 @@
                 <a href="#history">历史记录</a>
                 <a href="#hotwords">热词库</a>
                 <a href="#tray">系统托盘</a>
-            </nav>
+            </div>
         </aside>
 
         <main class="doc-content">
