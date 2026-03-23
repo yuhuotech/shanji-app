@@ -19,9 +19,16 @@
         .logo-text { display: flex; align-items: baseline; gap: 4px; }
         .brand-name { font-size: 1.1rem; font-weight: 800; color: var(--frame-text); letter-spacing: -0.01em; }
         .brand-tag { font-size: 0.8rem; font-weight: 400; color: var(--frame-secondary); letter-spacing: 0.02em; }
-        .nav-links { display: flex; gap: 1.8rem; }
+        .nav-links { display: flex; gap: 1.4rem; align-items: center; }
         .nav-links a { text-decoration: none; color: var(--frame-secondary); font-size: 0.85rem; font-weight: 500; transition: color 0.2s; }
-        .nav-links a:hover { color: var(--frame-text); }
+        .nav-links a:hover, .nav-links a.active { color: var(--frame-text); }
+        .gh-widget { display: flex !important; align-items: center; gap: 7px; text-decoration: none; opacity: 0.9; }
+        .gh-widget:hover { opacity: 1; }
+        .gh-widget-icon { width: 15px; height: 15px; fill: var(--frame-secondary); flex-shrink: 0; }
+        .gh-widget-name { display: block; font-size: 0.8rem; font-weight: 600; color: var(--frame-text); line-height: 1.15; }
+        .gh-widget-stats { display: flex; align-items: center; gap: 6px; margin-top: 1px; }
+        .gh-stat { display: flex; align-items: center; gap: 2px; font-size: 0.65rem; color: var(--frame-secondary); }
+        .gh-stat svg { width: 9px; height: 9px; fill: currentColor; }
         .hero { margin: 5rem auto 3rem; text-align: center; }
         .hero h1 { font-size: 2.6rem; font-weight: 800; margin-bottom: 1rem; }
         .version-badge { display: inline-block; padding: 4px 12px; background: var(--item-hover-bg); border: 1px solid var(--border-color); border-radius: 20px; font-size: 0.9rem; color: var(--secondary-text); font-weight: 600; }
